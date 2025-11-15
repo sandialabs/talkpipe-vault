@@ -1,0 +1,78 @@
+version: '3.8'
+
+services:
+  writing-assistant:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    container_name: writing-assistant
+    ports:
+      - "8001:8001"
+    volumes:
+      # Database volume - persists user data, documents, and snapshots
+      - vault_db:/app/data
+    env_file:
+      - .env.podman.NOCOMMIT
+    environment:
+      - VAULT_HOST=0.0.0.0
+      - VAULT_PORT=8001
+      - VAULT_DB_PATH=/app/data/vault.db
+      - VAULT_SECRET=${VAULT_SECRET:-CHANGE_THIS_IN_PRODUCTION}
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import vault; print('OK')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    extra_hosts:  # <--- ADD THIS
+      - "host.containers.internal:host-gateway"
+    networks:
+      - writing-assistant-network
+
+  # Development service for local development
+  writing-assistant-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: builder
+    container_name: writing-assistant-dev
+    ports:
+      - "8001:8001"
+    volumes:
+      - .:/app
+      - vault_dev_cache:/home/builder/.cache
+      - vault_dev_db:/app/data
+    env_file:
+      - .env.podman.NOCOMMIT
+    environment:
+      - VAULT_HOST=0.0.0.0
+      - VAULT_PORT=8001
+      - VAULT_DB_PATH=/app/data/vault.db
+      - VAULT_SECRET=${VAULT_SECRET:-DEV_SECRET_CHANGE_IN_PRODUCTION}
+      - PYTHONUNBUFFERED=1
+    working_dir: /app
+    command: ["python", "-m", "uvicorn", "src.vault.app.main:app", "--host", "0.0.0.0", "--port", "8001", "--reload"]
+    extra_hosts:  # <--- ADD THIS
+      - "host.containers.internal:host-gateway"
+    networks:
+      - writing-assistant-network
+    profiles:
+      - dev
+
+volumes:
+  # Database volume for production
+  vault_db:
+    driver: local
+  # Database volume for development
+  vault_dev_db:
+    driver: local
+  # Build cache for development
+  vault_dev_cache:
+    driver: local
+
+networks:
+  writing-assistant-network:
+    driver: bridge
