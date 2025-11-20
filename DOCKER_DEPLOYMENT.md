@@ -1,6 +1,6 @@
 # Docker Deployment Guide
 
-This guide explains how to deploy the Writing Assistant using Docker and Docker Compose.
+This guide explains how to deploy the Vault using Docker and Docker Compose.
 
 ## Quick Start
 
@@ -8,26 +8,26 @@ This guide explains how to deploy the Writing Assistant using Docker and Docker 
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/writing-assistant.git
-cd writing-assistant
+git clone https://github.com/yourusername/vault.git
+cd vault
 
 # Generate a secure secret
 python -c "import secrets; print(secrets.token_urlsafe(32))" > .secret
 
 # Create environment file
 cat > .env << EOF
-WRITING_ASSISTANT_SECRET=$(cat .secret)
+VAULT_SECRET=$(cat .secret)
 OPENAI_API_KEY=your-key-here  # Optional
 EOF
 
 # Start the production service
-docker-compose up -d writing-assistant
+docker-compose up -d vault
 
 # Check logs
-docker-compose logs -f writing-assistant
+docker-compose logs -f vault
 
 # Create the first admin user (in another terminal)
-docker-compose exec -it writing-assistant writing-assistant-create-superuser
+docker-compose exec -it vault vault-create-superuser
 ```
 
 Access the application at: `http://localhost:8001`
@@ -36,18 +36,18 @@ Access the application at: `http://localhost:8001`
 
 ```bash
 # Build the image
-docker build -t writing-assistant .
+docker build -t vault .
 
 # Run the container
 docker run -d \
-  --name writing-assistant \
+  --name vault \
   -p 8001:8001 \
-  -v writing-assistant-db:/app/data \
-  -e WRITING_ASSISTANT_SECRET=$(python -c "import secrets; print(secrets.token_urlsafe(32))") \
-  writing-assistant
+  -v vault-db:/app/data \
+  -e VAULT_SECRET=$(python -c "import secrets; print(secrets.token_urlsafe(32))") \
+  vault
 
 # Create admin user
-docker exec -it writing-assistant writing-assistant-create-superuser
+docker exec -it vault vault-create-superuser
 ```
 
 ## Configuration
@@ -61,12 +61,12 @@ cp .env.example .env
 ```
 
 **Required Variables:**
-- `WRITING_ASSISTANT_SECRET`: JWT secret key (generate with `secrets.token_urlsafe(32)`)
+- `VAULT_SECRET`: JWT secret key (generate with `secrets.token_urlsafe(32)`)
 
 **Optional Variables:**
-- `WRITING_ASSISTANT_HOST`: Server bind address (default: `0.0.0.0`)
-- `WRITING_ASSISTANT_PORT`: Server port (default: `8001`)
-- `WRITING_ASSISTANT_DB_PATH`: Database file path (default: `/app/data/writing_assistant.db`)
+- `VAULT_HOST`: Server bind address (default: `0.0.0.0`)
+- `VAULT_PORT`: Server port (default: `8001`)
+- `VAULT_DB_PATH`: Database file path (default: `/app/data/vault.db`)
 - `OPENAI_API_KEY`: OpenAI API key for GPT models
 - `OLLAMA_BASE_URL`: Ollama server URL (default: `http://localhost:11434`)
 
@@ -74,7 +74,7 @@ cp .env.example .env
 
 **Production Service:**
 ```bash
-docker-compose up -d writing-assistant
+docker-compose up -d vault
 ```
 - Production-optimized image
 - Persistent database volume
@@ -82,7 +82,7 @@ docker-compose up -d writing-assistant
 
 **Development Service:**
 ```bash
-docker-compose --profile dev up writing-assistant-dev
+docker-compose --profile dev up vault-dev
 ```
 - Development build with all tools
 - Live code reload
@@ -93,8 +93,8 @@ docker-compose --profile dev up writing-assistant-dev
 ### Database Location
 
 The SQLite database is stored in a Docker volume:
-- Production: `writing_assistant_db` → `/app/data/writing_assistant.db`
-- Development: `writing_assistant_dev_db` → `/app/data/writing_assistant.db`
+- Production: `vault_db` → `/app/data/vault.db`
+- Development: `vault_dev_db` → `/app/data/vault.db`
 
 ### Backup and Restore
 
@@ -104,13 +104,13 @@ The SQLite database is stored in a Docker volume:
 mkdir -p backups
 
 # Backup database from running container
-docker-compose exec writing-assistant cat /app/data/writing_assistant.db > backups/db-$(date +%Y%m%d).db
+docker-compose exec vault cat /app/data/vault.db > backups/db-$(date +%Y%m%d).db
 
 # Or copy from volume
 docker run --rm \
-  -v writing_assistant_db:/data \
+  -v vault_db:/data \
   -v $(pwd)/backups:/backup \
-  alpine cp /data/writing_assistant.db /backup/db-$(date +%Y%m%d).db
+  alpine cp /data/vault.db /backup/db-$(date +%Y%m%d).db
 ```
 
 **Restore:**
@@ -120,9 +120,9 @@ docker-compose down
 
 # Restore from backup
 docker run --rm \
-  -v writing_assistant_db:/data \
+  -v vault_db:/data \
   -v $(pwd)/backups:/backup \
-  alpine cp /backup/db-20251012.db /data/writing_assistant.db
+  alpine cp /backup/db-20251012.db /data/vault.db
 
 # Start the container
 docker-compose up -d
@@ -134,42 +134,42 @@ docker-compose up -d
 
 ```bash
 # Using the console script (recommended)
-docker-compose exec -it writing-assistant writing-assistant-create-superuser
+docker-compose exec -it vault vault-create-superuser
 
 # Or using Python module syntax
-docker-compose exec -it writing-assistant python -m writing_assistant.create_superuser
+docker-compose exec -it vault python -m vault.create_superuser
 ```
 
 ### Manage Users via Admin Tool
 
 ```bash
 # List all users
-docker-compose exec writing-assistant writing-assistant-admin list
+docker-compose exec vault vault-admin list
 
 # Show detailed user information
-docker-compose exec writing-assistant writing-assistant-admin info user@example.com
+docker-compose exec vault vault-admin info user@example.com
 
 # Delete a user
-docker-compose exec -it writing-assistant writing-assistant-admin delete user@example.com
+docker-compose exec -it vault vault-admin delete user@example.com
 
 # Reset password
-docker-compose exec -it writing-assistant writing-assistant-admin reset-password user@example.com
+docker-compose exec -it vault vault-admin reset-password user@example.com
 
 # Toggle user active/inactive status
-docker-compose exec writing-assistant writing-assistant-admin toggle-active user@example.com
+docker-compose exec vault vault-admin toggle-active user@example.com
 
 # Make user a superuser
-docker-compose exec writing-assistant writing-assistant-admin make-superuser user@example.com
+docker-compose exec vault vault-admin make-superuser user@example.com
 
 # Show help
-docker-compose exec writing-assistant writing-assistant-admin help
+docker-compose exec vault vault-admin help
 ```
 
 ### Direct Database Access
 
 ```bash
 # SQLite CLI
-docker-compose exec writing-assistant sqlite3 /app/data/writing_assistant.db
+docker-compose exec vault sqlite3 /app/data/vault.db
 
 # List users
 sqlite> SELECT id, email, is_active, is_superuser FROM users;
@@ -190,7 +190,7 @@ python -c "import secrets; print(secrets.token_urlsafe(32))"
 
 Set it in `.env`:
 ```
-WRITING_ASSISTANT_SECRET=your-generated-secret-here
+VAULT_SECRET=your-generated-secret-here
 ```
 
 ### 2. Protect Database Volume
@@ -208,7 +208,7 @@ Deploy behind a reverse proxy (nginx, traefik) with SSL:
 # Example nginx config
 server {
     listen 443 ssl;
-    server_name writing.example.com;
+    server_name vault.example.com;
 
     ssl_certificate /etc/ssl/certs/cert.pem;
     ssl_certificate_key /etc/ssl/private/key.pem;
@@ -226,13 +226,13 @@ server {
 For multi-user deployments, disable browser-based env vars:
 
 ```bash
-docker-compose exec writing-assistant \
-  python -m writing_assistant.app.server --disable-custom-env-vars
+docker-compose exec vault \
+  python -m vault.app.server --disable-custom-env-vars
 ```
 
 Or add to docker-compose.yml:
 ```yaml
-command: ["python", "-m", "writing_assistant.app.server", "--disable-custom-env-vars"]
+command: ["python", "-m", "vault.app.server", "--disable-custom-env-vars"]
 ```
 
 ### 5. Regular Updates
@@ -250,13 +250,13 @@ docker-compose up -d
 
 ```bash
 # Follow logs
-docker-compose logs -f writing-assistant
+docker-compose logs -f vault
 
 # Last 100 lines
-docker-compose logs --tail=100 writing-assistant
+docker-compose logs --tail=100 vault
 
 # Logs for specific time range
-docker-compose logs --since "2025-10-12T00:00:00" writing-assistant
+docker-compose logs --since "2025-10-12T00:00:00" vault
 ```
 
 ### Health Check
@@ -267,14 +267,14 @@ The container includes a health check:
 docker-compose ps
 
 # Manual health check
-docker-compose exec writing-assistant python -c "import writing_assistant; print('OK')"
+docker-compose exec vault python -c "import vault; print('OK')"
 ```
 
 ### Resource Usage
 
 ```bash
 # Container stats
-docker stats writing-assistant
+docker stats vault
 
 # Disk usage
 docker system df -v
@@ -286,13 +286,13 @@ docker system df -v
 
 ```bash
 # Check logs
-docker-compose logs writing-assistant
+docker-compose logs vault
 
 # Verify database permissions
-docker-compose exec writing-assistant ls -la /app/data
+docker-compose exec vault ls -la /app/data
 
 # Reinitialize database
-docker-compose exec writing-assistant python -m writing_assistant.app.server --init-db
+docker-compose exec vault python -m vault.app.server --init-db
 ```
 
 ### Numba Caching Errors
@@ -301,7 +301,7 @@ If you see errors like `RuntimeError: cannot cache function 'rdist': no locator 
 
 ```bash
 # Rebuild with latest Dockerfile
-docker-compose build --no-cache writing-assistant
+docker-compose build --no-cache vault
 docker-compose up -d
 ```
 
@@ -311,7 +311,7 @@ SQLite doesn't handle concurrent writes well. If you see "database is locked":
 ```bash
 # Stop any background admin commands
 # Restart container
-docker-compose restart writing-assistant
+docker-compose restart vault
 ```
 
 ### Port Already in Use
@@ -330,7 +330,7 @@ ports:
 ```bash
 # Fix volume permissions
 docker-compose down
-docker volume rm writing_assistant_db
+docker volume rm vault_db
 docker-compose up -d
 ```
 
@@ -359,14 +359,14 @@ If you have an existing single-user deployment:
 4. **Start and create admin:**
    ```bash
    docker-compose up -d
-   docker-compose exec -it writing-assistant writing-assistant-create-superuser
+   docker-compose exec -it vault vault-create-superuser
    ```
 
 Note: Old file-based documents are not automatically migrated. Users must re-create or import them.
 
 ## Production Deployment Checklist
 
-- [ ] Generate and set strong `WRITING_ASSISTANT_SECRET`
+- [ ] Generate and set strong `VAULT_SECRET`
 - [ ] Configure SSL/TLS with reverse proxy
 - [ ] Set up regular database backups (cron job)
 - [ ] Configure firewall rules
@@ -390,19 +390,19 @@ Note: Old file-based documents are not automatically migrated. Users must re-cre
 version: '3.8'
 
 services:
-  writing-assistant:
-    image: writing-assistant:latest
-    container_name: writing-assistant
+  vault:
+    image: vault:latest
+    container_name: vault
     restart: always
     ports:
       - "127.0.0.1:8001:8001"  # Only localhost access
     volumes:
-      - writing_assistant_db:/app/data
+      - vault_db:/app/data
     environment:
-      - WRITING_ASSISTANT_HOST=0.0.0.0
-      - WRITING_ASSISTANT_PORT=8001
-      - WRITING_ASSISTANT_DB_PATH=/app/data/writing_assistant.db
-      - WRITING_ASSISTANT_SECRET=${WRITING_ASSISTANT_SECRET}
+      - VAULT_HOST=0.0.0.0
+      - VAULT_PORT=8001
+      - VAULT_DB_PATH=/app/data/vault.db
+      - VAULT_SECRET=${VAULT_SECRET}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
     logging:
       driver: "json-file"
@@ -418,11 +418,11 @@ services:
           cpus: '0.5'
           memory: 512M
     networks:
-      - writing-assistant-network
+      - vault-network
 
   nginx:
     image: nginx:alpine
-    container_name: writing-assistant-nginx
+    container_name: vault-nginx
     restart: always
     ports:
       - "80:80"
@@ -431,15 +431,15 @@ services:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
       - ./ssl:/etc/nginx/ssl:ro
     depends_on:
-      - writing-assistant
+      - vault
     networks:
-      - writing-assistant-network
+      - vault-network
 
 volumes:
-  writing_assistant_db:
+  vault_db:
     driver: local
 
 networks:
-  writing-assistant-network:
+  vault-network:
     driver: bridge
 ```

@@ -1,12 +1,12 @@
 version: '3.8'
 
 services:
-  writing-assistant:
+  vault:
     build:
       context: .
       dockerfile: Dockerfile
       target: runtime
-    container_name: writing-assistant
+    container_name: vault
     ports:
       - "8001:8001"
     volumes:
@@ -30,15 +30,15 @@ services:
     extra_hosts:  # <--- ADD THIS
       - "host.containers.internal:host-gateway"
     networks:
-      - writing-assistant-network
+      - vault-network
 
   # Development service for local development
-  writing-assistant-dev:
+  vault-dev:
     build:
       context: .
       dockerfile: Dockerfile
       target: builder
-    container_name: writing-assistant-dev
+    container_name: vault-dev
     ports:
       - "8001:8001"
     volumes:
@@ -58,7 +58,7 @@ services:
     extra_hosts:  # <--- ADD THIS
       - "host.containers.internal:host-gateway"
     networks:
-      - writing-assistant-network
+      - vault-network
     profiles:
       - dev
 
@@ -74,5 +74,5 @@ volumes:
     driver: local
 
 networks:
-  writing-assistant-network:
+  vault-network:
     driver: bridge

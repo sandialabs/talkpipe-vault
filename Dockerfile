@@ -1,4 +1,4 @@
-# Multi-stage build for Writing Assistant
+# Multi-stage build for Vault
 # Stage 1: Build stage with all development dependencies
 FROM fedora:latest AS builder
 
@@ -59,7 +59,7 @@ RUN dnf update -y && \
 # Create application user with specific UID/GID for better security
 RUN groupadd -r -g 1001 app && \
     useradd -r -u 1001 -g app -s /sbin/nologin \
-        -c "Writing Assistant Application User" app
+        -c "Vault Application User" app
 
 # Set up application directory
 WORKDIR /app
