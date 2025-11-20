@@ -5,7 +5,7 @@ import tempfile
 
 import pytest
 from talkpipe import compile
-import talkpipe_vault.watchdog  # Ensure the source is registered
+from talkpipe_vault.watchdog import file_watcher
 
 
 class TestFileWatcher:
@@ -264,4 +264,187 @@ class TestFileWatcher:
             assert len(results[0]) == 1
             assert str(test_file) in results[0][0]
             assert str(new_dir) not in results[0][0]
+
+    def test_patterns_filter(self):
+        """Test that patterns parameter filters files by extension."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            results = []
+
+            def run_pipeline():
+                # Each file can trigger multiple events (created + modified)
+                # So we need enough events to capture both files
+                script = file_watcher(tmpdir, patterns=["*.txt"], max_events=4)
+                ans = list(script())
+                results.extend(ans)
+
+            thread = Thread(target=run_pipeline, daemon=True)
+            thread.start()
+
+            # Give watcher time to start
+            time.sleep(0.5)
+
+            # Create files with different extensions
+            txt_file = Path(tmpdir) / "test.txt"
+            md_file = Path(tmpdir) / "test.md"
+            txt_file2 = Path(tmpdir) / "test2.txt"
+
+            txt_file.write_text("Text file")
+            time.sleep(0.2)
+            md_file.write_text("Markdown file")  # Should be ignored
+            time.sleep(0.2)
+            txt_file2.write_text("Another text file")
+
+            # Wait for thread to complete
+            thread.join(timeout=3.0)
+
+            # Verify only .txt files were captured (get unique paths)
+            unique_paths = set(results)
+            assert str(txt_file) in unique_paths
+            assert str(txt_file2) in unique_paths
+            assert str(md_file) not in unique_paths
+            # Verify .md file never appeared in any result
+            assert not any(str(md_file) in path for path in results)
+
+    def test_multiple_patterns(self):
+        """Test that multiple patterns can be specified."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            results = []
+
+            def run_pipeline():
+                # Watch both .txt and .md files (2 files × 2 events each = 4 events)
+                script = file_watcher(tmpdir, patterns=["*.txt", "*.md"], max_events=4)
+                ans = list(script())
+                results.extend(ans)
+
+            thread = Thread(target=run_pipeline, daemon=True)
+            thread.start()
+
+            # Give watcher time to start
+            time.sleep(0.5)
+
+            # Create files with different extensions
+            txt_file = Path(tmpdir) / "test.txt"
+            md_file = Path(tmpdir) / "test.md"
+            py_file = Path(tmpdir) / "test.py"
+
+            txt_file.write_text("Text file")
+            time.sleep(0.2)
+            md_file.write_text("Markdown file")
+            time.sleep(0.2)
+            py_file.write_text("Python file")  # Should be ignored
+
+            # Wait for thread to complete
+            thread.join(timeout=3.0)
+
+            # Verify both .txt and .md files were captured, but not .py
+            unique_paths = set(results)
+            assert str(txt_file) in unique_paths
+            assert str(md_file) in unique_paths
+            assert str(py_file) not in unique_paths
+
+    def test_custom_ignore_patterns(self):
+        """Test that custom ignore patterns can be specified."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            results = []
+
+            def run_pipeline():
+                # Ignore .tmp and .bak files (only data.txt generates events = 2 events)
+                script = file_watcher(tmpdir, ignore_patterns=["*.tmp", "*.bak"], max_events=2)
+                ans = list(script())
+                results.extend(ans)
+
+            thread = Thread(target=run_pipeline, daemon=True)
+            thread.start()
+
+            # Give watcher time to start
+            time.sleep(0.5)
+
+            # Create ignored files
+            tmp_file = Path(tmpdir) / "temp.tmp"
+            tmp_file.write_text("Temp file")
+            time.sleep(0.2)
+
+            bak_file = Path(tmpdir) / "backup.bak"
+            bak_file.write_text("Backup file")
+            time.sleep(0.2)
+
+            # Create normal file
+            normal_file = Path(tmpdir) / "data.txt"
+            normal_file.write_text("Normal file")
+
+            # Wait for thread to complete
+            thread.join(timeout=3.0)
+
+            # Verify only normal file was captured
+            unique_paths = set(results)
+            assert str(normal_file) in unique_paths
+            assert str(tmp_file) not in unique_paths
+            assert str(bak_file) not in unique_paths
+
+    def test_case_sensitive_matching(self):
+        """Test case-sensitive pattern matching."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            results = []
+
+            def run_pipeline():
+                # Case-sensitive match for .txt only (not .TXT) - only lowercase .txt matches = 2 events
+                script = file_watcher(tmpdir, patterns=["*.txt"], case_sensitive=True, max_events=2)
+                ans = list(script())
+                results.extend(ans)
+
+            thread = Thread(target=run_pipeline, daemon=True)
+            thread.start()
+
+            # Give watcher time to start
+            time.sleep(0.5)
+
+            # Create uppercase extension file
+            upper_file = Path(tmpdir) / "test.TXT"
+            upper_file.write_text("Upper case")
+            time.sleep(0.2)
+
+            # Create lowercase extension file
+            lower_file = Path(tmpdir) / "test.txt"
+            lower_file.write_text("Lower case")
+
+            # Wait for thread to complete
+            thread.join(timeout=3.0)
+
+            # Verify only lowercase .txt was captured (case-sensitive)
+            unique_paths = set(results)
+            assert str(lower_file) in unique_paths
+            assert str(upper_file) not in unique_paths
+
+    def test_case_insensitive_matching(self):
+        """Test case-insensitive pattern matching (default)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            results = []
+
+            def run_pipeline():
+                # Case-insensitive match (default) - both .txt and .TXT should match
+                script = file_watcher(tmpdir, patterns=["*.txt"], max_events=4)
+                ans = list(script())
+                results.extend(ans)
+
+            thread = Thread(target=run_pipeline, daemon=True)
+            thread.start()
+
+            # Give watcher time to start
+            time.sleep(0.5)
+
+            # Create files with different case extensions
+            upper_file = Path(tmpdir) / "test.TXT"
+            lower_file = Path(tmpdir) / "test.txt"
+
+            upper_file.write_text("Upper case")
+            time.sleep(0.2)
+            lower_file.write_text("Lower case")
+
+            # Wait for thread to complete
+            thread.join(timeout=3.0)
+
+            # Verify both files were captured (case-insensitive)
+            unique_paths = set(results)
+            assert str(upper_file) in unique_paths
+            assert str(lower_file) in unique_paths
 
