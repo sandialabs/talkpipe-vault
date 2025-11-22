@@ -26,7 +26,7 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
-    "talkpipe[all]>=0.10.0",
+    "talkpipe[all]>=0.10.1",
     "fastapi[standard]>=0.104.1",
     "uvicorn>=0.24.0",
     "jinja2>=3.1.2",
@@ -164,5 +164,8 @@ exclude_dirs = ["tests"]
 [tool.bandit.assert_used]
 skips = ["*/test_*.py", "*/conftest.py"]
 
+[project.entry-points."talkpipe.sources"]
+fileWatcher = "talkpipe_vault.watchdog:file_watcher"
+
 [project.entry-points."talkpipe.segments"]
-fromDocling = "vault.document_monitor.processor:FromDocling"
+doclingToText = "talkpipe_vault.docling:DoclingFileToText"

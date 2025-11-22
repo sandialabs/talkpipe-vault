@@ -39,7 +39,9 @@ class TestFileWatcher:
             assert len(results) == 1
             assert isinstance(results[0], list)
             assert len(results[0]) == 1
-            assert str(test_file) in results[0][0]
+            event = results[0][0]
+            assert event["path"] == str(test_file)
+            assert event["event"] == "created"
 
     def test_file_modification(self):
         """Test that file modification events are detected."""
@@ -73,7 +75,9 @@ class TestFileWatcher:
 
             # Verify event was captured
             assert len(results) == 1
-            assert str(test_file) in results[0][0]
+            event = results[0][0]
+            assert event["path"] == str(test_file)
+            assert event["event"] == "modified"
 
     def test_file_deletion(self):
         """Test that file deletion events are detected."""
@@ -107,7 +111,9 @@ class TestFileWatcher:
 
             # Verify event was captured
             assert len(results) == 1
-            assert str(test_file) in results[0][0]
+            event = results[0][0]
+            assert event["path"] == str(test_file)
+            assert event["event"] == "deleted"
 
     def test_multiple_events(self):
         """Test that multiple file events are detected in order."""
@@ -152,9 +158,10 @@ class TestFileWatcher:
             file1_str = str(file1)
             file2_str = str(file2)
             file3_str = str(file3)
-            assert sum(file1_str in path for path in results[0]) == 2
-            assert sum(file2_str in path for path in results[0]) == 2
-            assert sum(file3_str in path for path in results[0]) == 2
+            paths = [event["path"] for event in results[0]]
+            assert sum(file1_str == path for path in paths) == 2
+            assert sum(file2_str == path for path in paths) == 2
+            assert sum(file3_str == path for path in paths) == 2
 
     def test_max_events_limit(self):
         """Test that max_events parameter limits the number of events processed."""
@@ -223,7 +230,8 @@ class TestFileWatcher:
 
             # Verify event was captured
             assert len(results) == 1
-            assert str(test_file) in results[0][0]
+            event = results[0][0]
+            assert event["path"] == str(test_file)
 
     def test_directory_events_ignored(self):
         """Test that directory creation/modification events are not yielded."""
@@ -262,8 +270,9 @@ class TestFileWatcher:
             # Verify only the file event was captured, not the directory
             assert len(results) == 1
             assert len(results[0]) == 1
-            assert str(test_file) in results[0][0]
-            assert str(new_dir) not in results[0][0]
+            event = results[0][0]
+            assert event["path"] == str(test_file)
+            assert str(new_dir) not in event["path"]
 
     def test_patterns_filter(self):
         """Test that patterns parameter filters files by extension."""
@@ -298,12 +307,12 @@ class TestFileWatcher:
             thread.join(timeout=3.0)
 
             # Verify only .txt files were captured (get unique paths)
-            unique_paths = set(results)
+            unique_paths = set(event["path"] for event in results)
             assert str(txt_file) in unique_paths
             assert str(txt_file2) in unique_paths
             assert str(md_file) not in unique_paths
             # Verify .md file never appeared in any result
-            assert not any(str(md_file) in path for path in results)
+            assert not any(str(md_file) == event["path"] for event in results)
 
     def test_multiple_patterns(self):
         """Test that multiple patterns can be specified."""
@@ -337,7 +346,7 @@ class TestFileWatcher:
             thread.join(timeout=3.0)
 
             # Verify both .txt and .md files were captured, but not .py
-            unique_paths = set(results)
+            unique_paths = set(event["path"] for event in results)
             assert str(txt_file) in unique_paths
             assert str(md_file) in unique_paths
             assert str(py_file) not in unique_paths
@@ -376,7 +385,7 @@ class TestFileWatcher:
             thread.join(timeout=3.0)
 
             # Verify only normal file was captured
-            unique_paths = set(results)
+            unique_paths = set(event["path"] for event in results)
             assert str(normal_file) in unique_paths
             assert str(tmp_file) not in unique_paths
             assert str(bak_file) not in unique_paths
@@ -411,7 +420,7 @@ class TestFileWatcher:
             thread.join(timeout=3.0)
 
             # Verify only lowercase .txt was captured (case-sensitive)
-            unique_paths = set(results)
+            unique_paths = set(event["path"] for event in results)
             assert str(lower_file) in unique_paths
             assert str(upper_file) not in unique_paths
 
@@ -444,7 +453,50 @@ class TestFileWatcher:
             thread.join(timeout=3.0)
 
             # Verify both files were captured (case-insensitive)
-            unique_paths = set(results)
+            unique_paths = set(event["path"] for event in results)
             assert str(upper_file) in unique_paths
             assert str(lower_file) in unique_paths
+
+    def test_chatterlang_array_ignore_patterns(self):
+        """Test that array parameters can be specified in chatterlang scripts."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            results = []
+
+            def run_pipeline():
+                # Use chatterlang syntax with array parameter for ignore_patterns
+                script = f'INPUT FROM fileWatcher[path="{tmpdir}", ignore_patterns=["*.tmp", "*.bak"], max_events=2] | toList'
+                compiled = compile(script)
+                ans = list(compiled())
+                results.extend(ans)
+
+            thread = Thread(target=run_pipeline, daemon=True)
+            thread.start()
+
+            # Give watcher time to start
+            time.sleep(0.5)
+
+            # Create ignored files
+            tmp_file = Path(tmpdir) / "temp.tmp"
+            tmp_file.write_text("Temp file")
+            time.sleep(0.2)
+
+            bak_file = Path(tmpdir) / "backup.bak"
+            bak_file.write_text("Backup file")
+            time.sleep(0.2)
+
+            # Create normal file
+            normal_file = Path(tmpdir) / "data.txt"
+            normal_file.write_text("Normal file")
+
+            # Wait for thread to complete
+            thread.join(timeout=3.0)
+
+            # Verify only normal file was captured
+            assert len(results) == 1
+            assert isinstance(results[0], list)
+            assert len(results[0]) == 2  # created + modified events
+            paths = [event["path"] for event in results[0]]
+            assert all(str(normal_file) == path for path in paths)
+            assert not any(str(tmp_file) == path for path in paths)
+            assert not any(str(bak_file) == path for path in paths)
 
