@@ -27,7 +27,7 @@ def build_vector_db_from_paths(items: Any,
         overwrite=overwrite) | \
     ToDict(field_list="path,full_content") | \
     splitText(field="full_content", criteria=500, set_as="chunk") | \
-    ShingleText(field="chunk", shingle_size=3, set_as="shingle") | \
+    ShingleText(field="chunk", shingle_size=3, set_as="shingle", key="path") | \
     MakeVectorDatabaseSegment(
         path=vectordb_path,
         embedding_model=embedding_model,

@@ -28,3 +28,28 @@ A TalkPipe segment that extracts text content from documents using the Docling l
 - Native support for plain text (`.txt`) files without Docling overhead
 - Graceful error handling: logs warnings and skips files that fail to convert
 - Works as a field segment with `field` and `set_as` parameters
+
+### `pipelines` Package
+A high-level package that creates application components by composing sources and segments for higher-ordered problems.
+
+##### `building_and_watching` Pipelines
+
+**`buildVectorDBFromPaths` Segment**
+A TalkPipe segment that builds a vector database from document file paths.
+
+- Extracts text content from documents using Docling
+- Creates dual-table vector database structure:
+  - `full_documents` table: Stores complete document embeddings
+  - `shingled_chunks` table: Stores overlapping chunk embeddings for fine-grained retrieval
+- Automatic text chunking (500 character segments) with 3-shingle overlap
+- Supports LanceDB with file paths, `memory://`, or `tmp://name` storage options
+- Configurable embedding model and source
+
+**`watchIntoVectorDB` Source**
+A TalkPipe source that monitors a directory and automatically indexes new/modified documents into a vector database.
+
+- Combines `fileWatcher` source with `buildVectorDBFromPaths` segment
+- Real-time document indexing as files are created or modified
+- Inherits all `fileWatcher` filtering capabilities (patterns, ignore patterns, polling mode)
+- Configurable embedding model and vector database destination
+

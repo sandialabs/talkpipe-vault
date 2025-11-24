@@ -1,9 +1,10 @@
+import os
 from typing import Annotated
-from queue import Queue
+from queue import Queue, Empty
 from talkpipe import source, register_source
 from watchdog.observers import Observer
 from watchdog.observers.polling import PollingObserver
-from watchdog.events import PatternMatchingEventHandler
+from watchdog.events import PatternMatchingEventHandler, FileSystemEventHandler
 
 
 # Common patterns for temp files, hidden files, editor backups, etc.
@@ -97,6 +98,42 @@ def file_watcher(
     handler = WatchdogHandler(queue=event_queue)
     observer.schedule(handler, path, recursive=True)
     observer.start()
+
+    # Block until observer is fully ready by using a sentinel file
+    # This ensures inotify watches are actually registered before proceeding
+    ready_queue = Queue()
+
+    class ReadyHandler(FileSystemEventHandler):
+        def on_created(self, event):
+            if event.src_path.endswith(".watchdog_ready"):
+                ready_queue.put(True)
+
+    ready_handler = ReadyHandler()
+    ready_watch = observer.schedule(ready_handler, path, recursive=False)
+
+    # Create sentinel file and wait for its event
+    sentinel_path = os.path.join(path, ".watchdog_ready")
+    try:
+        with open(sentinel_path, "w") as f:
+            f.write("ready")
+        # Wait for the sentinel event with timeout
+        ready_queue.get(timeout=5.0)
+    finally:
+        # Clean up sentinel file
+        if os.path.exists(sentinel_path):
+            os.remove(sentinel_path)
+        observer.unschedule(ready_watch)
+
+    # Drain any sentinel-related events from the main queue
+    while True:
+        try:
+            evt = event_queue.get_nowait()
+            if ".watchdog_ready" not in evt.get("path", ""):
+                # Put back non-sentinel events
+                event_queue.put(evt)
+                break
+        except Empty:
+            break
 
     try:
         event_count = 0
