@@ -1,9 +1,11 @@
+from tracemalloc import Filter
 from typing import Annotated, Optional, Any
 from talkpipe import segment, register_segment, source, register_source
+from talkpipe.data.extraction import listFiles
 from talkpipe.pipelines.vector_databases import MakeVectorDatabaseSegment
 from talkpipe_vault.watchdog import file_watcher
 from talkpipe_vault.docling import DoclingFileToText
-from talkpipe.pipe.basic import ToDict
+from talkpipe.pipe.basic import ToDict, FilterExpression
 from talkpipe.data.text.chunking_units import splitText, ShingleText
 
 
@@ -17,6 +19,7 @@ def build_vector_db_from_paths(items: Any,
     pipeline = DoclingFileToText(
         field="path",
         set_as="full_content") | \
+    FilterExpression(expression="item.get('full_content') and len(item.get('full_content', '').strip()) > 0") | \
     MakeVectorDatabaseSegment(
         path=vectordb_path,
         embedding_model=embedding_model,
@@ -27,7 +30,9 @@ def build_vector_db_from_paths(items: Any,
         overwrite=overwrite) | \
     ToDict(field_list="path,full_content") | \
     splitText(field="full_content", criteria=500, set_as="chunk") | \
+    FilterExpression(expression="item.get('chunk') and len(item.get('chunk', '').strip()) > 0") | \
     ShingleText(field="chunk", shingle_size=3, set_as="shingle", key="path") | \
+    FilterExpression(expression="item.get('shingle') and len(item.get('shingle', '').strip()) > 0") | \
     MakeVectorDatabaseSegment(
         path=vectordb_path,
         embedding_model=embedding_model,
@@ -68,3 +73,19 @@ def watch_into_vector_db(source_path: Annotated[str, "Path to watch"],
         embedding_source=embedding_source,
         overwrite=overwrite)
     yield from pipeline()
+
+@register_source("listIntoVectorDB")
+@source()
+def list_into_vector_db(source_pattern: Annotated[str, "Path to watch"],
+                         vectordb_path: Annotated[str, "Path to LanceDB database. Supports file paths, 'memory://', or 'tmp://name'"],
+                         embedding_model: Annotated[str, "Embedding model to use"],
+                         embedding_source: Annotated[str, "Source of text to embed"],
+                         overwrite: Annotated[bool, "If true, overwrite existing table"] = False,):
+    pipeline = listFiles(full_path=True, files_only=True) | \
+    ToDict(field_list="_:path") | \
+    build_vector_db_from_paths(
+        vectordb_path=vectordb_path,
+        embedding_model=embedding_model,
+        embedding_source=embedding_source,
+        overwrite=overwrite)
+    yield from pipeline([source_pattern])

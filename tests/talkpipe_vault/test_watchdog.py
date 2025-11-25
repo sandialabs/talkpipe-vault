@@ -2,6 +2,8 @@ import time
 from pathlib import Path
 from threading import Thread
 import tempfile
+import signal
+import os
 
 import pytest
 from talkpipe import compile
@@ -499,4 +501,172 @@ class TestFileWatcher:
             assert all(str(normal_file) == path for path in paths)
             assert not any(str(tmp_file) == path for path in paths)
             assert not any(str(bak_file) == path for path in paths)
+
+    def test_ignore_common_false(self):
+        """Test that ignore_common=False allows common temp files."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            results = []
+
+            def run_pipeline():
+                # Disable common ignore patterns to capture temp files
+                script = file_watcher(tmpdir, ignore_common=False, max_events=4)
+                ans = list(script())
+                results.extend(ans)
+
+            thread = Thread(target=run_pipeline, daemon=True)
+            thread.start()
+
+            # Give watcher time to start
+            time.sleep(0.5)
+
+            # Create common temp files that would normally be ignored
+            swp_file = Path(tmpdir) / "test.swp"
+            swp_file.write_text("Vim swap file")
+            time.sleep(0.2)
+
+            tmp_file = Path(tmpdir) / "test.tmp"
+            tmp_file.write_text("Temp file")
+
+            # Wait for thread to complete
+            thread.join(timeout=3.0)
+
+            # Verify both files were captured (common patterns not ignored)
+            unique_paths = set(event["path"] for event in results)
+            assert str(swp_file) in unique_paths
+            assert str(tmp_file) in unique_paths
+
+    def test_ignore_common_false_with_custom_patterns(self):
+        """Test that ignore_common=False uses only custom ignore patterns."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            results = []
+
+            def run_pipeline():
+                # Disable common ignore patterns but add custom ones
+                script = file_watcher(tmpdir, ignore_common=False, ignore_patterns=["*.log"], max_events=2)
+                ans = list(script())
+                results.extend(ans)
+
+            thread = Thread(target=run_pipeline, daemon=True)
+            thread.start()
+
+            # Give watcher time to start
+            time.sleep(0.5)
+
+            # Create .tmp file first (should NOT be ignored since common patterns disabled)
+            tmp_file = Path(tmpdir) / "test.tmp"
+            tmp_file.write_text("Temp file")
+            time.sleep(0.3)
+
+            # Create .log file (should be ignored by custom pattern)
+            log_file = Path(tmpdir) / "test.log"
+            log_file.write_text("Log file")
+
+            # Wait for thread to complete
+            thread.join(timeout=3.0)
+
+            # Verify .tmp was captured but .log was ignored
+            unique_paths = set(event["path"] for event in results)
+            assert str(tmp_file) in unique_paths
+            assert str(log_file) not in unique_paths
+
+    def test_polling_observer(self):
+        """Test that polling observer mode works correctly."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            results = []
+
+            def run_pipeline():
+                # Use polling observer instead of native observer
+                script = file_watcher(tmpdir, polling=True, max_events=1)
+                ans = list(script())
+                results.extend(ans)
+
+            thread = Thread(target=run_pipeline, daemon=True)
+            thread.start()
+
+            # Polling observer needs more time to initialize
+            time.sleep(1.5)
+
+            # Create a file
+            test_file = Path(tmpdir) / "test.txt"
+            test_file.write_text("Content for polling test")
+
+            # Wait for thread to complete (polling is slower)
+            thread.join(timeout=5.0)
+
+            # Verify at least one event was captured with polling observer
+            assert len(results) >= 1
+            assert str(test_file) in results[0]["path"]
+
+    def test_keyboard_interrupt_handling(self):
+        """Test that KeyboardInterrupt is handled gracefully."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            results = []
+            exception_caught = []
+
+            def run_pipeline():
+                try:
+                    # Start file watcher with no max_events (runs indefinitely)
+                    script = file_watcher(tmpdir)
+                    # Process first event, then raise KeyboardInterrupt
+                    count = 0
+                    for event in script():
+                        results.append(event)
+                        count += 1
+                        if count >= 1:
+                            # Manually raise KeyboardInterrupt after first event
+                            raise KeyboardInterrupt()
+                except KeyboardInterrupt:
+                    exception_caught.append(True)
+
+            thread = Thread(target=run_pipeline, daemon=True)
+            thread.start()
+
+            # Give watcher time to start
+            time.sleep(0.5)
+
+            # Create a file to trigger an event
+            test_file = Path(tmpdir) / "test.txt"
+            test_file.write_text("Test content")
+
+            # Wait for thread to complete
+            thread.join(timeout=3.0)
+
+            # Verify KeyboardInterrupt was raised and caught
+            assert len(exception_caught) > 0
+            assert len(results) >= 1
+
+    def test_sentinel_event_draining(self):
+        """Test that sentinel events are properly drained from the queue."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            results = []
+
+            def run_pipeline():
+                # Create a file before starting the watcher to potentially trigger
+                # sentinel-related queue issues
+                script = file_watcher(tmpdir, max_events=1)
+                ans = list(script())
+                results.extend(ans)
+
+            # Pre-create a file to add complexity to the queue
+            pre_file = Path(tmpdir) / "pre_existing.txt"
+            pre_file.write_text("Pre-existing")
+
+            thread = Thread(target=run_pipeline, daemon=True)
+            thread.start()
+
+            # Give watcher time to start and process sentinel
+            time.sleep(0.5)
+
+            # Create a new file after watcher is ready
+            test_file = Path(tmpdir) / "new_file.txt"
+            test_file.write_text("New content")
+
+            # Wait for thread to complete
+            thread.join(timeout=3.0)
+
+            # Verify that we got exactly 1 event and it's not the sentinel
+            assert len(results) == 1
+            assert ".watchdog_ready" not in results[0]["path"]
+            # Should be the new file we created
+            assert "new_file.txt" in results[0]["path"]
 

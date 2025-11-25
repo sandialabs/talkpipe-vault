@@ -140,8 +140,10 @@ def file_watcher(
         while max_events is None or event_count < max_events:
             # Block indefinitely until next event arrives
             file_event = event_queue.get()
-            yield file_event
-            event_count += 1
+            # Filter out any sentinel events that may have slipped through
+            if ".watchdog_ready" not in file_event.get("path", ""):
+                yield file_event
+                event_count += 1
     except KeyboardInterrupt:
         pass
     finally:

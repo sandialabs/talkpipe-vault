@@ -11,6 +11,7 @@ from talkpipe import compile
 from talkpipe_vault.pipelines.building_and_watching import (
     build_vector_db_from_paths,
     watch_into_vector_db,
+    list_into_vector_db,
 )
 
 
@@ -205,3 +206,130 @@ class TestWatchIntoVectorDb:
             assert any("test1.txt" in p for p in paths)
             assert any("test2.txt" in p for p in paths)
             assert not any("ignored.md" in p for p in paths)
+
+
+class TestListIntoVectorDb:
+    """Tests for the list_into_vector_db source."""
+
+    def test_source_is_registered(self):
+        """Test that the source is properly registered with TalkPipe."""
+        script = compile(
+            "INPUT FROM listIntoVectorDB["
+            "source_path='/tmp', "
+            "vectordb_path='memory://', "
+            f"embedding_model='{EMBEDDING_MODEL}', "
+            f"embedding_source='{EMBEDDING_SOURCE}'"
+            "] | toList"
+        )
+        assert script is not None
+
+    def test_source_callable(self):
+        """Test that the source function is callable."""
+        assert callable(list_into_vector_db)
+
+    def test_list_and_process_directory_files(self):
+        """Test that all files in a directory are listed and processed."""
+        with tempfile.TemporaryDirectory() as source_dir:
+            # Create test files
+            test_file1 = Path(source_dir) / "document1.txt"
+            test_file1.write_text("This is the first test document for the vector database.")
+
+            test_file2 = Path(source_dir) / "document2.txt"
+            test_file2.write_text("This is the second test document for the vector database.")
+
+            # Run the pipeline
+            source = list_into_vector_db(
+                source_pattern=source_dir,
+                vectordb_path="tmp://test_list_files",
+                embedding_model=EMBEDDING_MODEL,
+                embedding_source=EMBEDDING_SOURCE,
+                overwrite=True,
+            )
+            results = list(source())
+
+            # Verify we got results
+            assert len(results) > 0
+
+            # Verify both files were processed
+            paths = [r.get("path", "") for r in results]
+            assert any("document1.txt" in p for p in paths)
+            assert any("document2.txt" in p for p in paths)
+
+    def test_list_creates_vector_db_tables(self):
+        """Test that listing files creates both vector DB tables."""
+        from talkpipe.search.lancedb import LanceDBDocumentStore
+
+        with tempfile.TemporaryDirectory() as source_dir:
+            # Create a test file
+            test_file = Path(source_dir) / "test_doc.txt"
+            test_file.write_text("This is test content for verifying table creation.")
+
+            vectordb_path = "tmp://test_list_creates_tables"
+
+            # Run the pipeline
+            source = list_into_vector_db(
+                source_pattern=source_dir,
+                vectordb_path=vectordb_path,
+                embedding_model=EMBEDDING_MODEL,
+                embedding_source=EMBEDDING_SOURCE,
+                overwrite=True,
+            )
+            list(source())
+
+            # Verify full_documents table was created
+            db = LanceDBDocumentStore(path=vectordb_path, table_name="full_documents")
+            assert db.count() >= 1
+
+            # Verify shingled_chunks table was created
+            db = LanceDBDocumentStore(path=vectordb_path, table_name="shingled_chunks")
+            assert db.count() >= 1
+
+    def test_list_with_subdirectories(self):
+        """Test that files in subdirectories are processed with glob patterns."""
+        with tempfile.TemporaryDirectory() as source_dir:
+            # Create files in root
+            root_file = Path(source_dir) / "root.txt"
+            root_file.write_text("Root level document.")
+
+            # Create subdirectory with file
+            subdir = Path(source_dir) / "subdir"
+            subdir.mkdir()
+            sub_file = subdir / "nested.txt"
+            sub_file.write_text("Nested document in subdirectory.")
+
+            # Run the pipeline with glob pattern for recursive matching
+            source = list_into_vector_db(
+                source_pattern=f"{source_dir}/**/*.txt",
+                vectordb_path="tmp://test_list_subdirs",
+                embedding_model=EMBEDDING_MODEL,
+                embedding_source=EMBEDDING_SOURCE,
+                overwrite=True,
+            )
+            results = list(source())
+
+            # Verify both files were processed
+            assert len(results) > 0
+            paths = [r.get("path", "") for r in results]
+            assert any("root.txt" in p for p in paths)
+            assert any("nested.txt" in p for p in paths)
+
+    def test_list_with_sample_documents(self):
+        """Test processing actual sample documents (PDF, DOCX, HTML)."""
+        # Run the pipeline on the sample docs directory
+        source = list_into_vector_db(
+            source_pattern=str(SAMPLE_DOCS_DIR),
+            vectordb_path="tmp://test_list_samples",
+            embedding_model=EMBEDDING_MODEL,
+            embedding_source=EMBEDDING_SOURCE,
+            overwrite=True,
+        )
+        results = list(source())
+
+        # Verify we got results
+        assert len(results) > 0
+
+        # Verify sample documents were processed
+        paths = [r.get("path", "") for r in results]
+        assert any("SampleDocument.pdf" in p for p in paths)
+        assert any("SampleDocument.docx" in p for p in paths)
+        assert any("SampleDocument.html" in p for p in paths)

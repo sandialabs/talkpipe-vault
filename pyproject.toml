@@ -75,6 +75,8 @@ Documentation = "https://github.com/sandialabs/talkpipe-vault#readme"
 
 [project.scripts]
 vault-monitor = "vault.document_monitor.cli:main"
+vault-watch-into-vectordb = "talkpipe_vault.pipelines.cli:watch_vectordb_main"
+vault-list-into-vectordb = "talkpipe_vault.pipelines.cli:list_vectordb_main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -166,6 +168,9 @@ skips = ["*/test_*.py", "*/conftest.py"]
 
 [project.entry-points."talkpipe.sources"]
 fileWatcher = "talkpipe_vault.watchdog:file_watcher"
+watchIntoVectorDB = "talkpipe_vault.pipelines.building_and_watching:watch_into_vector_db"
+listIntoVectorDB = "talkpipe_vault.pipelines.building_and_watching:list_into_vector_db"
 
 [project.entry-points."talkpipe.segments"]
 doclingToText = "talkpipe_vault.docling:DoclingFileToText"
+buildVectorDBFromPaths = "talkpipe_vault.pipelines.building_and_watching:build_vector_db_from_paths"
