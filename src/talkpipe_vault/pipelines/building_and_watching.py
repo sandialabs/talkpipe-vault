@@ -5,7 +5,7 @@ from talkpipe.data.extraction import listFiles
 from talkpipe.pipelines.vector_databases import MakeVectorDatabaseSegment
 from talkpipe_vault.watchdog import file_watcher
 from talkpipe_vault.docling import DoclingFileToText
-from talkpipe.pipe.basic import ToDict, FilterExpression
+from talkpipe.pipe.basic import ToDict, FilterExpression, EvalExpression, setAs
 from talkpipe.data.text.chunking_units import splitText, ShingleText
 
 
@@ -31,7 +31,9 @@ def build_vector_db_from_paths(items: Any,
     ToDict(field_list="path,full_content") | \
     splitText(field="full_content", criteria=500, set_as="chunk") | \
     FilterExpression(expression="item.get('chunk') and len(item.get('chunk', '').strip()) > 0") | \
-    ShingleText(field="chunk", shingle_size=3, set_as="shingle", key="path") | \
+    ShingleText(field="chunk", shingle_size=3, set_as="shingle_detail", key="path", emit_detail=True) | \
+    setAs(field_list="shingle_detail.text:shingle") | \
+    EvalExpression(set_as="id", expression="""str(item['shingle_detail']['first_paragraph'])+'-'+str(item['shingle_detail']['last_paragraph'])+'-'+str(item['path'])""") | \
     FilterExpression(expression="item.get('shingle') and len(item.get('shingle', '').strip()) > 0") | \
     MakeVectorDatabaseSegment(
         path=vectordb_path,
@@ -39,7 +41,7 @@ def build_vector_db_from_paths(items: Any,
         embedding_source=embedding_source,
         embedding_field="shingle",
         table_name="shingled_chunks",
-        doc_id_field="path",
+        doc_id_field="id",
         overwrite=False)
     yield from pipeline(items)
 

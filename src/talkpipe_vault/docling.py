@@ -29,7 +29,7 @@ class DoclingFileToText(AbstractFieldSegment):
     def process_value(self, input_data: Annotated[str, "Input file path"]) -> str | None:
         # Source code and plain text extensions to read directly
         text_extensions = {
-            '.txt', '.md', '.rst',  # Plain text and documentation
+            '.txt', '.rst',  # Plain text and documentation
             '.py', '.pyw', '.pyx',  # Python
             '.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs',  # JavaScript/TypeScript
             '.java', '.kt', '.kts', '.scala',  # JVM languages
@@ -41,7 +41,7 @@ class DoclingFileToText(AbstractFieldSegment):
             '.r', '.R',  # R
             '.sql', '.psql',  # SQL
             '.css', '.scss', '.sass', '.less',  # Stylesheets
-            '.html', '.htm', '.xml', '.svg',  # Markup
+            '.xml', '.svg',  # Markup
             '.json', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.conf',  # Config files
             '.vim', '.lua', '.tcl',  # Other scripting
             '.m', '.mm',  # Objective-C
@@ -53,19 +53,16 @@ class DoclingFileToText(AbstractFieldSegment):
 
         try:
             # Handle text and source code files directly
-            file_ext = None
-            for ext in text_extensions:
-                if input_data.lower().endswith(ext):
-                    file_ext = ext
-                    break
+            rp = input_data.lower().rpartition('.')
+            file_ext = ''.join(rp[1:])  # Get file extension with dot
 
-            if file_ext:
+            if file_ext in text_extensions:
                 with open(input_data, 'r', encoding='utf-8') as f:
                     return f.read()
-
-            # Use Docling for document formats (PDF, DOCX, etc.)
-            result = self.converter.convert(input_data)
-            return result.document.export_to_markdown()
+            else:
+                # Use Docling for document formats (PDF, DOCX, etc.)
+                result = self.converter.convert(input_data)
+                return result.document.export_to_markdown()
         except Exception as e:
             logger.warning(f"Failed to convert '{input_data}': {e}")
             return None

@@ -3,12 +3,16 @@ import argparse
 import json
 import sys
 
+from talkpipe.util.config import configure_logger
+from talkpipe.pipe.basic import ToDict, EvalExpression
+from talkpipe.pipe.io import Print
 from talkpipe_vault.pipelines.building_and_watching import (
     build_vector_db_from_paths,
     list_into_vector_db,
     watch_into_vector_db,
 )
 
+configure_logger("root:ERROR")
 
 def watch_vectordb_main() -> None:
     """Watch a directory and build vector database from file changes."""
@@ -72,12 +76,14 @@ def watch_vectordb_main() -> None:
         max_events=args.max_events,
         polling=args.polling,
         ignore_common=not args.include_common,
-        overwrite=args.overwrite,
-    )
+        overwrite=args.overwrite
+    ) | \
+    EvalExpression(field="chunk", expression="len(item)", set_as="content_length") | \
+    ToDict(field_list="id,content_length") | \
+    Print()
 
     # Consume the pipeline (call it to get the iterator)
-    for item in pipeline():
-        print(json.dumps(item, default=str))
+    list(pipeline())
 
 
 def list_vectordb_main() -> None:
@@ -111,56 +117,12 @@ def list_vectordb_main() -> None:
         embedding_model=args.embedding_model,
         embedding_source=args.embedding_source,
         overwrite=args.overwrite,
-    )
+    ) | \
+    EvalExpression(field="chunk", expression="len(item)", set_as="content_length") | \
+    ToDict(field_list="id,content_length") | \
+    Print()
 
     # Consume the pipeline (call it to get the iterator)
-    for item in pipeline():
-        print(json.dumps(item, default=str))
+    list(pipeline())
 
 
-def build_vectordb_main() -> None:
-    """Build vector database from file paths (from stdin or arguments)."""
-    parser = argparse.ArgumentParser(
-        description="Build vector database from file paths"
-    )
-    parser.add_argument(
-        "paths", nargs="*", help="File paths to process (or read from stdin)"
-    )
-    parser.add_argument(
-        "--vectordb-path", required=True, help="Path to LanceDB database"
-    )
-    parser.add_argument(
-        "--embedding-model", required=True, help="Embedding model to use"
-    )
-    parser.add_argument(
-        "--embedding-source", required=True, help="Source of text to embed"
-    )
-    parser.add_argument(
-        "--overwrite", action="store_true", default=False,
-        help="Overwrite existing table (default: don't overwrite)"
-    )
-
-    args = parser.parse_args()
-
-    # Get paths from args or stdin
-    if args.paths:
-        paths = [{"path": p} for p in args.paths]
-    else:
-        # Read from stdin
-        paths = [{"path": line.strip()} for line in sys.stdin if line.strip()]
-
-    if not paths:
-        parser.error("No paths provided (either as arguments or via stdin)")
-
-    # Run the pipeline
-    pipeline = build_vector_db_from_paths(
-        items=paths,
-        vectordb_path=args.vectordb_path,
-        embedding_model=args.embedding_model,
-        embedding_source=args.embedding_source,
-        overwrite=args.overwrite,
-    )
-
-    # Consume the pipeline
-    for item in pipeline:
-        print(json.dumps(item, default=str))

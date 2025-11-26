@@ -61,9 +61,14 @@ def file_watcher(
                    If None, runs indefinitely until interrupted.
         polling: Use polling-based observer instead of native filesystem events.
                 Useful for network filesystems or when native events are unreliable.
+                **RECOMMENDED for network filesystems** (NFS, SMB, CIFS, etc.).
                 Default: False
         ignore_common: Ignore common temporary and hidden files (e.g., .*, *~, #*#,
                       *.swp, *.tmp, __pycache__). Default: True
+
+    Raises:
+        RuntimeError: If watchdog initialization times out. This typically indicates
+                     a network filesystem or slow storage. Try using polling=True.
     """
     # Build the final ignore patterns list
     if ignore_common:
@@ -117,7 +122,20 @@ def file_watcher(
         with open(sentinel_path, "w") as f:
             f.write("ready")
         # Wait for the sentinel event with timeout
-        ready_queue.get(timeout=5.0)
+        try:
+            ready_queue.get(timeout=5.0)
+        except Empty:
+            # Timeout indicates filesystem events are slow or unavailable
+            raise RuntimeError(
+                f"Watchdog initialization timed out after 5 seconds for path: {path}\n"
+                "This typically occurs with:\n"
+                "  - Network filesystems (NFS, SMB, CIFS)\n"
+                "  - Slow storage devices\n"
+                "  - Filesystems that don't support native event notifications\n"
+                "\n"
+                "Solution: Add the --polling flag to use polling-based file monitoring.\n"
+                "Example: vault-watch-into-vectordb <path> --polling ..."
+            )
     finally:
         # Clean up sentinel file
         if os.path.exists(sentinel_path):
