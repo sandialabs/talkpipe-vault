@@ -1,6 +1,7 @@
 from tracemalloc import Filter
 from typing import Annotated, Optional, Any
 from talkpipe import segment, register_segment, source, register_source
+from talkpipe.pipe.io import Print
 from talkpipe.data.extraction import listFiles
 from talkpipe.pipelines.vector_databases import MakeVectorDatabaseSegment
 from talkpipe_vault.watchdog import file_watcher
@@ -16,7 +17,9 @@ def build_vector_db_from_paths(items: Any,
                                embedding_model: Annotated[str, "Embedding model to use"],
                                embedding_source: Annotated[str, "Source of text to embed"],
                                overwrite: Annotated[bool, "If true, overwrite existing table"] = False):
-    pipeline = DoclingFileToText(
+    pipeline = \
+    FilterExpression(expression="'event' not in item or item['event'] != 'deleted'") | \
+    DoclingFileToText(
         field="path",
         set_as="full_content") | \
     FilterExpression(expression="item.get('full_content') and len(item.get('full_content', '').strip()) > 0") | \
@@ -31,7 +34,7 @@ def build_vector_db_from_paths(items: Any,
     ToDict(field_list="path,full_content") | \
     splitText(field="full_content", criteria=500, set_as="chunk") | \
     FilterExpression(expression="item.get('chunk') and len(item.get('chunk', '').strip()) > 0") | \
-    ShingleText(field="chunk", shingle_size=3, set_as="shingle_detail", key="path", emit_detail=True) | \
+    ShingleText(field="chunk", shingle_size=3, overlap=1, set_as="shingle_detail", key="path", emit_detail=True) | \
     setAs(field_list="shingle_detail.text:shingle") | \
     EvalExpression(set_as="id", expression="""str(item['shingle_detail']['first_paragraph'])+'-'+str(item['shingle_detail']['last_paragraph'])+'-'+str(item['path'])""") | \
     FilterExpression(expression="item.get('shingle') and len(item.get('shingle', '').strip()) > 0") | \
@@ -69,6 +72,7 @@ def watch_into_vector_db(source_path: Annotated[str, "Path to watch"],
         max_events=max_events,
         polling=polling,
         ignore_common=ignore_common) | \
+    Print() | \
     build_vector_db_from_paths(
         vectordb_path=vectordb_path,
         embedding_model=embedding_model,
@@ -85,6 +89,7 @@ def list_into_vector_db(source_pattern: Annotated[str, "Path to watch"],
                          overwrite: Annotated[bool, "If true, overwrite existing table"] = False,):
     pipeline = listFiles(full_path=True, files_only=True) | \
     ToDict(field_list="_:path") | \
+    Print() | \
     build_vector_db_from_paths(
         vectordb_path=vectordb_path,
         embedding_model=embedding_model,

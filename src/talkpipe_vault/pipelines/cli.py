@@ -98,10 +98,10 @@ def list_vectordb_main() -> None:
         "--vectordb-path", required=True, help="Path to LanceDB database"
     )
     parser.add_argument(
-        "--embedding-model", required=True, help="Embedding model to use"
+        "--embedding-model", default=None, help="Embedding model to use"
     )
     parser.add_argument(
-        "--embedding-source", required=True, help="Source of text to embed"
+        "--embedding-source", default=None, help="Source of text to embed"
     )
     parser.add_argument(
         "--overwrite", action="store_true", default=False,
