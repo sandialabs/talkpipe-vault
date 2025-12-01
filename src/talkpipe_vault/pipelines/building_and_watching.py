@@ -6,16 +6,15 @@ from talkpipe.data.extraction import listFiles
 from talkpipe.pipelines.vector_databases import MakeVectorDatabaseSegment
 from talkpipe_vault.watchdog import file_watcher
 from talkpipe_vault.docling import DoclingFileToText
-from talkpipe.pipe.basic import ToDict, FilterExpression, EvalExpression, setAs
+from talkpipe.pipe.basic import ToDict, FilterExpression, EvalExpression, setAs, fillTemplate
 from talkpipe.data.text.chunking_units import splitText, ShingleText
+from .config import EMBEDDING_MODEL, EMBEDDING_SOURCE, DOCUMENT_TEMPLATE, SHINGLE_TEMPLATE
 
 
 @register_segment("buildVectorDBFromPaths")
 @segment()
 def build_vector_db_from_paths(items: Any,                         
                                vectordb_path: Annotated[str, "Path to LanceDB database. Supports file paths, 'memory://', or 'tmp://name'"],
-                               embedding_model: Annotated[str, "Embedding model to use"],
-                               embedding_source: Annotated[str, "Source of text to embed"],
                                overwrite: Annotated[bool, "If true, overwrite existing table"] = False):
     pipeline = \
     FilterExpression(expression="'event' not in item or item['event'] != 'deleted'") | \
@@ -23,11 +22,12 @@ def build_vector_db_from_paths(items: Any,
         field="path",
         set_as="full_content") | \
     FilterExpression(expression="item.get('full_content') and len(item.get('full_content', '').strip()) > 0") | \
+    fillTemplate(template=DOCUMENT_TEMPLATE, set_as="doc_save_query") | \
     MakeVectorDatabaseSegment(
         path=vectordb_path,
-        embedding_model=embedding_model,
-        embedding_source=embedding_source,
-        embedding_field="full_content",
+        embedding_model=EMBEDDING_MODEL,
+        embedding_source=EMBEDDING_SOURCE,
+        embedding_field="doc_save_query",
         table_name="full_documents",
         doc_id_field="path",
         overwrite=overwrite) | \
@@ -38,10 +38,12 @@ def build_vector_db_from_paths(items: Any,
     setAs(field_list="shingle_detail.text:shingle") | \
     EvalExpression(set_as="id", expression="""str(item['shingle_detail']['first_paragraph'])+'-'+str(item['shingle_detail']['last_paragraph'])+'-'+str(item['path'])""") | \
     FilterExpression(expression="item.get('shingle') and len(item.get('shingle', '').strip()) > 0") | \
+    ToDict(field_list="id,shingle") | \
+    fillTemplate(template=SHINGLE_TEMPLATE, set_as="shingle") | \
     MakeVectorDatabaseSegment(
         path=vectordb_path,
-        embedding_model=embedding_model,
-        embedding_source=embedding_source,
+        embedding_model=EMBEDDING_MODEL,
+        embedding_source=EMBEDDING_SOURCE,
         embedding_field="shingle",
         table_name="shingled_chunks",
         doc_id_field="id",
@@ -84,15 +86,11 @@ def watch_into_vector_db(source_path: Annotated[str, "Path to watch"],
 @source()
 def list_into_vector_db(source_pattern: Annotated[str, "Path to watch"],
                          vectordb_path: Annotated[str, "Path to LanceDB database. Supports file paths, 'memory://', or 'tmp://name'"],
-                         embedding_model: Annotated[str, "Embedding model to use"],
-                         embedding_source: Annotated[str, "Source of text to embed"],
                          overwrite: Annotated[bool, "If true, overwrite existing table"] = False,):
     pipeline = listFiles(full_path=True, files_only=True) | \
     ToDict(field_list="_:path") | \
     Print() | \
     build_vector_db_from_paths(
         vectordb_path=vectordb_path,
-        embedding_model=embedding_model,
-        embedding_source=embedding_source,
         overwrite=overwrite)
     yield from pipeline([source_pattern])

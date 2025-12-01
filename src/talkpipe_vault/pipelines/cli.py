@@ -78,8 +78,7 @@ def watch_vectordb_main() -> None:
         ignore_common=not args.include_common,
         overwrite=args.overwrite
     ) | \
-    EvalExpression(field="chunk", expression="len(item)", set_as="content_length") | \
-    ToDict(field_list="id,content_length") | \
+    ToDict(field_list="id") | \
     Print()
 
     # Consume the pipeline (call it to get the iterator)
@@ -98,12 +97,6 @@ def list_vectordb_main() -> None:
         "--vectordb-path", required=True, help="Path to LanceDB database"
     )
     parser.add_argument(
-        "--embedding-model", default=None, help="Embedding model to use"
-    )
-    parser.add_argument(
-        "--embedding-source", default=None, help="Source of text to embed"
-    )
-    parser.add_argument(
         "--overwrite", action="store_true", default=False,
         help="Overwrite existing table (default: don't overwrite)"
     )
@@ -114,12 +107,9 @@ def list_vectordb_main() -> None:
     pipeline = list_into_vector_db(
         source_pattern=args.source_pattern,
         vectordb_path=args.vectordb_path,
-        embedding_model=args.embedding_model,
-        embedding_source=args.embedding_source,
         overwrite=args.overwrite,
     ) | \
-    EvalExpression(field="chunk", expression="len(item)", set_as="content_length") | \
-    ToDict(field_list="id,content_length") | \
+    ToDict(field_list="id") | \
     Print()
 
     # Consume the pipeline (call it to get the iterator)
