@@ -13,7 +13,7 @@ from .config import EMBEDDING_MODEL, EMBEDDING_SOURCE, DOCUMENT_TEMPLATE, SHINGL
 
 @register_segment("buildVectorDBFromPaths")
 @segment()
-def build_vector_db_from_paths(items: Any,                         
+def build_vector_db_from_paths(items: Any,
                                vectordb_path: Annotated[str, "Path to LanceDB database. Supports file paths, 'memory://', or 'tmp://name'"],
                                overwrite: Annotated[bool, "If true, overwrite existing table"] = False):
     pipeline = \
@@ -38,7 +38,7 @@ def build_vector_db_from_paths(items: Any,
     setAs(field_list="shingle_detail.text:shingle") | \
     EvalExpression(set_as="id", expression="""str(item['shingle_detail']['first_paragraph'])+'-'+str(item['shingle_detail']['last_paragraph'])+'-'+str(item['path'])""") | \
     FilterExpression(expression="item.get('shingle') and len(item.get('shingle', '').strip()) > 0") | \
-    ToDict(field_list="id,shingle") | \
+    ToDict(field_list="id,shingle,path") | \
     fillTemplate(template=SHINGLE_TEMPLATE, set_as="shingle") | \
     MakeVectorDatabaseSegment(
         path=vectordb_path,
@@ -47,7 +47,8 @@ def build_vector_db_from_paths(items: Any,
         embedding_field="shingle",
         table_name="shingled_chunks",
         doc_id_field="id",
-        overwrite=False)
+        overwrite=False) | \
+    ToDict(field_list="id,shingle,path")
     yield from pipeline(items)
 
 
@@ -55,8 +56,6 @@ def build_vector_db_from_paths(items: Any,
 @source()
 def watch_into_vector_db(source_path: Annotated[str, "Path to watch"],
                          vectordb_path: Annotated[str, "Path to LanceDB database. Supports file paths, 'memory://', or 'tmp://name'"],
-                         embedding_model: Annotated[str, "Embedding model to use"],
-                         embedding_source: Annotated[str, "Source of text to embed"],
                          patterns: Annotated[list[str] | None, "List of glob patterns to match"] = None,
                          ignore_patterns: Annotated[list[str] | None, "List of glob patterns to ignore"] = None,
                          ignore_directories: Annotated[bool, "Whether to ignore directory events"] = True,
@@ -77,8 +76,6 @@ def watch_into_vector_db(source_path: Annotated[str, "Path to watch"],
     Print() | \
     build_vector_db_from_paths(
         vectordb_path=vectordb_path,
-        embedding_model=embedding_model,
-        embedding_source=embedding_source,
         overwrite=overwrite)
     yield from pipeline()
 

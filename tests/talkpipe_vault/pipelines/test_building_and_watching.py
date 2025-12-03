@@ -47,8 +47,6 @@ class TestBuildVectorDbFromPaths:
         """Test building vector DB with a single document."""
         segment = build_vector_db_from_paths(
             vectordb_path="tmp://test_single_doc",
-            embedding_model=EMBEDDING_MODEL,
-            embedding_source=EMBEDDING_SOURCE,
             overwrite=True,
         )
 
@@ -61,8 +59,6 @@ class TestBuildVectorDbFromPaths:
         """Test building vector DB with multiple documents."""
         segment = build_vector_db_from_paths(
             vectordb_path="tmp://test_multi_doc",
-            embedding_model=EMBEDDING_MODEL,
-            embedding_source=EMBEDDING_SOURCE,
             overwrite=True,
         )
 
@@ -84,8 +80,6 @@ class TestBuildVectorDbFromPaths:
 
         segment = build_vector_db_from_paths(
             vectordb_path=vectordb_path,
-            embedding_model=EMBEDDING_MODEL,
-            embedding_source=EMBEDDING_SOURCE,
             overwrite=True,
         )
 
@@ -97,10 +91,16 @@ class TestBuildVectorDbFromPaths:
         assert db.count() == 1
         doc = db.get_document(PDF_FILE)
         assert doc["path"] == PDF_FILE
+
+        # Verify shingled_chunks table was created
+        # Note: shingled_chunks uses composite ID format: "first_paragraph-last_paragraph-path"
         db = LanceDBDocumentStore(path=vectordb_path, table_name="shingled_chunks")
         assert db.count() == 1
-        doc = db.get_document(PDF_FILE)
-        assert doc["path"] == PDF_FILE
+        # For a short document with one chunk, the ID is "0-0-{path}"
+        shingle_id = f"0-0-{PDF_FILE}"
+        doc = db.get_document(shingle_id)
+        assert doc is not None
+        assert doc["id"] == shingle_id
 
 
 class TestWatchIntoVectorDb:
@@ -112,8 +112,6 @@ class TestWatchIntoVectorDb:
             "INPUT FROM watchIntoVectorDB["
             "source_path='/tmp', "
             "vectordb_path='memory://', "
-            f"embedding_model='{EMBEDDING_MODEL}', "
-            f"embedding_source='{EMBEDDING_SOURCE}', "
             "max_events=1"
             "] | toList"
         )
@@ -132,8 +130,6 @@ class TestWatchIntoVectorDb:
                 source = watch_into_vector_db(
                     source_path=watch_dir,
                     vectordb_path="tmp://test_watch_creation",
-                    embedding_model=EMBEDDING_MODEL,
-                    embedding_source=EMBEDDING_SOURCE,
                     patterns=["*.txt"],
                     max_events=1,
                     overwrite=True,
@@ -165,8 +161,6 @@ class TestWatchIntoVectorDb:
                 source = watch_into_vector_db(
                     source_path=watch_dir,
                     vectordb_path="tmp://test_watch_filtering",
-                    embedding_model=EMBEDDING_MODEL,
-                    embedding_source=EMBEDDING_SOURCE,
                     patterns=["*.txt"],
                     max_events=4,
                     overwrite=True,
@@ -216,9 +210,7 @@ class TestListIntoVectorDb:
         script = compile(
             "INPUT FROM listIntoVectorDB["
             "source_path='/tmp', "
-            "vectordb_path='memory://', "
-            f"embedding_model='{EMBEDDING_MODEL}', "
-            f"embedding_source='{EMBEDDING_SOURCE}'"
+            "vectordb_path='memory://'"
             "] | toList"
         )
         assert script is not None
@@ -241,8 +233,6 @@ class TestListIntoVectorDb:
             source = list_into_vector_db(
                 source_pattern=source_dir,
                 vectordb_path="tmp://test_list_files",
-                embedding_model=EMBEDDING_MODEL,
-                embedding_source=EMBEDDING_SOURCE,
                 overwrite=True,
             )
             results = list(source())
@@ -270,8 +260,6 @@ class TestListIntoVectorDb:
             source = list_into_vector_db(
                 source_pattern=source_dir,
                 vectordb_path=vectordb_path,
-                embedding_model=EMBEDDING_MODEL,
-                embedding_source=EMBEDDING_SOURCE,
                 overwrite=True,
             )
             list(source())
@@ -301,8 +289,6 @@ class TestListIntoVectorDb:
             source = list_into_vector_db(
                 source_pattern=f"{source_dir}/**/*.txt",
                 vectordb_path="tmp://test_list_subdirs",
-                embedding_model=EMBEDDING_MODEL,
-                embedding_source=EMBEDDING_SOURCE,
                 overwrite=True,
             )
             results = list(source())
@@ -319,8 +305,6 @@ class TestListIntoVectorDb:
         source = list_into_vector_db(
             source_pattern=str(SAMPLE_DOCS_DIR),
             vectordb_path="tmp://test_list_samples",
-            embedding_model=EMBEDDING_MODEL,
-            embedding_source=EMBEDDING_SOURCE,
             overwrite=True,
         )
         results = list(source())
