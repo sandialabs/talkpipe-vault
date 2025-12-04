@@ -2,14 +2,57 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Coding conventions
+- When commenting segments or sources, do not include the parameters in the coode comment.
+  Include a description of the data structure that the it expects.  
+- For sources and segments, parameters should be defined using the Annotated typing convention.
+
 ## Project Overview
 
-TalkPipe Vault is an AI-powered personal information assistant. The project is in early development with build infrastructure established but source code pending implementation.
+TalkPipe Vault is an AI-powered personal information assistant that automatically watches documents, processes them with AI models, and creates a searchable vector database. It demonstrates real-world usage of the TalkPipe framework for composable AI data pipelines.
 
 - **Package**: `talkpipe-vault`
-- **Module**: `vault`
+- **Module**: `talkpipe_vault`
 - **Python**: 3.11.4+ required
-- **Port**: 8001
+- **Status**: Alpha (active development)
+- **License**: Apache 2.0
+
+## Source Code Structure
+
+```
+src/talkpipe_vault/
+├── __init__.py                 # Package initialization
+├── docling.py                  # Document conversion (50+ formats)
+├── watchdog.py                 # File system monitoring
+└── pipelines/
+    ├── config.py               # Default embedding/template config
+    ├── cli.py                  # CLI entry points
+    ├── building_and_watching.py # Vector DB pipeline definitions
+    └── searching_and_prompting.py # Search and RAG chat segments
+```
+
+## Core Components
+
+### TalkPipe Sources (registered entry points)
+- `fileWatcher` - Real-time file system event monitoring
+- `watchIntoVectorDB` - Watch directory and process into vector DB
+- `listIntoVectorDB` - Batch process files matching glob pattern
+
+### TalkPipe Segments (registered entry points)
+- `doclingToText` - Extract text from 50+ file formats
+- `buildVectorDBFromPaths` - Core document processing pipeline
+- `vaultSearch` - Semantic search in vector database
+- `vaultChat` - RAG-based conversational AI
+
+### CLI Commands
+```bash
+# Watch directory and build vector DB in real-time
+vault-watch-into-vectordb /path/to/docs --vectordb-path ~/my-vault \
+    --embedding-model mxbai-embed-large:latest --embedding-source ollama
+
+# Batch process files into vector DB
+vault-list-into-vectordb "/path/to/docs/**/*.pdf" --vectordb-path ~/my-vault
+```
 
 ## Development Commands
 
@@ -81,10 +124,6 @@ docker-compose logs -f vault
 # Development service (hot reload)
 docker-compose --profile dev up vault-dev
 
-# Admin operations
-docker-compose exec -it vault vault-create-superuser
-docker-compose exec vault vault-admin list
-
 # Stop services
 docker-compose down
 ```
@@ -93,44 +132,33 @@ docker-compose down
 
 ### Technology Stack
 
-- **Framework**: FastAPI + Uvicorn
-- **Database**: SQLite with SQLAlchemy (async via aiosqlite)
-- **Auth**: fastapi-users with SQLAlchemy backend
-- **Templates**: Jinja2
-- **AI**: TalkPipe (>=0.10.0) with OpenAI/Ollama support
-- **Migrations**: Alembic
+- **Pipeline Framework**: TalkPipe (>=0.10.2a1) with OpenAI/Ollama support
+- **Vector Database**: LanceDB
+- **Document Conversion**: Docling (50+ formats)
+- **File Monitoring**: Watchdog
+- **Web Framework**: FastAPI + Uvicorn (infrastructure exists, not yet used)
 
-### Expected Structure
-
-The source code needs to be implemented under `src/vault/`:
+### Document Processing Pipeline
 
 ```
-src/vault/
-├── __init__.py
-├── app/
-│   ├── main.py          # FastAPI app (uvicorn entry point)
-│   ├── server.py        # Server module with CLI
-│   ├── templates/       # Jinja2 templates
-│   └── static/          # CSS, JS, JSON files
-├── create_superuser.py  # Admin creation tool
-└── admin_users.py       # User management CLI
+File Events/Paths
+    ↓
+DoclingFileToText (extract content from PDF, DOCX, source code, etc.)
+    ↓
+Template formatting
+    ↓
+MakeVectorDatabaseSegment (full_documents table)
+    ↓
+splitText (~500 char chunks)
+    ↓
+ShingleText (3-chunk overlapping windows)
+    ↓
+MakeVectorDatabaseSegment (shingled_chunks table)
 ```
 
-**Key entry points:**
-- Production: `python -m vault.app.server` (Dockerfile line 107)
-- Development: `uvicorn src.vault.app.main:app --reload` (docker-compose line 57)
-
-### Environment Variables
-
-**Required:**
-- `VAULT_SECRET`: JWT signing key (never use default in production)
-
-**Optional:**
-- `VAULT_HOST`: Bind address (default: 0.0.0.0)
-- `VAULT_PORT`: Port (default: 8001)
-- `VAULT_DB_PATH`: Database path (default: /app/data/vault.db)
-- `OPENAI_API_KEY`: OpenAI API key
-- `OLLAMA_BASE_URL`: Ollama endpoint (default: http://localhost:11434)
+### Vector Database Tables
+- `full_documents` - Complete documents with embeddings
+- `shingled_chunks` - Overlapping text windows for better retrieval
 
 ### Docker Multi-Stage Build
 
@@ -148,21 +176,14 @@ src/vault/
 
 Both services map `host.containers.internal:host-gateway` to access host services (e.g., local Ollama instance).
 
-### Data Persistence
-
-Docker volumes:
-- Production: `vault_db` → `/app/data/vault.db`
-- Development: `vault_dev_db` → `/app/data/vault.db`
-
-Backup/restore commands in DOCKER_DEPLOYMENT.md.
-
 ## Code Standards
 
 - **Line length**: 88 characters (Black)
 - **Type hints**: Required (strict mypy enabled)
-- **First-party imports**: `vault`
+- **First-party imports**: `talkpipe_vault`
 - **Coverage**: Track with pytest-cov
 - **Security**: Bandit + Safety scans in CI/CD
+- **Code-to-test ratio**: ~1:2.5
 
 ## CI/CD Pipeline
 
@@ -188,8 +209,14 @@ GitHub Actions workflow on push/PR to main/master/develop:
 
 ## Key Configuration Files
 
-- `pyproject.toml`: Package config, dependencies, tool settings
+- `pyproject.toml`: Package config, dependencies, tool settings, entry points
 - `docker-compose.yml`: Service definitions (vault, vault-dev)
 - `Dockerfile`: Multi-stage build
-- `DOCKER_DEPLOYMENT.md`: Deployment guide with admin commands
-- `.env.podman.NOCOMMIT`: Local env file (gitignored)
+- `.github/workflows/ci-cd.yml`: CI/CD pipeline
+
+## Default Configuration
+
+Located in `src/talkpipe_vault/pipelines/config.py`:
+- `EMBEDDING_MODEL`: embeddinggemma
+- `EMBEDDING_SOURCE`: ollama
+- Templates for document, shingle, and retrieval formatting

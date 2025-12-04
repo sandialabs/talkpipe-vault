@@ -13,11 +13,14 @@ class OutputFormat(BaseModel):
 @register_segment("doclingToText")
 class DoclingFileToText(AbstractFieldSegment):
     """
-    Segment that extracts text from a file path using Docling.
+    Segment that extracts text from files using Docling for documents or direct reading for source code.
 
-    This segment takes a file path as input and uses the Docling library
-    to extract and return the text content from the specified file.
-    If conversion fails, a warning is logged and the item is skipped.
+    Expects input items containing a file path string (either as the full item or in a specified field).
+    Source code and plain text files (.py, .js, .txt, etc.) are read directly. Document formats
+    (PDF, DOCX, etc.) are converted via Docling and exported as markdown.
+
+    Emits items with extracted text content (as full item or in a specified field).
+    Returns None for items that fail conversion, which are then skipped.
     """
 
     def __init__(self,

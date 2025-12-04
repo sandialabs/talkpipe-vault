@@ -39,36 +39,16 @@ def file_watcher(
     """
     Source that watches a directory for file changes and emits file events.
 
-    This source uses the watchdog library to monitor a specified directory for any file
-    creation, modification, or deletion events. Events are queued and yielded from a
-    blocking queue for controlled processing.
+    Uses the watchdog library to monitor a directory for file creation, modification,
+    or deletion events. Events are queued and yielded for controlled processing.
+    Supports both native filesystem events and polling mode for network filesystems.
 
-    Yields:
-        dict: Event dictionary with keys:
-            - "event": Event type ("created", "modified", or "deleted")
-            - "path": Absolute path to the affected file
+    Yields dicts with the following structure:
+        - "event": str - Event type ("created", "modified", or "deleted")
+        - "path": str - Absolute path to the affected file
 
-    Args:
-        path: Directory path to watch for file changes
-        patterns: List of glob patterns to match (e.g., ["*.txt", "*.md"]).
-                 If None, matches all files.
-        ignore_patterns: List of glob patterns to ignore (e.g., ["*.tmp", "*.log"]).
-                        If None, no patterns are ignored. If ignore_common is True,
-                        these are appended to the common ignore patterns.
-        ignore_directories: Whether to ignore directory events. Default: True
-        case_sensitive: Whether pattern matching is case-sensitive. Default: False
-        max_events: Optional maximum number of events to process before stopping.
-                   If None, runs indefinitely until interrupted.
-        polling: Use polling-based observer instead of native filesystem events.
-                Useful for network filesystems or when native events are unreliable.
-                **RECOMMENDED for network filesystems** (NFS, SMB, CIFS, etc.).
-                Default: False
-        ignore_common: Ignore common temporary and hidden files (e.g., .*, *~, #*#,
-                      *.swp, *.tmp, __pycache__). Default: True
-
-    Raises:
-        RuntimeError: If watchdog initialization times out. This typically indicates
-                     a network filesystem or slow storage. Try using polling=True.
+    Raises RuntimeError if watchdog initialization times out (typically on network
+    filesystems - use polling=True in that case).
     """
     # Build the final ignore patterns list
     if ignore_common:

@@ -17,8 +17,20 @@ def build_vector_db_from_paths(items: Any,
                                vectordb_path: Annotated[str, "Path to LanceDB database. Supports file paths, 'memory://', or 'tmp://name'"],
                                overwrite: Annotated[bool, "If true, overwrite existing table"] = False):
     """
-    Segment that builds a vector database from file paths.  
-    Expects each item to be a dict with a 'path' field.
+    Segment that builds a vector database from file paths.
+
+    Expects input items as dicts with the following structure:
+        - "path": str - File path to process
+        - "event": str (optional) - If present and equals "deleted", item is skipped
+
+    Processes each file through Docling for text extraction, then creates embeddings
+    for both full documents and shingled chunks. Stores results in two LanceDB tables:
+    'full_documents' and 'shingled_chunks'.
+
+    Yields dicts with the following structure:
+        - "id": str - Unique chunk identifier (paragraph range + path)
+        - "shingle": str - Templated text chunk content
+        - "path": str - Source file path
     """
     pipeline = \
     FilterExpression(expression="'event' not in item or item['event'] != 'deleted'") | \
@@ -68,6 +80,17 @@ def watch_into_vector_db(source_path: Annotated[str, "Path to watch"],
                          polling: Annotated[bool, "Use polling-based observer"] = False,
                          ignore_common: Annotated[bool, "Ignore common temp/hidden files"] = True,
                          overwrite: Annotated[bool, "If true, overwrite existing table"] = False,):
+    """
+    Source that watches a directory and processes file changes into a vector database.
+
+    Combines file watching with vector database building. Monitors the source directory
+    for file events and automatically processes new/modified files into LanceDB tables.
+
+    Yields dicts with the following structure:
+        - "id": str - Unique chunk identifier
+        - "shingle": str - Templated text chunk content
+        - "path": str - Source file path
+    """
     pipeline = file_watcher(
         path=source_path,
         patterns=patterns,
@@ -85,9 +108,20 @@ def watch_into_vector_db(source_path: Annotated[str, "Path to watch"],
 
 @register_source("listIntoVectorDB")
 @source()
-def list_into_vector_db(source_pattern: Annotated[str, "Path to watch"],
+def list_into_vector_db(source_pattern: Annotated[str, "Glob pattern to match files (e.g., '/path/**/*.pdf')"],
                          vectordb_path: Annotated[str, "Path to LanceDB database. Supports file paths, 'memory://', or 'tmp://name'"],
                          overwrite: Annotated[bool, "If true, overwrite existing table"] = False,):
+    """
+    Source that batch processes files matching a glob pattern into a vector database.
+
+    Lists all files matching the source pattern and processes them into LanceDB.
+    Useful for initial bulk loading of documents into the vault.
+
+    Yields dicts with the following structure:
+        - "id": str - Unique chunk identifier
+        - "shingle": str - Templated text chunk content
+        - "path": str - Source file path
+    """
     pipeline = listFiles(full_path=True, files_only=True) | \
     ToDict(field_list="_:path") | \
     Print() | \

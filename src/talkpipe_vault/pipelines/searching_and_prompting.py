@@ -10,7 +10,13 @@ from .config import RETRIEVAL_TEMPLATE, EMBEDDING_MODEL, EMBEDDING_SOURCE
 @register_segment("vaultSearch")
 class VaultSearch(AbstractFieldSegment):
     """
-    Segment that searches a vector database built from a vault.
+    Segment that performs semantic search on a vault's vector database.
+
+    Expects input items containing a search query string (either as the full item
+    or in a specified field). The query is templated and used to search the
+    'shingled_chunks' table in LanceDB.
+
+    Emits search results from the vector database containing matching document chunks.
     """
     def __init__(
         self,
@@ -37,7 +43,13 @@ class VaultSearch(AbstractFieldSegment):
 @register_segment("vaultChat")
 class VaultChat(AbstractFieldSegment):
     """
-    Segment that handles chat interactions with a vault.
+    Segment that provides RAG-based conversational AI using vault contents.
+
+    Expects input items containing a user query string (either as the full item
+    or in a specified field). The query is used to retrieve relevant context from
+    the vault's 'shingled_chunks' table, which is then used to generate a response.
+
+    Emits AI-generated response strings based on retrieved vault context.
     """
     def __init__(
         self,
