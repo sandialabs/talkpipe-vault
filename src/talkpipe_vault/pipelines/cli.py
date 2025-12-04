@@ -15,21 +15,16 @@ from talkpipe_vault.pipelines.building_and_watching import (
 configure_logger("root:ERROR")
 
 def watch_vectordb_main() -> None:
-    """Watch a directory and build vector database from file changes."""
+    """Watch a directory and build vector database and full-text index from file changes."""
     parser = argparse.ArgumentParser(
-        description="Watch a directory and build vector database from file changes"
+        description="Watch a directory and build vector database and full-text index from file changes"
     )
     parser.add_argument(
         "source_path", help="Path to directory to watch"
     )
     parser.add_argument(
-        "--vectordb-path", required=True, help="Path to LanceDB database"
-    )
-    parser.add_argument(
-        "--embedding-model", required=True, help="Embedding model to use"
-    )
-    parser.add_argument(
-        "--embedding-source", required=True, help="Source of text to embed"
+        "--vault-path", required=True,
+        help="Base path for vault storage. Vector DB at vault_path/vector_vault, full-text index at vault_path/fulltext_vault"
     )
     parser.add_argument(
         "--patterns", nargs="+", default=None, help="Glob patterns to match"
@@ -58,7 +53,7 @@ def watch_vectordb_main() -> None:
     )
     parser.add_argument(
         "--overwrite", action="store_true", default=False,
-        help="Overwrite existing table (default: don't overwrite)"
+        help="Overwrite existing tables and indexes (default: don't overwrite)"
     )
 
     args = parser.parse_args()
@@ -66,9 +61,7 @@ def watch_vectordb_main() -> None:
     # Run the pipeline
     pipeline = watch_into_vector_db(
         source_path=args.source_path,
-        vectordb_path=args.vectordb_path,
-        embedding_model=args.embedding_model,
-        embedding_source=args.embedding_source,
+        vault_path=args.vault_path,
         patterns=args.patterns,
         ignore_patterns=args.ignore_patterns,
         ignore_directories=not args.include_directories,
@@ -86,19 +79,20 @@ def watch_vectordb_main() -> None:
 
 
 def list_vectordb_main() -> None:
-    """List files matching pattern and build vector database."""
+    """List files matching pattern and build vector database and full-text index."""
     parser = argparse.ArgumentParser(
-        description="List files matching pattern and build vector database"
+        description="List files matching pattern and build vector database and full-text index"
     )
     parser.add_argument(
         "source_pattern", help="Glob pattern for files to process"
     )
     parser.add_argument(
-        "--vectordb-path", required=True, help="Path to LanceDB database"
+        "--vault-path", required=True,
+        help="Base path for vault storage. Vector DB at vault_path/vector_vault, full-text index at vault_path/fulltext_vault"
     )
     parser.add_argument(
         "--overwrite", action="store_true", default=False,
-        help="Overwrite existing table (default: don't overwrite)"
+        help="Overwrite existing tables and indexes (default: don't overwrite)"
     )
 
     args = parser.parse_args()
@@ -106,7 +100,7 @@ def list_vectordb_main() -> None:
     # Run the pipeline
     pipeline = list_into_vector_db(
         source_pattern=args.source_pattern,
-        vectordb_path=args.vectordb_path,
+        vault_path=args.vault_path,
         overwrite=args.overwrite,
     ) | \
     ToDict(field_list="id") | \

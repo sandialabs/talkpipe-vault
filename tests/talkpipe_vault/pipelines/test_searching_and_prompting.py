@@ -22,39 +22,42 @@ HTML_FILE = str(SAMPLE_DOCS_DIR / "SampleDocument.html")
 
 
 @pytest.fixture
-def populated_vector_db():
+def populated_vector_db(tmp_path):
     """Create a populated vector database for testing."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        # Create test text files
-        test_file1 = Path(tmpdir) / "document1.txt"
-        test_file1.write_text(
-            "Python is a high-level programming language. "
-            "It is widely used for web development, data analysis, and machine learning."
-        )
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    vault_path = tmp_path / "vault"
+    vault_path.mkdir()
 
-        test_file2 = Path(tmpdir) / "document2.txt"
-        test_file2.write_text(
-            "FastAPI is a modern web framework for building APIs with Python. "
-            "It is fast, easy to use, and supports async operations."
-        )
+    # Create test text files
+    test_file1 = source_dir / "document1.txt"
+    test_file1.write_text(
+        "Python is a high-level programming language. "
+        "It is widely used for web development, data analysis, and machine learning."
+    )
 
-        test_file3 = Path(tmpdir) / "document3.txt"
-        test_file3.write_text(
-            "Machine learning is a subset of artificial intelligence. "
-            "It involves training models on data to make predictions."
-        )
+    test_file2 = source_dir / "document2.txt"
+    test_file2.write_text(
+        "FastAPI is a modern web framework for building APIs with Python. "
+        "It is fast, easy to use, and supports async operations."
+    )
 
-        # Build vector database
-        vectordb_path = "tmp://test_search_prompting_db"
-        source = list_into_vector_db(
-            source_pattern=tmpdir,
-            vectordb_path=vectordb_path,
-            overwrite=True,
-        )
-        # Process all documents
-        list(source())
+    test_file3 = source_dir / "document3.txt"
+    test_file3.write_text(
+        "Machine learning is a subset of artificial intelligence. "
+        "It involves training models on data to make predictions."
+    )
 
-        yield vectordb_path
+    # Build vector database
+    source = list_into_vector_db(
+        source_pattern=str(source_dir),
+        vault_path=str(vault_path),
+        overwrite=True,
+    )
+    # Process all documents
+    list(source())
+
+    yield str(vault_path)
 
 
 class TestVaultSearch:
@@ -63,19 +66,19 @@ class TestVaultSearch:
     def test_segment_is_registered(self):
         """Test that the segment is properly registered with TalkPipe."""
         script = compile(
-            "| vaultSearch[path='memory://']"
+            "| vaultSearch[vault_path='/tmp/test_vault']"
         )
         assert script is not None
 
-    def test_segment_callable(self):
+    def test_segment_callable(self, tmp_path):
         """Test that VaultSearch class is instantiable."""
-        segment = VaultSearch(path="memory://")
+        segment = VaultSearch(vault_path=str(tmp_path))
         assert segment is not None
         assert hasattr(segment, "process_value")
 
     def test_search_returns_results(self, populated_vector_db):
         """Test that searching returns relevant results."""
-        segment = VaultSearch(path=populated_vector_db)
+        segment = VaultSearch(vault_path=populated_vector_db)
 
         # Search for Python-related content
         query = "What is Python programming?"
@@ -95,7 +98,7 @@ class TestVaultSearch:
 
     def test_search_with_different_queries(self, populated_vector_db):
         """Test searching with different query topics."""
-        segment = VaultSearch(path=populated_vector_db)
+        segment = VaultSearch(vault_path=populated_vector_db)
 
         # Search for FastAPI
         query1 = "Tell me about FastAPI framework"
@@ -111,7 +114,7 @@ class TestVaultSearch:
 
     def test_search_with_field_parameter(self, populated_vector_db):
         """Test VaultSearch with field parameter."""
-        segment = VaultSearch(path=populated_vector_db, field="query")
+        segment = VaultSearch(vault_path=populated_vector_db, field="query")
 
         # Input as dict with query field
         input_data = {"query": "Python programming"}
@@ -122,7 +125,7 @@ class TestVaultSearch:
 
     def test_search_with_set_as_parameter(self, populated_vector_db):
         """Test VaultSearch with set_as parameter."""
-        segment = VaultSearch(path=populated_vector_db, set_as="search_results")
+        segment = VaultSearch(vault_path=populated_vector_db, set_as="search_results")
 
         query = "web development"
         result = segment.process_value(query)
@@ -131,7 +134,7 @@ class TestVaultSearch:
 
     def test_search_pipeline_integration(self, populated_vector_db):
         """Test that VaultSearch integrates properly with the internal pipeline."""
-        segment = VaultSearch(path=populated_vector_db)
+        segment = VaultSearch(vault_path=populated_vector_db)
 
         # Verify the internal pipeline was created
         assert segment.pipeline is not None
@@ -149,19 +152,19 @@ class TestVaultChat:
     def test_segment_is_registered(self):
         """Test that the segment is properly registered with TalkPipe."""
         script = compile(
-            "| vaultChat[path='memory://']"
+            "| vaultChat[vault_path='/tmp/test_vault']"
         )
         assert script is not None
 
-    def test_segment_callable(self):
+    def test_segment_callable(self, tmp_path):
         """Test that VaultChat class is instantiable."""
-        segment = VaultChat(path="memory://")
+        segment = VaultChat(vault_path=str(tmp_path))
         assert segment is not None
         assert hasattr(segment, "process_value")
 
     def test_chat_returns_response(self, populated_vector_db):
         """Test that chat returns a response from the LLM."""
-        segment = VaultChat(path=populated_vector_db)
+        segment = VaultChat(vault_path=populated_vector_db)
 
         # Ask a question
         query = "What is Python used for?"
@@ -174,7 +177,7 @@ class TestVaultChat:
 
     def test_chat_uses_context(self, populated_vector_db):
         """Test that chat uses vector database context in responses."""
-        segment = VaultChat(path=populated_vector_db)
+        segment = VaultChat(vault_path=populated_vector_db)
 
         # Ask about FastAPI
         query = "Tell me about FastAPI"
@@ -187,21 +190,21 @@ class TestVaultChat:
 
     def test_chat_with_field_parameter(self, populated_vector_db):
         """Test VaultChat with field parameter."""
-        segment = VaultChat(path=populated_vector_db, field="question")
+        segment = VaultChat(vault_path=populated_vector_db, field="question")
 
         # This should be instantiable
         assert segment is not None
 
     def test_chat_with_set_as_parameter(self, populated_vector_db):
         """Test VaultChat with set_as parameter."""
-        segment = VaultChat(path=populated_vector_db, set_as="answer")
+        segment = VaultChat(vault_path=populated_vector_db, set_as="answer")
 
         # This should be instantiable
         assert segment is not None
 
     def test_chat_pipeline_integration(self, populated_vector_db):
         """Test that VaultChat integrates properly with the internal pipeline."""
-        segment = VaultChat(path=populated_vector_db)
+        segment = VaultChat(vault_path=populated_vector_db)
 
         # Verify the internal pipeline was created
         assert segment.pipeline is not None
@@ -213,7 +216,7 @@ class TestVaultSearchAdvanced:
 
     def test_search_empty_query(self, populated_vector_db):
         """Test searching with an empty query."""
-        segment = VaultSearch(path=populated_vector_db)
+        segment = VaultSearch(vault_path=populated_vector_db)
 
         query = ""
         result = segment.process_value(query)
@@ -223,7 +226,7 @@ class TestVaultSearchAdvanced:
 
     def test_search_nonexistent_topic(self, populated_vector_db):
         """Test searching for a topic not in the database."""
-        segment = VaultSearch(path=populated_vector_db)
+        segment = VaultSearch(vault_path=populated_vector_db)
 
         # Search for something completely unrelated
         query = "quantum entanglement in superposition states"
@@ -235,7 +238,7 @@ class TestVaultSearchAdvanced:
 
     def test_multiple_searches_same_segment(self, populated_vector_db):
         """Test that a segment can be reused for multiple searches."""
-        segment = VaultSearch(path=populated_vector_db)
+        segment = VaultSearch(vault_path=populated_vector_db)
 
         query1 = "Python"
         result1 = segment.process_value(query1)
@@ -254,21 +257,22 @@ class TestIntegrationWithSampleDocs:
     """Integration tests using the actual sample documents."""
 
     @pytest.fixture
-    def sample_docs_vector_db(self):
+    def sample_docs_vector_db(self, tmp_path):
         """Create a vector database from sample documents."""
-        vectordb_path = "tmp://test_sample_docs_search"
+        vault_path = tmp_path / "vault"
+        vault_path.mkdir()
         source = list_into_vector_db(
             source_pattern=str(SAMPLE_DOCS_DIR),
-            vectordb_path=vectordb_path,
+            vault_path=str(vault_path),
             overwrite=True,
         )
         # Process all sample documents
         list(source())
-        yield vectordb_path
+        yield str(vault_path)
 
     def test_search_sample_documents(self, sample_docs_vector_db):
         """Test searching the sample documents."""
-        segment = VaultSearch(path=sample_docs_vector_db)
+        segment = VaultSearch(vault_path=sample_docs_vector_db)
 
         query = "sample document content"
         result = segment.process_value(query)
@@ -279,7 +283,7 @@ class TestIntegrationWithSampleDocs:
 
     def test_chat_sample_documents(self, sample_docs_vector_db):
         """Test chatting with the sample documents."""
-        segment = VaultChat(path=sample_docs_vector_db)
+        segment = VaultChat(vault_path=sample_docs_vector_db)
 
         query = "What is in the sample documents?"
         result = segment.process_value(query)
