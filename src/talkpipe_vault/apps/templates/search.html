@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+
+{% block title %}Vault Search{% endblock %}
+
+{% block content %}
+<div class="search-box">
+    <form method="post" action="/search">
+        <input type="text" name="query" placeholder="Search your vault..." value="{{ query }}" autofocus>
+        <button type="submit">Search</button>
+    </form>
+</div>
+
+{% if error %}
+<div class="error">
+    <p><strong>Error:</strong> {{ error }}</p>
+</div>
+{% elif results is not none %}
+    {% if results %}
+    <p style="color: #666; margin-bottom: 15px;">Found {{ results|length }} result(s) for "{{ query }}"</p>
+    {% for result in results %}
+    <div class="result-card">
+        <div class="title">{{ result.filename }}</div>
+        <div class="path">{{ result.path }}</div>
+        <div class="snippet">{{ result.snippet }}</div>
+        <span class="score">Relevance: {{ result.score }}</span>
+    </div>
+    {% endfor %}
+    {% else %}
+    <div class="no-results">
+        <p>No results found for "{{ query }}"</p>
+        <p>Try different keywords or a broader search term.</p>
+    </div>
+    {% endif %}
+{% endif %}
+{% endblock %}

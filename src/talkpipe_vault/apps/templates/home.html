@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+
+{% block title %}Vault Query - Home{% endblock %}
+
+{% block content %}
+<div class="welcome">
+    <h2>Welcome to Vault Query</h2>
+    <p>Search and chat with your personal document vault using AI-powered semantic search.</p>
+
+    <div class="mode-cards">
+        <a href="/search" class="mode-card">
+            <div class="icon">&#128269;</div>
+            <h3>Search</h3>
+            <p>Find relevant documents using semantic search. Enter keywords or natural language queries to discover matching content in your vault.</p>
+        </a>
+
+        <a href="/chat" class="mode-card">
+            <div class="icon">&#128172;</div>
+            <h3>Chat</h3>
+            <p>Have a conversation about your documents. Ask questions and get AI-generated answers based on your vault's contents.</p>
+        </a>
+    </div>
+</div>
+{% endblock %}

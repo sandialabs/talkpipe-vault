@@ -77,6 +77,7 @@ Documentation = "https://github.com/sandialabs/talkpipe-vault#readme"
 vault-monitor = "vault.document_monitor.cli:main"
 vault-watch-into-vectordb = "talkpipe_vault.pipelines.cli:watch_vectordb_main"
 vault-list-into-vectordb = "talkpipe_vault.pipelines.cli:list_vectordb_main"
+vault-query = "talkpipe_vault.apps.query:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -84,6 +85,7 @@ where = ["src"]
 [tool.setuptools.package-data]
 "*" = ["*.html", "*.css", "*.js", "*.json"]
 "vault.app" = ["templates/**/*", "static/**/*"]
+"talkpipe_vault.apps" = ["templates/**/*"]
 
 [tool.setuptools_scm]
 # Use defaults

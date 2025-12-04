@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+
+{% block title %}Vault Chat{% endblock %}
+
+{% block container_class %}container container-full{% endblock %}
+
+{% block content %}
+<div class="chat-container">
+    <div class="chat-messages">
+        {% if error %}
+        <div class="error">
+            <p><strong>Error:</strong> {{ error }}</p>
+        </div>
+        {% elif messages %}
+            {% for msg in messages %}
+            <div class="message {{ msg.role }}">
+                <div class="avatar">
+                    {% if msg.role == 'user' %}U{% else %}A{% endif %}
+                </div>
+                {% if msg.role == 'assistant' %}
+                <div class="content markdown-content" data-markdown="{{ msg.content | e }}"></div>
+                {% else %}
+                <div class="content">{{ msg.content }}</div>
+                {% endif %}
+            </div>
+            {% endfor %}
+        {% else %}
+        <div class="empty-chat">
+            <div class="icon">&#128172;</div>
+            <p>Ask a question about your documents</p>
+            <p style="font-size: 0.9rem; margin-top: 10px;">The assistant will search your vault and provide relevant answers.</p>
+        </div>
+        {% endif %}
+    </div>
+
+    <div class="chat-input">
+        <form method="post" action="/chat">
+            <input type="text" name="message" placeholder="Type your question..." autofocus>
+            <button type="submit">Send</button>
+        </form>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // Render markdown for all assistant messages
+    document.querySelectorAll('.markdown-content[data-markdown]').forEach(function(el) {
+        const rawMarkdown = el.getAttribute('data-markdown');
+        if (rawMarkdown && typeof marked !== 'undefined') {
+            el.innerHTML = marked.parse(rawMarkdown);
+        } else if (rawMarkdown) {
+            el.textContent = rawMarkdown;
+        }
+    });
+});
+</script>
+{% endblock %}
