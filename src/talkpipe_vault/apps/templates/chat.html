@@ -5,52 +5,319 @@
 {% block container_class %}container container-full{% endblock %}
 
 {% block content %}
+<!-- Hidden element for JS to extract server response -->
+{% if messages %}
+{% for msg in messages %}
+{% if msg.role == 'assistant' %}
+<div id="server-response" data-content="{{ msg.content | e }}" style="display:none;"></div>
+{% endif %}
+{% endfor %}
+{% endif %}
+{% if error %}
+<div id="server-error" data-content="{{ error | e }}" style="display:none;"></div>
+{% endif %}
+
 <div class="chat-container">
-    <div class="chat-messages">
-        {% if error %}
-        <div class="error">
-            <p><strong>Error:</strong> {{ error }}</p>
-        </div>
-        {% elif messages %}
-            {% for msg in messages %}
-            <div class="message {{ msg.role }}">
-                <div class="avatar">
-                    {% if msg.role == 'user' %}U{% else %}A{% endif %}
-                </div>
-                {% if msg.role == 'assistant' %}
-                <div class="content markdown-content" data-markdown="{{ msg.content | e }}"></div>
-                {% else %}
-                <div class="content">{{ msg.content }}</div>
-                {% endif %}
-            </div>
-            {% endfor %}
-        {% else %}
-        <div class="empty-chat">
+    <div class="chat-messages" id="chat-messages">
+        <div class="empty-chat" id="empty-chat">
             <div class="icon">&#128172;</div>
             <p>Ask a question about your documents</p>
             <p style="font-size: 0.9rem; margin-top: 10px;">The assistant will search your vault and provide relevant answers.</p>
         </div>
-        {% endif %}
     </div>
 
     <div class="chat-input">
-        <form method="post" action="/chat">
-            <input type="text" name="message" placeholder="Type your question..." autofocus>
-            <button type="submit">Send</button>
+        <form id="chat-form">
+            <input type="text" name="message" id="message-input" placeholder="Type your question..." autofocus>
+            <button type="submit" id="send-btn">Send</button>
+            <button type="button" id="clear-history" class="clear-btn" title="Clear conversation">Clear</button>
         </form>
     </div>
 </div>
 
+<style>
+    .loading-indicator {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 12px 18px;
+        color: #666;
+    }
+    .loading-indicator .spinner {
+        width: 20px;
+        height: 20px;
+        border: 2px solid #ddd;
+        border-top-color: #667eea;
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin {
+        to { transform: rotate(360deg); }
+    }
+    .clear-btn {
+        padding: 12px 20px;
+        font-size: 1rem;
+        background: #f1f3f4;
+        color: #666;
+        border: none;
+        border-radius: 25px;
+        cursor: pointer;
+        transition: background 0.2s, color 0.2s;
+    }
+    .clear-btn:hover {
+        background: #e2e4e6;
+        color: #333;
+    }
+    .message.assistant .content {
+        position: relative;
+    }
+    .copy-btn {
+        position: absolute;
+        top: 4px;
+        right: 4px;
+        background: rgba(255,255,255,0.9);
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        padding: 3px 6px;
+        cursor: pointer;
+        font-size: 0.7rem;
+        color: #666;
+        opacity: 0;
+        transition: opacity 0.2s, background 0.2s;
+    }
+    .message.assistant .content:hover .copy-btn {
+        opacity: 1;
+    }
+    .copy-btn:hover {
+        background: #fff;
+        color: #333;
+    }
+    .copy-btn.copied {
+        background: #34a853;
+        color: white;
+        border-color: #34a853;
+        opacity: 1;
+    }
+    #send-btn:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+    }
+</style>
+
 <script>
 document.addEventListener('DOMContentLoaded', function() {
-    // Render markdown for all assistant messages
-    document.querySelectorAll('.markdown-content[data-markdown]').forEach(function(el) {
-        const rawMarkdown = el.getAttribute('data-markdown');
-        if (rawMarkdown && typeof marked !== 'undefined') {
-            el.innerHTML = marked.parse(rawMarkdown);
-        } else if (rawMarkdown) {
-            el.textContent = rawMarkdown;
+    const chatMessages = document.getElementById('chat-messages');
+    const chatForm = document.getElementById('chat-form');
+    const messageInput = document.getElementById('message-input');
+    const sendBtn = document.getElementById('send-btn');
+    const clearBtn = document.getElementById('clear-history');
+    const emptyChat = document.getElementById('empty-chat');
+
+    // Load conversation history from sessionStorage
+    function getHistory() {
+        const stored = sessionStorage.getItem('chatHistory');
+        return stored ? JSON.parse(stored) : [];
+    }
+
+    function saveHistory(messages) {
+        sessionStorage.setItem('chatHistory', JSON.stringify(messages));
+    }
+
+    // Render a single message
+    function renderMessage(msg) {
+        const div = document.createElement('div');
+        div.className = 'message ' + msg.role;
+
+        const avatar = document.createElement('div');
+        avatar.className = 'avatar';
+        avatar.textContent = msg.role === 'user' ? 'U' : 'A';
+
+        const content = document.createElement('div');
+        content.className = 'content' + (msg.role === 'assistant' ? ' markdown-content' : '');
+
+        if (msg.role === 'assistant' && typeof marked !== 'undefined') {
+            content.innerHTML = marked.parse(msg.content);
+        } else {
+            content.textContent = msg.content;
         }
+
+        div.appendChild(avatar);
+        div.appendChild(content);
+
+        // Add copy button for assistant messages (inside the content bubble)
+        if (msg.role === 'assistant') {
+            const copyBtn = document.createElement('button');
+            copyBtn.className = 'copy-btn';
+            copyBtn.innerHTML = '&#128203;';
+            copyBtn.title = 'Copy to clipboard';
+            copyBtn.setAttribute('data-content', msg.content);
+            copyBtn.addEventListener('click', handleCopy);
+            content.appendChild(copyBtn);
+        }
+
+        return div;
+    }
+
+    // Handle copy button click
+    function handleCopy(e) {
+        const btn = e.target;
+        const markdown = btn.getAttribute('data-content');
+
+        // Render markdown to HTML
+        const html = typeof marked !== 'undefined' ? marked.parse(markdown) : markdown;
+
+        // Create clipboard item with both HTML and plain text formats
+        const clipboardItem = new ClipboardItem({
+            'text/html': new Blob([html], { type: 'text/html' }),
+            'text/plain': new Blob([markdown], { type: 'text/plain' })
+        });
+
+        navigator.clipboard.write([clipboardItem]).then(function() {
+            btn.innerHTML = '&#10003;';
+            btn.classList.add('copied');
+            setTimeout(function() {
+                btn.innerHTML = '&#128203;';
+                btn.classList.remove('copied');
+            }, 2000);
+        }).catch(function(err) {
+            // Fallback to plain text if ClipboardItem not supported
+            navigator.clipboard.writeText(markdown).then(function() {
+                btn.innerHTML = '&#10003;';
+                btn.classList.add('copied');
+                setTimeout(function() {
+                    btn.innerHTML = '&#128203;';
+                    btn.classList.remove('copied');
+                }, 2000);
+            });
+        });
+    }
+
+    // Render all messages
+    function renderAllMessages() {
+        const history = getHistory();
+
+        // Clear existing messages except empty state
+        chatMessages.innerHTML = '';
+
+        if (history.length === 0) {
+            chatMessages.appendChild(emptyChat);
+            emptyChat.style.display = 'block';
+        } else {
+            emptyChat.style.display = 'none';
+            history.forEach(msg => {
+                chatMessages.appendChild(renderMessage(msg));
+            });
+            scrollToBottom();
+        }
+    }
+
+    function scrollToBottom() {
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+    }
+
+    function showLoading() {
+        const loading = document.createElement('div');
+        loading.className = 'message assistant';
+        loading.id = 'loading-message';
+        loading.innerHTML = `
+            <div class="avatar">A</div>
+            <div class="loading-indicator">
+                <div class="spinner"></div>
+                <span>Thinking...</span>
+            </div>
+        `;
+        chatMessages.appendChild(loading);
+        scrollToBottom();
+    }
+
+    function hideLoading() {
+        const loading = document.getElementById('loading-message');
+        if (loading) loading.remove();
+    }
+
+    // Initialize: render existing history
+    renderAllMessages();
+
+    // Handle form submission
+    chatForm.addEventListener('submit', async function(e) {
+        e.preventDefault();
+
+        const message = messageInput.value.trim();
+        if (!message) return;
+
+        // Disable input while processing
+        messageInput.disabled = true;
+        sendBtn.disabled = true;
+
+        // Add user message to history and display
+        const history = getHistory();
+        history.push({ role: 'user', content: message });
+        saveHistory(history);
+
+        // Hide empty state, show user message
+        emptyChat.style.display = 'none';
+        chatMessages.appendChild(renderMessage({ role: 'user', content: message }));
+        scrollToBottom();
+
+        // Clear input
+        messageInput.value = '';
+
+        // Show loading indicator
+        showLoading();
+
+        try {
+            // Submit to server
+            const formData = new FormData();
+            formData.append('message', message);
+
+            const response = await fetch('/chat', {
+                method: 'POST',
+                body: formData
+            });
+
+            const html = await response.text();
+
+            // Parse response to extract assistant message
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(html, 'text/html');
+
+            // Look for server response in hidden elements
+            const serverResponse = doc.getElementById('server-response');
+            const serverError = doc.getElementById('server-error');
+
+            hideLoading();
+
+            if (serverError) {
+                const errorContent = 'Error: ' + serverError.getAttribute('data-content');
+                history.push({ role: 'assistant', content: errorContent });
+                saveHistory(history);
+                chatMessages.appendChild(renderMessage({ role: 'assistant', content: errorContent }));
+            } else if (serverResponse) {
+                const content = serverResponse.getAttribute('data-content');
+                history.push({ role: 'assistant', content: content });
+                saveHistory(history);
+                chatMessages.appendChild(renderMessage({ role: 'assistant', content: content }));
+            }
+
+            scrollToBottom();
+        } catch (err) {
+            hideLoading();
+            const errorContent = 'Network error: ' + err.message;
+            const history = getHistory();
+            history.push({ role: 'assistant', content: errorContent });
+            saveHistory(history);
+            chatMessages.appendChild(renderMessage({ role: 'assistant', content: errorContent }));
+        } finally {
+            messageInput.disabled = false;
+            sendBtn.disabled = false;
+            messageInput.focus();
+        }
+    });
+
+    // Clear history button
+    clearBtn.addEventListener('click', function() {
+        sessionStorage.removeItem('chatHistory');
+        renderAllMessages();
     });
 });
 </script>
