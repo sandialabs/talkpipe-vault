@@ -9,6 +9,9 @@ from .config import RETRIEVAL_TEMPLATE, EMBEDDING_MODEL, EMBEDDING_SOURCE
 
 @register_segment("vaultSearch")
 class VaultSearch(AbstractFieldSegment):
+    """
+    Segment that searches a vector database built from a vault.
+    """
     def __init__(
         self,
         path: Annotated[str, "Path to the vault"],
@@ -33,6 +36,9 @@ class VaultSearch(AbstractFieldSegment):
 
 @register_segment("vaultChat")
 class VaultChat(AbstractFieldSegment):
+    """
+    Segment that handles chat interactions with a vault.
+    """
     def __init__(
         self,
         path: Annotated[str, "Path to the vault"],

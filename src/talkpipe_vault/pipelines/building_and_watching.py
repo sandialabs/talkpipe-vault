@@ -16,6 +16,10 @@ from .config import EMBEDDING_MODEL, EMBEDDING_SOURCE, DOCUMENT_TEMPLATE, SHINGL
 def build_vector_db_from_paths(items: Any,
                                vectordb_path: Annotated[str, "Path to LanceDB database. Supports file paths, 'memory://', or 'tmp://name'"],
                                overwrite: Annotated[bool, "If true, overwrite existing table"] = False):
+    """
+    Segment that builds a vector database from file paths.  
+    Expects each item to be a dict with a 'path' field.
+    """
     pipeline = \
     FilterExpression(expression="'event' not in item or item['event'] != 'deleted'") | \
     DoclingFileToText(
