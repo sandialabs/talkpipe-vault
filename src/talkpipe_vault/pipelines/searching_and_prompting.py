@@ -6,6 +6,7 @@ from talkpipe.pipe.basic import ToDict, AbstractFieldSegment, fillTemplate, Eval
 from talkpipe.pipe.io import Print
 from talkpipe.pipelines.basic_rag import RAGToText
 from talkpipe.pipelines.vector_databases import SearchVectorDatabaseSegment
+from talkpipe.search.whoosh import searchWhoosh
 from .config import RETRIEVAL_TEMPLATE, EMBEDDING_MODEL, EMBEDDING_SOURCE
 
 @register_segment("vaultSearch")
@@ -76,5 +77,40 @@ class VaultChat(AbstractFieldSegment):
 
     def process_value(self, value):
         return self.pipeline(value)
+
+
+@register_segment("vaultTextSearch")
+class VaultTextSearch(AbstractFieldSegment):
+    """
+    Segment that performs full-text search on a vault's Whoosh index.
+
+    Expects input items containing a search query string (either as the full item
+    or in a specified field). The query uses Whoosh query syntax for keyword-based
+    searching of the 'content' field in the fulltext_vault index.
+
+    Emits search results as dicts containing:
+        - "doc_id": str - Document identifier (file path)
+        - "score": float - Relevance score
+        - "document": dict - Contains "content" field with matched text
+    """
+    def __init__(
+        self,
+        vault_path: Annotated[str, "Base path for vault storage. Whoosh index located at vault_path/fulltext_vault"],
+        limit: Annotated[int, "Maximum number of results to return"] = 10,
+        field: Annotated[str, "The field to extract. If none, use full item."] = None,
+        set_as: Annotated[str, "The field to set/append the result as."] = None,
+        multi_emit: Annotated[bool, "Whether this class potentially emits multiple results per item."
+                                    "Should be set by the subclass constructor call or the field_segment decorator, not by the user."] = True):
+        super().__init__(field=field, set_as=set_as, multi_emit=multi_emit)
+        self.vault_path = vault_path
+        whoosh_index_path = os.path.join(vault_path, "fulltext_vault")
+        self.pipeline = searchWhoosh(
+            index_path=whoosh_index_path,
+            limit=limit,
+            all_results_at_once=False
+        ).as_function(single_in=True, single_out=False)
+
+    def process_value(self, value):
+        return list(self.pipeline(value))
 
 

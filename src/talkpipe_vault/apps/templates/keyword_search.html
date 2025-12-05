@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+
+{% block title %}Vault Keyword Search{% endblock %}
+
+{% block content %}
+<div class="search-box">
+    <form method="post" action="/keyword-search" id="search-form">
+        <input type="text" name="query" id="search-input" placeholder="Enter keywords (e.g., python AND tutorial)..." value="{{ query }}" autofocus>
+        <button type="submit" id="search-btn">Search</button>
+    </form>
+    <p class="search-hint">Supports Whoosh query syntax: AND, OR, NOT, "exact phrase", field:value</p>
+</div>
+
+<div id="loading-overlay" class="search-loading" style="display: none;">
+    <div class="spinner"></div>
+    <span>Searching...</span>
+</div>
+
+{% if error %}
+<div class="error">
+    <p><strong>Error:</strong> {{ error }}</p>
+</div>
+{% elif results is not none %}
+    {% if results %}
+    <p style="color: #666; margin-bottom: 15px;">Found {{ results|length }} result(s) for "{{ query }}"</p>
+    {% for result in results %}
+    <div class="result-card">
+        <div class="title">{{ result.filename }}</div>
+        <div class="path"><a href="file://{{ result.path }}" target="_blank">{{ result.path }}</a></div>
+        <div class="snippet">{{ result.snippet }}</div>
+        <span class="score">Score: {{ result.score }}</span>
+    </div>
+    {% endfor %}
+    {% else %}
+    <div class="no-results">
+        <p>No results found for "{{ query }}"</p>
+        <p>Try different keywords or a broader search term.</p>
+    </div>
+    {% endif %}
+{% endif %}
+
+<style>
+    .search-hint {
+        color: #888;
+        font-size: 0.85rem;
+        margin-top: 8px;
+        text-align: center;
+    }
+    .search-loading {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 12px;
+        padding: 40px;
+        color: #666;
+        font-size: 1.1rem;
+    }
+    .search-loading .spinner {
+        width: 24px;
+        height: 24px;
+        border: 3px solid #ddd;
+        border-top-color: #667eea;
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin {
+        to { transform: rotate(360deg); }
+    }
+    #search-btn:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+    }
+</style>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const form = document.getElementById('search-form');
+    const input = document.getElementById('search-input');
+    const btn = document.getElementById('search-btn');
+    const loading = document.getElementById('loading-overlay');
+
+    form.addEventListener('submit', function(e) {
+        if (!input.value.trim()) {
+            e.preventDefault();
+            return;
+        }
+        // Show loading state
+        btn.disabled = true;
+        btn.textContent = 'Searching...';
+        loading.style.display = 'flex';
+    });
+});
+</script>
+{% endblock %}

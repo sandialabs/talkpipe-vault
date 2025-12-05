@@ -18,7 +18,7 @@ import uvicorn
 
 from talkpipe.util.config import configure_logger
 
-from talkpipe_vault.pipelines.searching_and_prompting import VaultSearch, VaultChat
+from talkpipe_vault.pipelines.searching_and_prompting import VaultSearch, VaultChat, VaultTextSearch
 
 configure_logger("root:ERROR")
 
@@ -33,6 +33,7 @@ templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 _vault_path: str = ""
 _search_pipeline = None
 _chat_pipeline = None
+_keyword_search_pipeline = None
 
 
 def init_pipelines(vault_path: str) -> None:
@@ -40,15 +41,19 @@ def init_pipelines(vault_path: str) -> None:
     Initialize the search and chat pipelines.
 
     Expects vault_path as a string pointing to a LanceDB database directory
-    containing 'shingled_chunks' table with embedded document chunks.
+    containing 'shingled_chunks' table with embedded document chunks and
+    a Whoosh index at vault_path/fulltext_vault.
     """
-    global _vault_path, _search_pipeline, _chat_pipeline
+    global _vault_path, _search_pipeline, _chat_pipeline, _keyword_search_pipeline
     _vault_path = vault_path
-    _search_pipeline = VaultSearch(path=vault_path).as_function(
+    _search_pipeline = VaultSearch(vault_path=vault_path).as_function(
         single_in=True, single_out=True
     )
-    _chat_pipeline = VaultChat(path=vault_path).as_function(
+    _chat_pipeline = VaultChat(vault_path=vault_path).as_function(
         single_in=True, single_out=True
+    )
+    _keyword_search_pipeline = VaultTextSearch(vault_path=vault_path).as_function(
+        single_in=True, single_out=False
     )
 
 
@@ -136,6 +141,82 @@ async def search_results(
 
     return templates.TemplateResponse(
         "search.html",
+        {
+            "request": request,
+            "vault_path": _vault_path,
+            "query": query,
+            "results": results,
+            "error": error,
+        },
+    )
+
+
+@app.get("/keyword-search", response_class=HTMLResponse)
+async def keyword_search_page(request: Request) -> HTMLResponse:
+    """
+    Render the keyword search interface page.
+
+    Returns HTML page with keyword search input form and results area.
+    """
+    return templates.TemplateResponse(
+        "keyword_search.html",
+        {"request": request, "vault_path": _vault_path, "query": "", "results": None},
+    )
+
+
+@app.post("/keyword-search", response_class=HTMLResponse)
+async def keyword_search_results(
+    request: Request, query: Annotated[str, Form()]
+) -> HTMLResponse:
+    """
+    Process a keyword search query and return results.
+
+    Expects form data with:
+        - query: str - The keyword search query (Whoosh query syntax)
+
+    Returns HTML page with search results containing:
+        - doc_id: Source file path
+        - score: Relevance score
+        - content: Matched text content
+    """
+    results = []
+    error = None
+
+    if query.strip():
+        try:
+            raw_results = list(_keyword_search_pipeline(query))
+
+            for result in raw_results:
+                # Handle both dict and object result types
+                if isinstance(result, dict):
+                    doc_id = result.get("doc_id", "Unknown")
+                    score = result.get("score", 0)
+                    document = result.get("document", {})
+                    content = document.get("content", "") if isinstance(document, dict) else getattr(document, "content", "")
+                else:
+                    doc_id = getattr(result, "doc_id", "Unknown")
+                    score = getattr(result, "score", 0)
+                    document = getattr(result, "document", {})
+                    content = document.get("content", "") if isinstance(document, dict) else getattr(document, "content", "")
+
+                # Create snippet
+                snippet = content[:300].replace("\n", " ").strip()
+                if len(content) > 300:
+                    snippet += "..."
+
+                results.append(
+                    {
+                        "path": doc_id,
+                        "filename": Path(doc_id).name if doc_id else "Unknown",
+                        "snippet": snippet,
+                        "score": f"{score:.4f}",
+                    }
+                )
+        except Exception as e:
+            error = str(e)
+
+    return templates.TemplateResponse(
+        "keyword_search.html",
         {
             "request": request,
             "vault_path": _vault_path,
