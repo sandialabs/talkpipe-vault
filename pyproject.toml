@@ -26,7 +26,7 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
-    "talkpipe[all]>=0.10.2a1",
+    "talkpipe[all]>=0.10.2",
     "fastapi[standard]>=0.104.1",
     "uvicorn>=0.24.0",
     "jinja2>=3.1.2",
@@ -174,6 +174,7 @@ watchIntoVectorDB = "talkpipe_vault.pipelines.building_and_watching:watch_into_v
 listIntoVectorDB = "talkpipe_vault.pipelines.building_and_watching:list_into_vector_db"
 
 [project.entry-points."talkpipe.segments"]
+diagPrint = "talkpipe_vault.util:DiagPrint"
 doclingToText = "talkpipe_vault.docling:DoclingFileToText"
 buildVectorDBFromPaths = "talkpipe_vault.pipelines.building_and_watching:build_vector_db_from_paths"
 vaultChat = "talkpipe_vault.pipelines.searching_and_prompting:VaultChat"

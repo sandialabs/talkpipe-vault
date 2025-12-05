@@ -8,6 +8,7 @@ from talkpipe.pipelines.basic_rag import RAGToText
 from talkpipe.pipelines.vector_databases import SearchVectorDatabaseSegment
 from talkpipe.search.whoosh import searchWhoosh
 from .config import RETRIEVAL_TEMPLATE, EMBEDDING_MODEL, EMBEDDING_SOURCE
+from talkpipe_vault.util import DiagPrint
 
 @register_segment("vaultSearch")
 class VaultSearch(AbstractFieldSegment):
