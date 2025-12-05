@@ -37,6 +37,7 @@ def build_vector_db_from_paths(items: Any,
         - "id": str - Unique chunk identifier (paragraph range + path)
         - "shingle": str - Templated text chunk content
         - "path": str - Source file path
+        - "filename": str - Source file name (basename)
     """
     import os
     vectordb_path = os.path.join(vault_path, "vector_vault")
@@ -44,6 +45,7 @@ def build_vector_db_from_paths(items: Any,
 
     pipeline = \
     FilterExpression(expression="'event' not in item or item['event'] != 'deleted'") | \
+    EvalExpression(set_as="filename", expression="item['path'].replace('\\\\', '/').rsplit('/', 1)[-1]") | \
     DoclingFileToText(
         field="path",
         set_as="full_content") | \
@@ -60,16 +62,16 @@ def build_vector_db_from_paths(items: Any,
     setAs(field_list="path:doc_id") | \
     indexWhoosh(
         index_path=whoosh_index_path,
-        field_list="full_content:content",
+        field_list="full_content:content,path:path,filename:filename",
         overwrite=overwrite) | \
-    ToDict(field_list="path,full_content") | \
+    ToDict(field_list="path,full_content,filename") | \
     splitText(field="full_content", criteria=500, set_as="chunk") | \
     FilterExpression(expression="item.get('chunk') and len(item.get('chunk', '').strip()) > 0") | \
     ShingleText(field="chunk", shingle_size=3, overlap=1, set_as="shingle_detail", key="path", emit_detail=True) | \
     setAs(field_list="shingle_detail.text:shingle") | \
     EvalExpression(set_as="id", expression="""str(item['shingle_detail']['first_paragraph'])+'-'+str(item['shingle_detail']['last_paragraph'])+'-'+str(item['path'])""") | \
     FilterExpression(expression="item.get('shingle') and len(item.get('shingle', '').strip()) > 0") | \
-    ToDict(field_list="id,shingle,path") | \
+    ToDict(field_list="id,shingle,path,filename") | \
     fillTemplate(template=SHINGLE_TEMPLATE, set_as="shingle") | \
     MakeVectorDatabaseSegment(
         path=vectordb_path,
@@ -79,7 +81,7 @@ def build_vector_db_from_paths(items: Any,
         table_name="shingled_chunks",
         doc_id_field="id",
         overwrite=False) | \
-    ToDict(field_list="id,shingle,path")
+    ToDict(field_list="id,shingle,path,filename")
     yield from pipeline(items)
 
 
@@ -106,6 +108,7 @@ def watch_into_vector_db(source_path: Annotated[str, "Path to watch"],
         - "id": str - Unique chunk identifier
         - "shingle": str - Templated text chunk content
         - "path": str - Source file path
+        - "filename": str - Source file name (basename)
     """
     pipeline = file_watcher(
         path=source_path,
@@ -137,6 +140,7 @@ def list_into_vector_db(source_pattern: Annotated[str, "Glob pattern to match fi
         - "id": str - Unique chunk identifier
         - "shingle": str - Templated text chunk content
         - "path": str - Source file path
+        - "filename": str - Source file name (basename)
     """
     pipeline = listFiles(full_path=True, files_only=True) | \
     ToDict(field_list="_:path") | \

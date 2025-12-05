@@ -111,8 +111,19 @@ async def search_results(
                 for result in raw_results:
                     # SearchResult objects have document dict and score attributes
                     doc = result.document if hasattr(result, "document") else result
-                    path = doc.get("path", "Unknown") if isinstance(doc, dict) else getattr(doc, "path", "Unknown")
-                    shingle = doc.get("shingle", "") if isinstance(doc, dict) else getattr(doc, "shingle", "")
+                    if isinstance(doc, dict):
+                        path = doc.get("path", "Unknown")
+                        shingle = doc.get("shingle", "")
+                        filename = doc.get("filename", "")
+                    else:
+                        path = getattr(doc, "path", "Unknown")
+                        shingle = getattr(doc, "shingle", "")
+                        filename = getattr(doc, "filename", "")
+
+                    # Fallback filename from path if not stored
+                    if not filename and path:
+                        filename = Path(path).name
+
                     # Use score (1 - distance) or _distance depending on result type
                     if hasattr(result, "score"):
                         distance = 1 - result.score  # Convert score back to distance
@@ -131,7 +142,7 @@ async def search_results(
                     results.append(
                         {
                             "path": path,
-                            "filename": Path(path).name if path else "Unknown",
+                            "filename": filename or "Unknown",
                             "snippet": snippet,
                             "score": f"{(1 - distance):.4f}",
                         }
@@ -192,12 +203,24 @@ async def keyword_search_results(
                     doc_id = result.get("doc_id", "Unknown")
                     score = result.get("score", 0)
                     document = result.get("document", {})
-                    content = document.get("content", "") if isinstance(document, dict) else getattr(document, "content", "")
                 else:
                     doc_id = getattr(result, "doc_id", "Unknown")
                     score = getattr(result, "score", 0)
                     document = getattr(result, "document", {})
-                    content = document.get("content", "") if isinstance(document, dict) else getattr(document, "content", "")
+
+                # Extract fields from document
+                if isinstance(document, dict):
+                    content = document.get("content", "")
+                    path = document.get("path", doc_id)
+                    filename = document.get("filename", "")
+                else:
+                    content = getattr(document, "content", "")
+                    path = getattr(document, "path", doc_id)
+                    filename = getattr(document, "filename", "")
+
+                # Fallback filename from path if not stored
+                if not filename and path:
+                    filename = Path(path).name
 
                 # Create snippet
                 snippet = content[:300].replace("\n", " ").strip()
@@ -206,8 +229,8 @@ async def keyword_search_results(
 
                 results.append(
                     {
-                        "path": doc_id,
-                        "filename": Path(doc_id).name if doc_id else "Unknown",
+                        "path": path,
+                        "filename": filename or "Unknown",
                         "snippet": snippet,
                         "score": f"{score:.4f}",
                     }

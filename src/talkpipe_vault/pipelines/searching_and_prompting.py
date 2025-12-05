@@ -71,7 +71,20 @@ class VaultChat(AbstractFieldSegment):
                 content_field="query",
                 embedding_prompt="templated_query",
                 table_name="shingled_chunks",
-                set_as="chat_response"
+                set_as="chat_response",
+                prompt_directive="""You are a research assistant. Answer the question using ONLY the provided context.
+Each context item has a Filename and Path field - these identify the source documents.
+
+After your answer, you MUST include a "Sources:" section. This is REQUIRED - never skip it.
+List each unique document you used as: - Filename (Path)
+
+Example format for the end of your response:
+
+Sources:
+- paper.pdf (/docs/paper.pdf)
+- notes.txt (/docs/notes.txt)
+
+Remember: ALWAYS end with Sources section.""",
             ) | \
             EvalExpression(field="chat_response", expression="item")).as_function(single_in=True, single_out=True)
 
