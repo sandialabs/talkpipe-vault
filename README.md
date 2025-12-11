@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/talkpipe_vault.jpg" alt="TalkPipe Vault Logo" width="300">
+</p>
+
 # TalkPipe Vault
 
 > AI-powered personal information assistant that watches your documents and makes them searchable
@@ -33,16 +37,22 @@ If you're interested in building your own AI-powered data processing tools, Talk
 - **Vector Database**: Uses [LanceDB](https://lancedb.com/) for efficient similarity search
 - **Intelligent Chunking**: Breaks documents into overlapping chunks for better search accuracy
 
-### Coming Soon: Web Interface
+### Web Interface
 
-A web application for searching and chatting with your document collection is planned for future releases. The web interface will provide:
+TalkPipe Vault includes a web application for searching and querying your document collection:
 
-- **Interactive Search**: Natural language queries with instant results
-- **Document Chat**: Ask questions about your documents and get AI-generated answers with citations
-- **Visual Timeline**: Browse documents by time and topic
-- **Collection Management**: Organize and tag your document collections
+- **Semantic Search**: Find documents by meaning using AI-powered vector similarity search
+- **Keyword Search**: Traditional full-text search with boolean operators (AND, OR, NOT) and phrase matching
+- **Ask a Question**: Get AI-generated answers based on your vault's contents (single-turn Q&A)
+- **Copy Results**: Easily copy search results or answers to clipboard
 
-*The backend infrastructure is being developed first, with the web UI to follow.*
+**Launch the web interface:**
+
+```bash
+vault-query ~/my-vault --host 127.0.0.1 --port 8000
+```
+
+Then open http://127.0.0.1:8000 in your browser.
 
 ## Quick Start
 
@@ -104,8 +114,9 @@ TalkPipe Vault is built on [TalkPipe](https://github.com/sandialabs/talkpipe), a
 - **Pipeline Framework**: TalkPipe for composable data processing
 - **Document Processing**: Docling for multi-format document conversion
 - **Vector Database**: LanceDB for semantic search
+- **Full-Text Search**: Whoosh for keyword-based search
 - **File Monitoring**: Watchdog for filesystem events
-- **Web Framework** (planned): FastAPI with SQLAlchemy
+- **Web Framework**: FastAPI with Jinja2 templates
 - **AI/Embeddings**: OpenAI API or Ollama (local inference)
 
 ### Processing Pipeline
@@ -176,6 +187,29 @@ vault-list-into-vectordb "~/Documents/**/*.pdf" \
     --overwrite
 ```
 
+#### `vault-query`
+
+Launches the web interface for searching and querying your vault.
+
+```bash
+vault-query [VAULT_PATH] [OPTIONS]
+```
+
+**Options:**
+- `--host TEXT`: Host to bind to (default: `127.0.0.1`)
+- `--port INT`: Port to listen on (default: `8000`)
+
+**Example:**
+
+```bash
+vault-query ~/my-vault --host 0.0.0.0 --port 8080
+```
+
+The web interface provides three modes:
+- **Semantic Search**: Vector similarity search to find documents by meaning
+- **Keyword Search**: Full-text search with Whoosh query syntax (AND, OR, NOT, phrases)
+- **Ask**: Single-turn Q&A that retrieves relevant context and generates AI responses
+
 ### Custom TalkPipe Components
 
 TalkPipe Vault registers custom sources and segments with TalkPipe:
@@ -188,6 +222,9 @@ TalkPipe Vault registers custom sources and segments with TalkPipe:
 **Segments:**
 - `doclingToText`: Document format conversion
 - `buildVectorDBFromPaths`: Complete document processing pipeline
+- `vaultSearch`: Semantic search on vault's vector database
+- `vaultTextSearch`: Full-text keyword search using Whoosh index
+- `vaultChat`: RAG-based Q&A using vault contents
 
 ### Building Your Own Pipelines
 
@@ -310,10 +347,6 @@ safety check
 
 - `OPENAI_API_KEY`: Required when using `--embedding-source openai`
 - `OLLAMA_BASE_URL`: Ollama server URL (default: `http://localhost:11434`)
-- `VAULT_SECRET`: JWT signing key for web application (future use)
-- `VAULT_HOST`: Web server bind address (future use, default: `0.0.0.0`)
-- `VAULT_PORT`: Web server port (future use, default: `8001`)
-- `VAULT_DB_PATH`: SQLite database path for web app (future use)
 
 ### Project Structure
 
@@ -322,14 +355,21 @@ talkpipe-vault/
 ├── src/
 │   └── talkpipe_vault/
 │       ├── pipelines/
-│       │   ├── building_and_watching.py  # Core pipeline logic
-│       │   └── cli.py                    # CLI entry points
-│       ├── watchdog.py                   # File system monitoring
-│       └── docling.py                    # Document conversion
-├── tests/                                # Test suite
-├── pyproject.toml                        # Package configuration
-├── Dockerfile                            # Container image
-└── docker-compose.yml                    # Service orchestration
+│       │   ├── building_and_watching.py    # Core pipeline logic
+│       │   ├── searching_and_prompting.py  # Search and RAG segments
+│       │   ├── config.py                   # Default configuration
+│       │   └── cli.py                      # CLI entry points
+│       ├── apps/
+│       │   ├── query.py                    # Web application
+│       │   └── templates/                  # HTML templates
+│       ├── watchdog.py                     # File system monitoring
+│       └── docling.py                      # Document conversion
+├── docs/
+│   └── talkpipe_vault.jpg                  # Project logo
+├── tests/                                  # Test suite
+├── pyproject.toml                          # Package configuration
+├── Dockerfile                              # Container image
+└── docker-compose.yml                      # Service orchestration
 ```
 
 ## Requirements

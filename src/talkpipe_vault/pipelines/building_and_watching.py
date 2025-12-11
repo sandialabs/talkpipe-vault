@@ -1,5 +1,4 @@
-from tracemalloc import Filter
-from typing import Annotated, Optional, Any
+from typing import Annotated, Any
 from talkpipe import segment, register_segment, source, register_source
 from talkpipe.pipe.io import Print
 from talkpipe.data.extraction import listFiles

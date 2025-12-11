@@ -22,7 +22,10 @@
 </div>
 {% elif results is not none %}
     {% if results %}
-    <p style="color: #666; margin-bottom: 15px;">Found {{ results|length }} result(s) for "{{ query }}"</p>
+    <div class="results-header">
+        <p style="color: #666;">Found {{ results|length }} result(s) for "{{ query }}"</p>
+        <button type="button" id="copy-results-btn" class="copy-results-btn">&#128203; Copy All Results</button>
+    </div>
     {% for result in results %}
     <div class="result-card">
         <div class="title">{{ result.filename }}</div>
@@ -45,6 +48,31 @@
         font-size: 0.85rem;
         margin-top: 8px;
         text-align: center;
+    }
+    .results-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 15px;
+    }
+    .copy-results-btn {
+        background: #f1f3f4;
+        border: 1px solid #ddd;
+        border-radius: 6px;
+        padding: 8px 14px;
+        cursor: pointer;
+        font-size: 0.85rem;
+        color: #666;
+        transition: background 0.2s, color 0.2s;
+    }
+    .copy-results-btn:hover {
+        background: #e2e4e6;
+        color: #333;
+    }
+    .copy-results-btn.copied {
+        background: #34a853;
+        color: white;
+        border-color: #34a853;
     }
     .search-loading {
         display: flex;
@@ -78,6 +106,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const input = document.getElementById('search-input');
     const btn = document.getElementById('search-btn');
     const loading = document.getElementById('loading-overlay');
+    const copyBtn = document.getElementById('copy-results-btn');
 
     form.addEventListener('submit', function(e) {
         if (!input.value.trim()) {
@@ -89,6 +118,35 @@ document.addEventListener('DOMContentLoaded', function() {
         btn.textContent = 'Searching...';
         loading.style.display = 'flex';
     });
+
+    // Copy all results to clipboard
+    if (copyBtn) {
+        copyBtn.addEventListener('click', function() {
+            const resultCards = document.querySelectorAll('.result-card');
+            let text = '';
+
+            resultCards.forEach(function(card, index) {
+                const title = card.querySelector('.title').textContent;
+                const path = card.querySelector('.path a').textContent;
+                const snippet = card.querySelector('.snippet').textContent;
+                const score = card.querySelector('.score').textContent;
+
+                text += (index + 1) + '. ' + title + '\n';
+                text += '   Path: ' + path + '\n';
+                text += '   ' + score + '\n';
+                text += '   ' + snippet + '\n\n';
+            });
+
+            navigator.clipboard.writeText(text.trim()).then(function() {
+                copyBtn.innerHTML = '&#10003; Copied';
+                copyBtn.classList.add('copied');
+                setTimeout(function() {
+                    copyBtn.innerHTML = '&#128203; Copy All Results';
+                    copyBtn.classList.remove('copied');
+                }, 2000);
+            });
+        });
+    }
 });
 </script>
 {% endblock %}

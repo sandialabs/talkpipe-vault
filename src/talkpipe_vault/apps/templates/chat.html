@@ -1,8 +1,8 @@
 {% extends "base.html" %}
 
-{% block title %}Vault Chat{% endblock %}
+{% block title %}Ask Vault{% endblock %}
 
-{% block container_class %}container container-full{% endblock %}
+{% block container_class %}container{% endblock %}
 
 {% block content %}
 <!-- Hidden element for JS to extract server response -->
@@ -17,36 +17,161 @@
 <div id="server-error" data-content="{{ error | e }}" style="display:none;"></div>
 {% endif %}
 
-<div class="chat-container">
-    <div class="chat-messages" id="chat-messages">
-        <div class="empty-chat" id="empty-chat">
-            <div class="icon">&#128172;</div>
-            <p>Ask a question about your documents</p>
-            <p style="font-size: 0.9rem; margin-top: 10px;">The assistant will search your vault and provide relevant answers.</p>
-        </div>
+<div class="ask-container">
+    <div class="ask-header">
+        <div class="icon">&#128269;</div>
+        <h2>Ask a Question</h2>
+        <p class="subtitle">Each question is answered independently using your vault's documents.</p>
     </div>
 
-    <div class="chat-input">
-        <form id="chat-form">
-            <input type="text" name="message" id="message-input" placeholder="Type your question..." autofocus>
-            <button type="submit" id="send-btn">Send</button>
-            <button type="button" id="clear-history" class="clear-btn" title="Clear conversation">Clear</button>
+    <div class="question-box">
+        <form id="ask-form">
+            <textarea name="message" id="question-input" placeholder="Enter your question here..." rows="3" autofocus></textarea>
+            <button type="submit" id="ask-btn">Ask</button>
         </form>
+    </div>
+
+    <div class="answer-section" id="answer-section" style="display: none;">
+        <div class="answer-header">
+            <span class="label">Answer</span>
+            <button type="button" id="copy-btn" class="copy-btn" title="Copy to clipboard">&#128203; Copy</button>
+        </div>
+        <div class="answer-content markdown-content" id="answer-content"></div>
+    </div>
+
+    <div class="loading-section" id="loading-section" style="display: none;">
+        <div class="spinner"></div>
+        <span>Searching vault and generating answer...</span>
     </div>
 </div>
 
 <style>
-    .loading-indicator {
+    .ask-container {
+        background: white;
+        border-radius: 12px;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        padding: 40px;
+    }
+    .ask-header {
+        text-align: center;
+        margin-bottom: 30px;
+    }
+    .ask-header .icon {
+        font-size: 3rem;
+        margin-bottom: 15px;
+    }
+    .ask-header h2 {
+        font-size: 1.8rem;
+        color: #333;
+        margin-bottom: 10px;
+    }
+    .ask-header .subtitle {
+        color: #666;
+        font-size: 1rem;
+    }
+    .question-box {
+        margin-bottom: 25px;
+    }
+    .question-box form {
+        display: flex;
+        flex-direction: column;
+        gap: 15px;
+    }
+    .question-box textarea {
+        width: 100%;
+        padding: 15px 20px;
+        font-size: 1rem;
+        border: 2px solid #ddd;
+        border-radius: 12px;
+        outline: none;
+        transition: border-color 0.2s;
+        resize: vertical;
+        font-family: inherit;
+        line-height: 1.5;
+    }
+    .question-box textarea:focus {
+        border-color: #667eea;
+    }
+    .question-box button {
+        align-self: flex-end;
+        padding: 12px 35px;
+        font-size: 1rem;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        border: none;
+        border-radius: 25px;
+        cursor: pointer;
+        transition: transform 0.2s, box-shadow 0.2s;
+    }
+    .question-box button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+    }
+    .question-box button:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+        transform: none;
+        box-shadow: none;
+    }
+    .answer-section {
+        border-top: 1px solid #eee;
+        padding-top: 25px;
+        margin-top: 10px;
+    }
+    .answer-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 15px;
+    }
+    .answer-header .label {
+        font-size: 0.9rem;
+        font-weight: 600;
+        color: #667eea;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+    .copy-btn {
+        background: #f1f3f4;
+        border: 1px solid #ddd;
+        border-radius: 6px;
+        padding: 6px 12px;
+        cursor: pointer;
+        font-size: 0.85rem;
+        color: #666;
+        transition: background 0.2s, color 0.2s;
+    }
+    .copy-btn:hover {
+        background: #e2e4e6;
+        color: #333;
+    }
+    .copy-btn.copied {
+        background: #34a853;
+        color: white;
+        border-color: #34a853;
+    }
+    .answer-content {
+        background: #f8f9fa;
+        padding: 20px 25px;
+        border-radius: 10px;
+        line-height: 1.7;
+    }
+    .answer-content.error {
+        background: #fce8e6;
+        color: #d93025;
+    }
+    .loading-section {
         display: flex;
         align-items: center;
-        gap: 8px;
-        padding: 12px 18px;
+        justify-content: center;
+        gap: 12px;
+        padding: 30px;
         color: #666;
     }
-    .loading-indicator .spinner {
-        width: 20px;
-        height: 20px;
-        border: 2px solid #ddd;
+    .loading-section .spinner {
+        width: 24px;
+        height: 24px;
+        border: 3px solid #ddd;
         border-top-color: #667eea;
         border-radius: 50%;
         animation: spin 0.8s linear infinite;
@@ -54,213 +179,97 @@
     @keyframes spin {
         to { transform: rotate(360deg); }
     }
-    .clear-btn {
-        padding: 12px 20px;
-        font-size: 1rem;
-        background: #f1f3f4;
-        color: #666;
-        border: none;
-        border-radius: 25px;
-        cursor: pointer;
-        transition: background 0.2s, color 0.2s;
-    }
-    .clear-btn:hover {
-        background: #e2e4e6;
-        color: #333;
-    }
-    .message.assistant .content {
-        position: relative;
-    }
-    .copy-btn {
-        position: absolute;
-        top: 4px;
-        right: 4px;
-        background: rgba(255,255,255,0.9);
-        border: 1px solid #ddd;
-        border-radius: 4px;
-        padding: 3px 6px;
-        cursor: pointer;
-        font-size: 0.7rem;
-        color: #666;
-        opacity: 0;
-        transition: opacity 0.2s, background 0.2s;
-    }
-    .message.assistant .content:hover .copy-btn {
-        opacity: 1;
-    }
-    .copy-btn:hover {
-        background: #fff;
-        color: #333;
-    }
-    .copy-btn.copied {
-        background: #34a853;
-        color: white;
-        border-color: #34a853;
-        opacity: 1;
-    }
-    #send-btn:disabled {
-        opacity: 0.6;
-        cursor: not-allowed;
-    }
 </style>
 
 <script>
 document.addEventListener('DOMContentLoaded', function() {
-    const chatMessages = document.getElementById('chat-messages');
-    const chatForm = document.getElementById('chat-form');
-    const messageInput = document.getElementById('message-input');
-    const sendBtn = document.getElementById('send-btn');
-    const clearBtn = document.getElementById('clear-history');
-    const emptyChat = document.getElementById('empty-chat');
+    const askForm = document.getElementById('ask-form');
+    const questionInput = document.getElementById('question-input');
+    const askBtn = document.getElementById('ask-btn');
+    const answerSection = document.getElementById('answer-section');
+    const answerContent = document.getElementById('answer-content');
+    const loadingSection = document.getElementById('loading-section');
+    const copyBtn = document.getElementById('copy-btn');
 
-    // Load conversation history from sessionStorage
-    function getHistory() {
-        const stored = sessionStorage.getItem('chatHistory');
-        return stored ? JSON.parse(stored) : [];
-    }
-
-    function saveHistory(messages) {
-        sessionStorage.setItem('chatHistory', JSON.stringify(messages));
-    }
-
-    // Render a single message
-    function renderMessage(msg) {
-        const div = document.createElement('div');
-        div.className = 'message ' + msg.role;
-
-        const avatar = document.createElement('div');
-        avatar.className = 'avatar';
-        avatar.textContent = msg.role === 'user' ? 'U' : 'A';
-
-        const content = document.createElement('div');
-        content.className = 'content' + (msg.role === 'assistant' ? ' markdown-content' : '');
-
-        if (msg.role === 'assistant' && typeof marked !== 'undefined') {
-            content.innerHTML = marked.parse(msg.content);
-        } else {
-            content.textContent = msg.content;
-        }
-
-        div.appendChild(avatar);
-        div.appendChild(content);
-
-        // Add copy button for assistant messages (inside the content bubble)
-        if (msg.role === 'assistant') {
-            const copyBtn = document.createElement('button');
-            copyBtn.className = 'copy-btn';
-            copyBtn.innerHTML = '&#128203;';
-            copyBtn.title = 'Copy to clipboard';
-            copyBtn.setAttribute('data-content', msg.content);
-            copyBtn.addEventListener('click', handleCopy);
-            content.appendChild(copyBtn);
-        }
-
-        return div;
-    }
+    let currentAnswer = '';
 
     // Handle copy button click
-    function handleCopy(e) {
-        const btn = e.target;
-        const markdown = btn.getAttribute('data-content');
+    function handleCopy() {
+        if (!currentAnswer) return;
 
         // Render markdown to HTML
-        const html = typeof marked !== 'undefined' ? marked.parse(markdown) : markdown;
+        const html = typeof marked !== 'undefined' ? marked.parse(currentAnswer) : currentAnswer;
 
         // Create clipboard item with both HTML and plain text formats
-        const clipboardItem = new ClipboardItem({
-            'text/html': new Blob([html], { type: 'text/html' }),
-            'text/plain': new Blob([markdown], { type: 'text/plain' })
-        });
+        try {
+            const clipboardItem = new ClipboardItem({
+                'text/html': new Blob([html], { type: 'text/html' }),
+                'text/plain': new Blob([currentAnswer], { type: 'text/plain' })
+            });
 
-        navigator.clipboard.write([clipboardItem]).then(function() {
-            btn.innerHTML = '&#10003;';
-            btn.classList.add('copied');
-            setTimeout(function() {
-                btn.innerHTML = '&#128203;';
-                btn.classList.remove('copied');
-            }, 2000);
-        }).catch(function(err) {
-            // Fallback to plain text if ClipboardItem not supported
-            navigator.clipboard.writeText(markdown).then(function() {
-                btn.innerHTML = '&#10003;';
-                btn.classList.add('copied');
+            navigator.clipboard.write([clipboardItem]).then(function() {
+                copyBtn.innerHTML = '&#10003; Copied';
+                copyBtn.classList.add('copied');
                 setTimeout(function() {
-                    btn.innerHTML = '&#128203;';
-                    btn.classList.remove('copied');
+                    copyBtn.innerHTML = '&#128203; Copy';
+                    copyBtn.classList.remove('copied');
                 }, 2000);
             });
-        });
-    }
-
-    // Render all messages
-    function renderAllMessages() {
-        const history = getHistory();
-
-        // Clear existing messages except empty state
-        chatMessages.innerHTML = '';
-
-        if (history.length === 0) {
-            chatMessages.appendChild(emptyChat);
-            emptyChat.style.display = 'block';
-        } else {
-            emptyChat.style.display = 'none';
-            history.forEach(msg => {
-                chatMessages.appendChild(renderMessage(msg));
+        } catch (err) {
+            // Fallback to plain text if ClipboardItem not supported
+            navigator.clipboard.writeText(currentAnswer).then(function() {
+                copyBtn.innerHTML = '&#10003; Copied';
+                copyBtn.classList.add('copied');
+                setTimeout(function() {
+                    copyBtn.innerHTML = '&#128203; Copy';
+                    copyBtn.classList.remove('copied');
+                }, 2000);
             });
-            scrollToBottom();
         }
     }
 
-    function scrollToBottom() {
-        chatMessages.scrollTop = chatMessages.scrollHeight;
-    }
+    copyBtn.addEventListener('click', handleCopy);
+
+    // Handle Enter key to submit, Shift+Enter for newline
+    questionInput.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            askForm.dispatchEvent(new Event('submit'));
+        }
+    });
 
     function showLoading() {
-        const loading = document.createElement('div');
-        loading.className = 'message assistant';
-        loading.id = 'loading-message';
-        loading.innerHTML = `
-            <div class="avatar">A</div>
-            <div class="loading-indicator">
-                <div class="spinner"></div>
-                <span>Thinking...</span>
-            </div>
-        `;
-        chatMessages.appendChild(loading);
-        scrollToBottom();
+        loadingSection.style.display = 'flex';
+        answerSection.style.display = 'none';
     }
 
     function hideLoading() {
-        const loading = document.getElementById('loading-message');
-        if (loading) loading.remove();
+        loadingSection.style.display = 'none';
     }
 
-    // Initialize: render existing history
-    renderAllMessages();
+    function showAnswer(content, isError = false) {
+        currentAnswer = content;
+        answerContent.classList.toggle('error', isError);
+
+        if (!isError && typeof marked !== 'undefined') {
+            answerContent.innerHTML = marked.parse(content);
+        } else {
+            answerContent.textContent = content;
+        }
+
+        answerSection.style.display = 'block';
+    }
 
     // Handle form submission
-    chatForm.addEventListener('submit', async function(e) {
+    askForm.addEventListener('submit', async function(e) {
         e.preventDefault();
 
-        const message = messageInput.value.trim();
-        if (!message) return;
+        const question = questionInput.value.trim();
+        if (!question) return;
 
         // Disable input while processing
-        messageInput.disabled = true;
-        sendBtn.disabled = true;
-
-        // Add user message to history and display
-        const history = getHistory();
-        history.push({ role: 'user', content: message });
-        saveHistory(history);
-
-        // Hide empty state, show user message
-        emptyChat.style.display = 'none';
-        chatMessages.appendChild(renderMessage({ role: 'user', content: message }));
-        scrollToBottom();
-
-        // Clear input
-        messageInput.value = '';
+        questionInput.disabled = true;
+        askBtn.disabled = true;
 
         // Show loading indicator
         showLoading();
@@ -268,7 +277,7 @@ document.addEventListener('DOMContentLoaded', function() {
         try {
             // Submit to server
             const formData = new FormData();
-            formData.append('message', message);
+            formData.append('message', question);
 
             const response = await fetch('/chat', {
                 method: 'POST',
@@ -277,7 +286,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
             const html = await response.text();
 
-            // Parse response to extract assistant message
+            // Parse response to extract answer
             const parser = new DOMParser();
             const doc = parser.parseFromString(html, 'text/html');
 
@@ -288,36 +297,18 @@ document.addEventListener('DOMContentLoaded', function() {
             hideLoading();
 
             if (serverError) {
-                const errorContent = 'Error: ' + serverError.getAttribute('data-content');
-                history.push({ role: 'assistant', content: errorContent });
-                saveHistory(history);
-                chatMessages.appendChild(renderMessage({ role: 'assistant', content: errorContent }));
+                showAnswer('Error: ' + serverError.getAttribute('data-content'), true);
             } else if (serverResponse) {
-                const content = serverResponse.getAttribute('data-content');
-                history.push({ role: 'assistant', content: content });
-                saveHistory(history);
-                chatMessages.appendChild(renderMessage({ role: 'assistant', content: content }));
+                showAnswer(serverResponse.getAttribute('data-content'));
             }
-
-            scrollToBottom();
         } catch (err) {
             hideLoading();
-            const errorContent = 'Network error: ' + err.message;
-            const history = getHistory();
-            history.push({ role: 'assistant', content: errorContent });
-            saveHistory(history);
-            chatMessages.appendChild(renderMessage({ role: 'assistant', content: errorContent }));
+            showAnswer('Network error: ' + err.message, true);
         } finally {
-            messageInput.disabled = false;
-            sendBtn.disabled = false;
-            messageInput.focus();
+            questionInput.disabled = false;
+            askBtn.disabled = false;
+            questionInput.focus();
         }
-    });
-
-    // Clear history button
-    clearBtn.addEventListener('click', function() {
-        sessionStorage.removeItem('chatHistory');
-        renderAllMessages();
     });
 });
 </script>

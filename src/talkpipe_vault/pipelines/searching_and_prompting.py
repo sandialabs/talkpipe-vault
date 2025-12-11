@@ -1,14 +1,21 @@
 import os
-from typing import Annotated
-from talkpipe.pipe import field_segment
+from typing import Annotated, Any
+
 from talkpipe.chatterlang import register_segment
 from talkpipe.pipe.basic import ToDict, AbstractFieldSegment, fillTemplate, EvalExpression
-from talkpipe.pipe.io import Print
 from talkpipe.pipelines.basic_rag import RAGToText
 from talkpipe.pipelines.vector_databases import SearchVectorDatabaseSegment
 from talkpipe.search.whoosh import searchWhoosh
-from .config import RETRIEVAL_TEMPLATE, EMBEDDING_MODEL, EMBEDDING_SOURCE
-from talkpipe_vault.util import DiagPrint
+
+from .config import (
+    RETRIEVAL_TEMPLATE,
+    EMBEDDING_MODEL,
+    EMBEDDING_SOURCE,
+    CHAT_MODEL,
+    CHAT_SOURCE,
+    RAG_PREFIX_PROMPTS,
+    RAG_PROMPT_DIRECTIVE,
+)
 
 @register_segment("vaultSearch")
 class VaultSearch(AbstractFieldSegment):
@@ -23,8 +30,8 @@ class VaultSearch(AbstractFieldSegment):
     """
     def __init__(
         self,
-        vault_path: Annotated[str, "Base path for vault storage. Vector DB located at vault_path/vector_vault"],
-        field: Annotated[str, "The field to extract.  If none, use full item."] = None,
+        vault_path: Annotated[str, "Base path for vault storage. Vector DB at vault_path/vector_vault, full-text index at vault_path/fulltext_vault"],
+        field: Annotated[str, "The field to extract. If none, use full item."] = None,
         set_as: Annotated[str, "The field to set/append the result as."] = None,
         multi_emit: Annotated[bool, "Whether this class potentially emits multiple results per item."
                                     "Should be set by the subclass constructor call or the field_segment decorator, not by the user."] = False):
@@ -41,8 +48,9 @@ class VaultSearch(AbstractFieldSegment):
                 embedding_source=EMBEDDING_SOURCE,
             )).as_function(single_in=True, single_out=True)
 
-    def process_value(self, value):
+    def process_value(self, value: str) -> Any:
         return self.pipeline(value)
+
 
 @register_segment("vaultChat")
 class VaultChat(AbstractFieldSegment):
@@ -57,8 +65,8 @@ class VaultChat(AbstractFieldSegment):
     """
     def __init__(
         self,
-        vault_path: Annotated[str, "Base path for vault storage. Vector DB located at vault_path/vector_vault"],
-        field: Annotated[str, "The field to extract.  If none, use full item."] = None,
+        vault_path: Annotated[str, "Base path for vault storage. Vector DB at vault_path/vector_vault, full-text index at vault_path/fulltext_vault"],
+        field: Annotated[str, "The field to extract. If none, use full item."] = None,
         set_as: Annotated[str, "The field to set/append the result as."] = None,
         multi_emit: Annotated[bool, "Whether this class potentially emits multiple results per item."
                                     "Should be set by the subclass constructor call or the field_segment decorator, not by the user."] = False):
@@ -73,23 +81,17 @@ class VaultChat(AbstractFieldSegment):
                 embedding_prompt="templated_query",
                 table_name="shingled_chunks",
                 set_as="chat_response",
-                prompt_directive="""You are a research assistant. Answer the question using ONLY the provided context.
-Each context item has a Filename and Path field - these identify the source documents.
-
-After your answer, you MUST include a "Sources:" section. This is REQUIRED - never skip it.
-List each unique document you used as: - Filename (Path)
-
-Example format for the end of your response:
-
-Sources:
-- paper.pdf (/docs/paper.pdf)
-- notes.txt (/docs/notes.txt)
-
-Remember: ALWAYS end with Sources section.""",
+                embedding_model=EMBEDDING_MODEL,
+                embedding_source=EMBEDDING_SOURCE,
+                completion_model=CHAT_MODEL,
+                completion_source=CHAT_SOURCE,
+                role_map=RAG_PREFIX_PROMPTS,
+                prompt_directive=RAG_PROMPT_DIRECTIVE,
+                diagPrintOutput="stdout"
             ) | \
             EvalExpression(field="chat_response", expression="item")).as_function(single_in=True, single_out=True)
 
-    def process_value(self, value):
+    def process_value(self, value: str) -> str:
         return self.pipeline(value)
 
 
@@ -109,7 +111,7 @@ class VaultTextSearch(AbstractFieldSegment):
     """
     def __init__(
         self,
-        vault_path: Annotated[str, "Base path for vault storage. Whoosh index located at vault_path/fulltext_vault"],
+        vault_path: Annotated[str, "Base path for vault storage. Vector DB at vault_path/vector_vault, full-text index at vault_path/fulltext_vault"],
         limit: Annotated[int, "Maximum number of results to return"] = 10,
         field: Annotated[str, "The field to extract. If none, use full item."] = None,
         set_as: Annotated[str, "The field to set/append the result as."] = None,
@@ -124,7 +126,7 @@ class VaultTextSearch(AbstractFieldSegment):
             all_results_at_once=False
         ).as_function(single_in=True, single_out=False)
 
-    def process_value(self, value):
+    def process_value(self, value: str) -> list[dict[str, Any]]:
         return list(self.pipeline(value))
 
 

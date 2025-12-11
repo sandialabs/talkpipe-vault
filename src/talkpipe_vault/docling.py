@@ -1,14 +1,11 @@
 import logging
-from typing import Literal, Annotated
-from pydantic import BaseModel
+from typing import Annotated
+
 from docling.document_converter import DocumentConverter
 from talkpipe import AbstractFieldSegment, register_segment
 
 logger = logging.getLogger(__name__)
 
-
-class OutputFormat(BaseModel):
-    format: Literal["markdown", "plain_text"]
 
 @register_segment("doclingToText")
 class DoclingFileToText(AbstractFieldSegment):

@@ -1,152 +1,249 @@
 """
 Web application for querying and chatting with vault contents.
 
-Provides two interaction modes via web interface:
-- Search: Search engine-like interface returning ranked results
-- Chat: Conversational RAG-based interface for Q&A
+Provides three interaction modes via web interface:
+- Semantic Search: Vector similarity search returning ranked results
+- Keyword Search: Full-text search using Whoosh index
+- Ask: Single-turn RAG-based Q&A interface
 """
 import argparse
-import os
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any, Callable
 
-from fastapi import FastAPI, Request, Form
+from fastapi import FastAPI, Request, Form, Depends
 from fastapi.responses import HTMLResponse
-from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 import uvicorn
 
 from talkpipe.util.config import configure_logger
 
-from talkpipe_vault.pipelines.searching_and_prompting import VaultSearch, VaultChat, VaultTextSearch
+from talkpipe_vault.pipelines.searching_and_prompting import (
+    VaultSearch,
+    VaultChat,
+    VaultTextSearch,
+)
 
 configure_logger("root:ERROR")
 
-# Get the templates directory
+# Constants
 TEMPLATES_DIR = Path(__file__).parent / "templates"
+SNIPPET_MAX_LENGTH = 300
+
+
+@dataclass
+class AppState:
+    """Application state container for vault configuration and pipelines."""
+
+    vault_path: str = ""
+    search_pipeline: Callable[[str], Any] | None = None
+    chat_pipeline: Callable[[str], str] | None = None
+    keyword_search_pipeline: Callable[[str], list[Any]] | None = None
+
+
+# Application state singleton
+_state = AppState()
 
 app = FastAPI(title="Vault Query", description="Search and chat with your vault")
-
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
-# Global state for vault path and pipelines
-_vault_path: str = ""
-_search_pipeline = None
-_chat_pipeline = None
-_keyword_search_pipeline = None
+
+def get_state() -> AppState:
+    """Dependency that provides access to application state."""
+    return _state
 
 
 def init_pipelines(vault_path: str) -> None:
     """
     Initialize the search and chat pipelines.
 
-    Expects vault_path as a string pointing to a LanceDB database directory
-    containing 'shingled_chunks' table with embedded document chunks and
-    a Whoosh index at vault_path/fulltext_vault.
+    This function modifies the global application state to set up pipelines
+    for semantic search, keyword search, and RAG-based chat.
+
+    Args:
+        vault_path: Base path for vault storage. Vector DB is located at
+            vault_path/vector_vault, full-text index at vault_path/fulltext_vault.
     """
-    global _vault_path, _search_pipeline, _chat_pipeline, _keyword_search_pipeline
-    _vault_path = vault_path
-    _search_pipeline = VaultSearch(vault_path=vault_path).as_function(
+    _state.vault_path = vault_path
+    _state.search_pipeline = VaultSearch(vault_path=vault_path).as_function(
         single_in=True, single_out=True
     )
-    _chat_pipeline = VaultChat(vault_path=vault_path).as_function(
+    _state.chat_pipeline = VaultChat(vault_path=vault_path).as_function(
         single_in=True, single_out=True
     )
-    _keyword_search_pipeline = VaultTextSearch(vault_path=vault_path).as_function(
+    _state.keyword_search_pipeline = VaultTextSearch(vault_path=vault_path).as_function(
         single_in=True, single_out=False
     )
 
 
-@app.get("/", response_class=HTMLResponse)
-async def home(request: Request) -> HTMLResponse:
-    """
-    Render the home page with navigation to search and chat.
+def _get_field(obj: Any, field: str, default: Any = "") -> Any:
+    """Extract a field from either a dict or object."""
+    if isinstance(obj, dict):
+        return obj.get(field, default)
+    return getattr(obj, field, default)
 
-    Returns HTML page with links to both interfaces.
+
+def _create_snippet(text: str, max_length: int = SNIPPET_MAX_LENGTH) -> str:
+    """Create a truncated snippet from text content."""
+    snippet = text[:max_length].replace("\n", " ").strip()
+    if len(text) > max_length:
+        snippet += "..."
+    return snippet
+
+
+def _resolve_title(title: str, filename: str, path: str) -> str:
+    """Resolve display title with fallback chain: title -> filename -> path basename."""
+    if title:
+        return title
+    if filename:
+        return filename
+    if path:
+        return Path(path).name
+    return "Unknown"
+
+
+def _process_semantic_results(raw_results: Any) -> list[dict[str, Any]]:
     """
+    Process raw semantic search results into display-ready format.
+
+    Deduplicates results by path, keeping the best score for each document.
+
+    Args:
+        raw_results: Raw results from the semantic search pipeline.
+
+    Returns:
+        List of result dicts with path, filename, snippet, and score fields.
+    """
+    if not raw_results:
+        return []
+
+    if isinstance(raw_results, dict):
+        raw_results = [raw_results]
+
+    seen_paths: dict[str, dict[str, Any]] = {}
+
+    for result in raw_results:
+        doc = result.document if hasattr(result, "document") else result
+
+        path = _get_field(doc, "path", "Unknown")
+        shingle = _get_field(doc, "shingle", "")
+        title = _get_field(doc, "title", "")
+        filename = _get_field(doc, "filename", "")
+
+        # Calculate score from distance
+        if hasattr(result, "score"):
+            score = result.score
+        elif hasattr(result, "_distance"):
+            score = 1 - result._distance
+        elif isinstance(result, dict):
+            score = 1 - result.get("_distance", 0)
+        else:
+            score = 0
+
+        # Skip if we've seen this path with a better score
+        if path in seen_paths and seen_paths[path]["score_val"] >= score:
+            continue
+
+        seen_paths[path] = {
+            "path": path,
+            "filename": _resolve_title(title, filename, path),
+            "snippet": _create_snippet(shingle),
+            "score": f"{score:.4f}",
+            "score_val": score,
+        }
+
+    # Remove score_val (used only for comparison)
+    return [
+        {k: v for k, v in item.items() if k != "score_val"}
+        for item in seen_paths.values()
+    ]
+
+
+def _process_keyword_results(raw_results: list[Any]) -> list[dict[str, Any]]:
+    """
+    Process raw keyword search results into display-ready format.
+
+    Deduplicates results by path, keeping the best score for each document.
+
+    Args:
+        raw_results: Raw results from the keyword search pipeline.
+
+    Returns:
+        List of result dicts with path, filename, snippet, and score fields.
+    """
+    seen_paths: dict[str, dict[str, Any]] = {}
+
+    for result in raw_results:
+        doc_id = _get_field(result, "doc_id", "Unknown")
+        score = _get_field(result, "score", 0)
+        document = _get_field(result, "document", {})
+
+        content = _get_field(document, "content", "")
+        path = _get_field(document, "path", doc_id)
+        title = _get_field(document, "title", "")
+        filename = _get_field(document, "filename", "")
+
+        # Skip if we've seen this path with a better score
+        if path in seen_paths and seen_paths[path]["score_val"] >= score:
+            continue
+
+        seen_paths[path] = {
+            "path": path,
+            "filename": _resolve_title(title, filename, path),
+            "snippet": _create_snippet(content),
+            "score": f"{score:.4f}",
+            "score_val": score,
+        }
+
+    # Remove score_val (used only for comparison)
+    return [
+        {k: v for k, v in item.items() if k != "score_val"}
+        for item in seen_paths.values()
+    ]
+
+
+@app.get("/", response_class=HTMLResponse)
+async def home(
+    request: Request, state: AppState = Depends(get_state)
+) -> HTMLResponse:
+    """Render the home page with navigation to search and chat."""
     return templates.TemplateResponse(
-        "home.html", {"request": request, "vault_path": _vault_path}
+        "home.html", {"request": request, "vault_path": state.vault_path}
     )
 
 
 @app.get("/search", response_class=HTMLResponse)
-async def search_page(request: Request) -> HTMLResponse:
-    """
-    Render the search interface page.
-
-    Returns HTML page with search input form and results area.
-    """
+async def search_page(
+    request: Request, state: AppState = Depends(get_state)
+) -> HTMLResponse:
+    """Render the semantic search interface page."""
     return templates.TemplateResponse(
         "search.html",
-        {"request": request, "vault_path": _vault_path, "query": "", "results": None},
+        {"request": request, "vault_path": state.vault_path, "query": "", "results": None},
     )
 
 
 @app.post("/search", response_class=HTMLResponse)
 async def search_results(
-    request: Request, query: Annotated[str, Form()]
+    request: Request,
+    query: Annotated[str, Form()],
+    state: AppState = Depends(get_state),
 ) -> HTMLResponse:
     """
-    Process a search query and return results.
+    Process a semantic search query and return results.
 
     Expects form data with:
         - query: str - The search query string
 
-    Returns HTML page with search results containing:
-        - path: Source file path
-        - shingle: Matched text content
-        - score: Similarity score (1 - distance)
+    Returns HTML page with search results containing path, filename, snippet, and score.
     """
-    results = []
-    error = None
+    results: list[dict[str, Any]] = []
+    error: str | None = None
 
-    if query.strip():
+    if query.strip() and state.search_pipeline:
         try:
-            raw_results = _search_pipeline(query)
-
-            if raw_results:
-                if isinstance(raw_results, dict):
-                    raw_results = [raw_results]
-
-                for result in raw_results:
-                    # SearchResult objects have document dict and score attributes
-                    doc = result.document if hasattr(result, "document") else result
-                    if isinstance(doc, dict):
-                        path = doc.get("path", "Unknown")
-                        shingle = doc.get("shingle", "")
-                        filename = doc.get("filename", "")
-                    else:
-                        path = getattr(doc, "path", "Unknown")
-                        shingle = getattr(doc, "shingle", "")
-                        filename = getattr(doc, "filename", "")
-
-                    # Fallback filename from path if not stored
-                    if not filename and path:
-                        filename = Path(path).name
-
-                    # Use score (1 - distance) or _distance depending on result type
-                    if hasattr(result, "score"):
-                        distance = 1 - result.score  # Convert score back to distance
-                    elif hasattr(result, "_distance"):
-                        distance = result._distance
-                    elif isinstance(result, dict):
-                        distance = result.get("_distance", 0)
-                    else:
-                        distance = 0
-
-                    # Create snippet
-                    snippet = shingle[:300].replace("\n", " ").strip()
-                    if len(shingle) > 300:
-                        snippet += "..."
-
-                    results.append(
-                        {
-                            "path": path,
-                            "filename": filename or "Unknown",
-                            "snippet": snippet,
-                            "score": f"{(1 - distance):.4f}",
-                        }
-                    )
+            raw_results = state.search_pipeline(query)
+            results = _process_semantic_results(raw_results)
         except Exception as e:
             error = str(e)
 
@@ -154,7 +251,7 @@ async def search_results(
         "search.html",
         {
             "request": request,
-            "vault_path": _vault_path,
+            "vault_path": state.vault_path,
             "query": query,
             "results": results,
             "error": error,
@@ -163,21 +260,21 @@ async def search_results(
 
 
 @app.get("/keyword-search", response_class=HTMLResponse)
-async def keyword_search_page(request: Request) -> HTMLResponse:
-    """
-    Render the keyword search interface page.
-
-    Returns HTML page with keyword search input form and results area.
-    """
+async def keyword_search_page(
+    request: Request, state: AppState = Depends(get_state)
+) -> HTMLResponse:
+    """Render the keyword search interface page."""
     return templates.TemplateResponse(
         "keyword_search.html",
-        {"request": request, "vault_path": _vault_path, "query": "", "results": None},
+        {"request": request, "vault_path": state.vault_path, "query": "", "results": None},
     )
 
 
 @app.post("/keyword-search", response_class=HTMLResponse)
 async def keyword_search_results(
-    request: Request, query: Annotated[str, Form()]
+    request: Request,
+    query: Annotated[str, Form()],
+    state: AppState = Depends(get_state),
 ) -> HTMLResponse:
     """
     Process a keyword search query and return results.
@@ -185,56 +282,15 @@ async def keyword_search_results(
     Expects form data with:
         - query: str - The keyword search query (Whoosh query syntax)
 
-    Returns HTML page with search results containing:
-        - doc_id: Source file path
-        - score: Relevance score
-        - content: Matched text content
+    Returns HTML page with search results containing path, filename, snippet, and score.
     """
-    results = []
-    error = None
+    results: list[dict[str, Any]] = []
+    error: str | None = None
 
-    if query.strip():
+    if query.strip() and state.keyword_search_pipeline:
         try:
-            raw_results = list(_keyword_search_pipeline(query))
-
-            for result in raw_results:
-                # Handle both dict and object result types
-                if isinstance(result, dict):
-                    doc_id = result.get("doc_id", "Unknown")
-                    score = result.get("score", 0)
-                    document = result.get("document", {})
-                else:
-                    doc_id = getattr(result, "doc_id", "Unknown")
-                    score = getattr(result, "score", 0)
-                    document = getattr(result, "document", {})
-
-                # Extract fields from document
-                if isinstance(document, dict):
-                    content = document.get("content", "")
-                    path = document.get("path", doc_id)
-                    filename = document.get("filename", "")
-                else:
-                    content = getattr(document, "content", "")
-                    path = getattr(document, "path", doc_id)
-                    filename = getattr(document, "filename", "")
-
-                # Fallback filename from path if not stored
-                if not filename and path:
-                    filename = Path(path).name
-
-                # Create snippet
-                snippet = content[:300].replace("\n", " ").strip()
-                if len(content) > 300:
-                    snippet += "..."
-
-                results.append(
-                    {
-                        "path": path,
-                        "filename": filename or "Unknown",
-                        "snippet": snippet,
-                        "score": f"{score:.4f}",
-                    }
-                )
+            raw_results = list(state.keyword_search_pipeline(query))
+            results = _process_keyword_results(raw_results)
         except Exception as e:
             error = str(e)
 
@@ -242,7 +298,7 @@ async def keyword_search_results(
         "keyword_search.html",
         {
             "request": request,
-            "vault_path": _vault_path,
+            "vault_path": state.vault_path,
             "query": query,
             "results": results,
             "error": error,
@@ -251,38 +307,38 @@ async def keyword_search_results(
 
 
 @app.get("/chat", response_class=HTMLResponse)
-async def chat_page(request: Request) -> HTMLResponse:
-    """
-    Render the chat interface page.
-
-    Returns HTML page with chat input form and conversation area.
-    """
+async def chat_page(
+    request: Request, state: AppState = Depends(get_state)
+) -> HTMLResponse:
+    """Render the Ask interface page."""
     return templates.TemplateResponse(
         "chat.html",
-        {"request": request, "vault_path": _vault_path, "messages": []},
+        {"request": request, "vault_path": state.vault_path, "messages": []},
     )
 
 
 @app.post("/chat", response_class=HTMLResponse)
 async def chat_response(
-    request: Request, message: Annotated[str, Form()]
+    request: Request,
+    message: Annotated[str, Form()],
+    state: AppState = Depends(get_state),
 ) -> HTMLResponse:
     """
-    Process a chat message and return AI response.
+    Process a question and return AI-generated response.
 
     Expects form data with:
         - message: str - The user's question
 
-    Returns HTML page with conversation containing user message and AI response.
+    Returns HTML page with the question and AI-generated answer.
     """
-    messages = []
-    error = None
+    messages: list[dict[str, str]] = []
+    error: str | None = None
 
-    if message.strip():
+    if message.strip() and state.chat_pipeline:
         messages.append({"role": "user", "content": message})
 
         try:
-            response = _chat_pipeline(message)
+            response = state.chat_pipeline(message)
             messages.append({"role": "assistant", "content": response})
         except Exception as e:
             error = str(e)
@@ -291,7 +347,7 @@ async def chat_response(
         "chat.html",
         {
             "request": request,
-            "vault_path": _vault_path,
+            "vault_path": state.vault_path,
             "messages": messages,
             "error": error,
         },
@@ -302,10 +358,11 @@ def run_app(vault_path: str, host: str = "127.0.0.1", port: int = 8000) -> None:
     """
     Start the web application server.
 
-    Expects:
-        - vault_path: str - Path to LanceDB vault database
-        - host: str - Host to bind to (default: 127.0.0.1)
-        - port: int - Port to listen on (default: 8000)
+    Args:
+        vault_path: Base path for vault storage. Vector DB is located at
+            vault_path/vector_vault, full-text index at vault_path/fulltext_vault.
+        host: Host to bind to (default: 127.0.0.1)
+        port: Port to listen on (default: 8000)
     """
     init_pipelines(vault_path)
     uvicorn.run(app, host=host, port=port)
@@ -318,7 +375,7 @@ def main() -> None:
     )
     parser.add_argument(
         "vault_path",
-        help="Path to LanceDB vault database",
+        help="Path to vault storage directory",
     )
     parser.add_argument(
         "--host",
