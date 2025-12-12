@@ -1,9 +1,9 @@
-"""Unit tests for the DoclingFileToText segment."""
+"""Unit tests for the docling_extract function."""
 
-import pytest
 from pathlib import Path
 from talkpipe import compile
-from talkpipe_vault.docling import DoclingFileToText
+from talkpipe.data.extraction import ExtractionResult
+from talkpipe_vault.docling import docling_extract
 
 
 # Get the path to sample documents
@@ -14,24 +14,35 @@ HTML_FILE = str(SAMPLE_DOCS_DIR / "SampleDocument.html")
 FILES = [PDF_FILE, DOCX_FILE, HTML_FILE]
 
 
-class TestDoclingFileToText:
-    """Test suite for DoclingFileToText segment."""
+class TestDoclingExtract:
+    """Test suite for docling_extract function."""
 
     def test_extract_on_different_types(self):
-        """Test that markdown and plain_text formats produce different outputs."""
-        pipeline = compile(""" | doclingToText """)
+        """Test that readFile extracts content from various document types using docling."""
+        pipeline = compile(""" | readFile """)
 
         results = list(pipeline(FILES))
 
         for result in results:
-            assert isinstance(result, str)
-            assert len(result) > 0
+            assert isinstance(result, ExtractionResult)
+            assert len(result.content) > 0
+            assert result.source
+            assert result.id
+            assert result.title
 
     def test_invalid_file_path(self):
-        """Test that processing an invalid file path logs a warning and returns None."""
-        pipeline = compile("doclingToText").as_function(single_in=True, single_out=True)
+        """Test that processing an invalid file path yields nothing (skip behavior)."""
+        results = list(docling_extract("/nonexistent/path/to/file.pdf"))
+        assert results == []
 
-        # Should not raise, but return None for invalid paths
-        result = pipeline("/nonexistent/path/to/file.pdf")
-        assert result is None
+    def test_docling_extract_directly(self):
+        """Test docling_extract function directly on sample document files."""
+        for file_path in FILES:
+            results = list(docling_extract(file_path))
+            assert len(results) == 1
+            assert isinstance(results[0], ExtractionResult)
+            assert len(results[0].content) > 0
+            assert results[0].source
+            assert results[0].id
+            assert results[0].title
 

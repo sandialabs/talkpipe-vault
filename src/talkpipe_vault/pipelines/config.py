@@ -14,6 +14,6 @@ RAG_PROMPT_DIRECTIVE = "Remember to list the files you used to inform your answe
 
 
 
-DOCUMENT_TEMPLATE="""title: {filename} | text: {full_content}"""
-SHINGLE_TEMPLATE="""title: {filename} | text: {shingle}"""
+DOCUMENT_TEMPLATE="""title: {title} | text: {content}"""
+SHINGLE_TEMPLATE="""title: {title} | text: {shingle}"""
 RETRIEVAL_TEMPLATE="""task: search result | query: {query}"""

@@ -168,6 +168,9 @@ exclude_dirs = ["tests"]
 [tool.bandit.assert_used]
 skips = ["*/test_*.py", "*/conftest.py"]
 
+[project.entry-points."talkpipe.plugins"]
+talkpipe_vault = "talkpipe_vault.initialize_plugin"
+
 [project.entry-points."talkpipe.sources"]
 fileWatcher = "talkpipe_vault.watchdog:file_watcher"
 watchIntoVectorDB = "talkpipe_vault.pipelines.building_and_watching:watch_into_vector_db"
@@ -175,7 +178,6 @@ listIntoVectorDB = "talkpipe_vault.pipelines.building_and_watching:list_into_vec
 
 [project.entry-points."talkpipe.segments"]
 diagPrint = "talkpipe_vault.util:DiagPrint"
-doclingToText = "talkpipe_vault.docling:DoclingFileToText"
 buildVectorDBFromPaths = "talkpipe_vault.pipelines.building_and_watching:build_vector_db_from_paths"
 vaultChat = "talkpipe_vault.pipelines.searching_and_prompting:VaultChat"
 vaultSearch = "talkpipe_vault.pipelines.searching_and_prompting:VaultSearch"

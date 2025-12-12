@@ -13,6 +13,7 @@ from typing import Annotated, Any, Callable
 
 from fastapi import FastAPI, Request, Form, Depends
 from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 import uvicorn
 
@@ -28,6 +29,7 @@ configure_logger("root:ERROR")
 
 # Constants
 TEMPLATES_DIR = Path(__file__).parent / "templates"
+STATIC_DIR = Path(__file__).parent / "static"
 SNIPPET_MAX_LENGTH = 300
 
 
@@ -44,7 +46,8 @@ class AppState:
 # Application state singleton
 _state = AppState()
 
-app = FastAPI(title="Vault Query", description="Search and chat with your vault")
+app = FastAPI(title="Talkpipe Vault", description="Search and chat with your vault")
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 

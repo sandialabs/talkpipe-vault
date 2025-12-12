@@ -1,68 +1,61 @@
+"""Docling-based file extraction for talkpipe.
+
+This module provides a file extractor function that uses Docling to convert
+documents (PDF, DOCX, HTML, etc.) to markdown. When the talkpipe_vault plugin
+is loaded, this extractor is registered as the default handler in talkpipe's
+global extractor registry, providing support for 50+ document formats.
+"""
+
 import logging
-from typing import Annotated
+from pathlib import Path
+from typing import Iterator, Union
 
 from docling.document_converter import DocumentConverter
-from talkpipe import AbstractFieldSegment, register_segment
+from talkpipe.data.extraction import ExtractionResult
 
 logger = logging.getLogger(__name__)
 
+# Lazy-initialized converter instance
+_converter: DocumentConverter | None = None
 
-@register_segment("doclingToText")
-class DoclingFileToText(AbstractFieldSegment):
+
+def _get_converter() -> DocumentConverter:
+    """Get or create the shared DocumentConverter instance."""
+    global _converter
+    if _converter is None:
+        _converter = DocumentConverter()
+    return _converter
+
+
+def docling_extract(file_path: Union[str, Path]) -> Iterator[ExtractionResult]:
     """
-    Segment that extracts text from files using Docling for documents or direct reading for source code.
+    Extract text from document files using Docling.
 
-    Expects input items containing a file path string (either as the full item or in a specified field).
-    Source code and plain text files (.py, .js, .txt, etc.) are read directly. Document formats
-    (PDF, DOCX, etc.) are converted via Docling and exported as markdown.
+    Converts document formats (PDF, DOCX, HTML, etc.) via Docling and exports
+    as markdown. This function is registered as the default extractor in
+    talkpipe's global extractor registry, handling file types not covered by
+    the built-in text extractors.
 
-    Emits items with extracted text content (as full item or in a specified field).
-    Returns None for items that fail conversion, which are then skipped.
+    Args:
+        file_path: Path to the document file to extract text from.
+
+    Yields:
+        ExtractionResult objects containing extracted content, source path, id, and title.
+        Yields nothing if extraction fails.
     """
+    path = Path(file_path) if isinstance(file_path, str) else file_path
+    source_str = str(path.resolve())
 
-    def __init__(self,
-                 field: Annotated[str, "The field to extract.  If none, use full item."] = None,
-                 set_as: Annotated[str, "The field to set/append the result as."] = None):
-        super().__init__(field=field, set_as=set_as, multi_emit=False)
-        self.converter = DocumentConverter()
-
-    def process_value(self, input_data: Annotated[str, "Input file path"]) -> str | None:
-        # Source code and plain text extensions to read directly
-        text_extensions = {
-            '.txt', '.rst',  # Plain text and documentation
-            '.py', '.pyw', '.pyx',  # Python
-            '.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs',  # JavaScript/TypeScript
-            '.java', '.kt', '.kts', '.scala',  # JVM languages
-            '.c', '.h', '.cpp', '.hpp', '.cc', '.cxx', '.c++', '.h++',  # C/C++
-            '.cs', '.vb',  # .NET languages
-            '.go', '.rs', '.swift',  # Go, Rust, Swift
-            '.rb', '.php', '.pl', '.pm',  # Ruby, PHP, Perl
-            '.sh', '.bash', '.zsh', '.fish',  # Shell scripts
-            '.r', '.R',  # R
-            '.sql', '.psql',  # SQL
-            '.css', '.scss', '.sass', '.less',  # Stylesheets
-            '.xml', '.svg',  # Markup
-            '.json', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.conf',  # Config files
-            '.vim', '.lua', '.tcl',  # Other scripting
-            '.m', '.mm',  # Objective-C
-            '.f', '.f90', '.f95',  # Fortran
-            '.asm', '.s',  # Assembly
-            '.diff', '.patch',  # Patches
-            '.log',  # Log files
-        }
-
-        try:
-            # Handle text and source code files directly
-            rp = input_data.lower().rpartition('.')
-            file_ext = ''.join(rp[1:])  # Get file extension with dot
-
-            if file_ext in text_extensions:
-                with open(input_data, 'r', encoding='utf-8') as f:
-                    return f.read()
-            else:
-                # Use Docling for document formats (PDF, DOCX, etc.)
-                result = self.converter.convert(input_data)
-                return result.document.export_to_markdown()
-        except Exception as e:
-            logger.warning(f"Failed to convert '{input_data}': {e}")
-            return None
+    try:
+        logger.debug(f"Converting document with Docling: {path}")
+        converter = _get_converter()
+        result = converter.convert(str(path))
+        content = result.document.export_to_markdown()
+        yield ExtractionResult(
+            content=content,
+            source=source_str,
+            id=source_str,
+            title=path.name
+        )
+    except Exception as e:
+        logger.warning(f"Failed to convert '{file_path}': {e}")

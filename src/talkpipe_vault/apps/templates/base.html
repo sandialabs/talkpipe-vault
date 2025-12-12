@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}Vault Query{% endblock %}</title>
+    <title>{% block title %}Talkpipe Vault{% endblock %}</title>
     <style>
         * {
             box-sizing: border-box;
@@ -43,6 +43,18 @@
 
         header h1 {
             font-size: 1.5rem;
+        }
+
+        .header-brand {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .header-logo {
+            height: 48px;
+            width: auto;
+            border-radius: 6px;
         }
 
         header nav a {
@@ -421,7 +433,10 @@
     <header>
         <div class="container">
             <div>
-                <h1>Vault Query</h1>
+                <div class="header-brand">
+                    <img src="/static/logo.jpg" alt="Talkpipe Vault" class="header-logo">
+                    <h1>Talkpipe Vault</h1>
+                </div>
                 {% if vault_path %}
                 <div class="vault-info">{{ vault_path }}</div>
                 {% endif %}

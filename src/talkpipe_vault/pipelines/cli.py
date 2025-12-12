@@ -100,7 +100,7 @@ def list_vectordb_main() -> None:
         vault_path=args.vault_path,
         overwrite=args.overwrite,
     ) | \
-    ToDict(field_list="id") | \
+    ToDict(field_list="shingle_id") | \
     Print()
 
     # Consume the pipeline (call it to get the iterator)
