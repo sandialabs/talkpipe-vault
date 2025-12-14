@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 from typing import Annotated
 from queue import Queue, Empty
 from talkpipe import source, register_source
@@ -27,7 +28,7 @@ COMMON_IGNORE_PATTERNS = [
 @register_source("fileWatcher")
 @source()
 def file_watcher(
-    path: Annotated[str, "Path to watch"],
+    path: Annotated[str, "Path to watch (can include glob pattern like '/path/to/dir/*.txt')"],
     patterns: Annotated[list[str] | None, "List of glob patterns to match"] = None,
     ignore_patterns: Annotated[list[str] | None, "List of glob patterns to ignore"] = None,
     ignore_directories: Annotated[bool, "Whether to ignore directory events"] = True,
@@ -43,6 +44,10 @@ def file_watcher(
     or deletion events. Events are queued and yielded for controlled processing.
     Supports both native filesystem events and polling mode for network filesystems.
 
+    The path parameter can be either a directory path or include a glob pattern
+    (e.g., '/path/to/dir/*.txt'). If a glob pattern is detected, it will be extracted
+    and added to the patterns list, and the directory portion will be watched.
+
     Yields dicts with the following structure:
         - "event": str - Event type ("created", "modified", or "deleted")
         - "path": str - Absolute path to the affected file
@@ -50,6 +55,33 @@ def file_watcher(
     Raises RuntimeError if watchdog initialization times out (typically on network
     filesystems - use polling=True in that case).
     """
+    # Parse glob pattern from path if present
+    watch_path = path
+    extracted_patterns = []
+
+    # Check if path contains glob characters
+    if any(char in path for char in ['*', '?', '[', ']']):
+        path_obj = Path(path)
+        # Find the first parent that doesn't contain glob characters
+        for parent in [path_obj] + list(path_obj.parents):
+            parent_str = str(parent)
+            if not any(char in parent_str for char in ['*', '?', '[', ']']):
+                watch_path = parent_str
+                # Extract the pattern portion
+                pattern = path[len(parent_str):].lstrip(os.sep)
+                if pattern:
+                    extracted_patterns.append(pattern)
+                break
+
+    # Combine extracted patterns with provided patterns
+    if extracted_patterns:
+        if patterns:
+            final_patterns = extracted_patterns + list(patterns)
+        else:
+            final_patterns = extracted_patterns
+    else:
+        final_patterns = patterns
+
     # Build the final ignore patterns list
     if ignore_common:
         final_ignore_patterns = list(COMMON_IGNORE_PATTERNS)
@@ -63,7 +95,7 @@ def file_watcher(
     class WatchdogHandler(PatternMatchingEventHandler):
         def __init__(self, queue):
             super().__init__(
-                patterns=patterns,
+                patterns=final_patterns,
                 ignore_patterns=final_ignore_patterns,
                 ignore_directories=ignore_directories,
                 case_sensitive=case_sensitive,
@@ -81,7 +113,7 @@ def file_watcher(
 
     observer = PollingObserver() if polling else Observer()
     handler = WatchdogHandler(queue=event_queue)
-    observer.schedule(handler, path, recursive=True)
+    observer.schedule(handler, watch_path, recursive=True)
     observer.start()
 
     # Block until observer is fully ready by using a sentinel file
@@ -94,10 +126,10 @@ def file_watcher(
                 ready_queue.put(True)
 
     ready_handler = ReadyHandler()
-    ready_watch = observer.schedule(ready_handler, path, recursive=False)
+    ready_watch = observer.schedule(ready_handler, watch_path, recursive=False)
 
     # Create sentinel file and wait for its event
-    sentinel_path = os.path.join(path, ".watchdog_ready")
+    sentinel_path = os.path.join(watch_path, ".watchdog_ready")
     try:
         with open(sentinel_path, "w") as f:
             f.write("ready")
@@ -107,7 +139,7 @@ def file_watcher(
         except Empty:
             # Timeout indicates filesystem events are slow or unavailable
             raise RuntimeError(
-                f"Watchdog initialization timed out after 5 seconds for path: {path}\n"
+                f"Watchdog initialization timed out after 5 seconds for path: {watch_path}\n"
                 "This typically occurs with:\n"
                 "  - Network filesystems (NFS, SMB, CIFS)\n"
                 "  - Slow storage devices\n"

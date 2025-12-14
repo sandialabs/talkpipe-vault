@@ -52,6 +52,14 @@ def watch_vectordb_main() -> None:
         "--overwrite", action="store_true", default=False,
         help="Overwrite existing tables and indexes (default: don't overwrite)"
     )
+    parser.add_argument(
+        "--delete-after-indexing", action="store_true", default=False,
+        help="Delete source files after successfully indexing them (default: keep files)"
+    )
+    parser.add_argument(
+        "--debounce-seconds", type=float, default=1.0,
+        help="Seconds to wait for file stability before processing (0 to disable, default: 1.0)"
+    )
 
     args = parser.parse_args()
 
@@ -66,9 +74,11 @@ def watch_vectordb_main() -> None:
         max_events=args.max_events,
         polling=args.polling,
         ignore_common=not args.include_common,
-        overwrite=args.overwrite
+        overwrite=args.overwrite,
+        delete_after_indexing=args.delete_after_indexing,
+        debounce_seconds=args.debounce_seconds
     ) | \
-    ToDict(field_list="id") | \
+    ToDict(field_list="shingle_id") | \
     Print()
 
     # Consume the pipeline (call it to get the iterator)
@@ -91,6 +101,10 @@ def list_vectordb_main() -> None:
         "--overwrite", action="store_true", default=False,
         help="Overwrite existing tables and indexes (default: don't overwrite)"
     )
+    parser.add_argument(
+        "--delete-after-indexing", action="store_true", default=False,
+        help="Delete source files after successfully indexing them (default: keep files)"
+    )
 
     args = parser.parse_args()
 
@@ -99,6 +113,7 @@ def list_vectordb_main() -> None:
         source_pattern=args.source_pattern,
         vault_path=args.vault_path,
         overwrite=args.overwrite,
+        delete_after_indexing=args.delete_after_indexing,
     ) | \
     ToDict(field_list="shingle_id") | \
     Print()
