@@ -9,6 +9,7 @@ from talkpipe.data.extraction import listFiles, ReadFile
 from talkpipe.pipelines.vector_databases import MakeVectorDatabaseSegment
 from talkpipe_vault.watchdog import file_watcher
 from talkpipe.pipe.basic import ToDict, FilterExpression, EvalExpression, setAs, fillTemplate
+from talkpipe.util.data_manipulation import extract_property
 from talkpipe.data.text.chunking_units import splitText, ShingleText
 from talkpipe.search.whoosh import indexWhoosh
 from .config import EMBEDDING_MODEL, EMBEDDING_SOURCE, DOCUMENT_TEMPLATE, SHINGLE_TEMPLATE
@@ -121,7 +122,7 @@ def DeleteFile(items: Any,
     """
     Segment that deletes source files after yielding items.
 
-    Expects input items as dicts with a field containing a file path.
+    Expects input items as dicts or pydantic objects with a field containing a file path.
     Yields all items unchanged, but deletes the source file after each item is yielded.
 
     This is useful for cleaning up source files after they've been successfully
@@ -132,7 +133,7 @@ def DeleteFile(items: Any,
     for item in items:
         yield item
         # Delete the file after yielding to ensure downstream processing can complete
-        path = item.get(path_field) if isinstance(item, dict) else None
+        path = extract_property(item, path_field, fail_on_missing=True)
         if path and os.path.exists(path):
             try:
                 os.remove(path)
@@ -141,13 +142,14 @@ def DeleteFile(items: Any,
                 import logging
                 logging.warning(f"Failed to delete {path}: {e}")
 
+_LANCEDB_BATCH_SIZE = 1000
 
 @register_segment("buildVectorDBFromPaths")
 @segment()
 def build_vector_db_from_paths(items: Any,
                                vault_path: Annotated[str, "Base path for vault storage. Vector DB stored at vault_path/vector_vault, full-text index at vault_path/fulltext_vault"],
                                overwrite: Annotated[bool, "If true, overwrite existing tables and indexes"] = False,
-                               delete_after_indexing: Annotated[bool, "If true, delete source files after successfully indexing them"] = False):
+                               delete_after_reading: Annotated[bool, "If true, delete source files after successfully indexing them"] = False):
     """
     Segment that builds a vector database and full-text search index from file paths.
 
@@ -178,7 +180,13 @@ def build_vector_db_from_paths(items: Any,
     base_pipeline = \
     FilterExpression(expression="'event' not in item or item['event'] != 'deleted'") | \
     FileExistsFilter(path_field="path") | \
-    ReadFile(field="path") | \
+    ReadFile(field="path") 
+
+    # Conditionally add file deletion after successful indexing
+    if delete_after_reading:
+        base_pipeline = base_pipeline | DeleteFile(path_field="source")
+
+    pipeline = base_pipeline | \
     ToDict(field_list="content,source,id,title") | \
     FilterExpression(expression="item.get('content') and len(item.get('content', '').strip()) > 0") | \
     fillTemplate(template=DOCUMENT_TEMPLATE, set_as="doc_save_query") | \
@@ -189,19 +197,16 @@ def build_vector_db_from_paths(items: Any,
         embedding_field="doc_save_query",
         table_name="full_documents",
         doc_id_field="id",
-        overwrite=overwrite) | \
+        overwrite=overwrite,
+        fail_on_error=False,
+        batch_size=_LANCEDB_BATCH_SIZE,
+        optimize_on_batch=True) | \
     setAs(field_list="id:doc_id") | \
     indexWhoosh(
         index_path=whoosh_index_path,
         field_list="content:content,source:path,title:filename",
         overwrite=overwrite,
-        commit_seconds=120)
-
-    # Conditionally add file deletion after successful indexing
-    if delete_after_indexing:
-        base_pipeline = base_pipeline | DeleteFile(path_field="source")
-
-    pipeline = base_pipeline | \
+        commit_seconds=120) | \
     ToDict(field_list="id,content,title,source") | \
     splitText(field="content", criteria=500, set_as="chunk") | \
     FilterExpression(expression="item.get('chunk') and len(item.get('chunk', '').strip()) > 0") | \
@@ -218,7 +223,10 @@ def build_vector_db_from_paths(items: Any,
         embedding_field="shingle",
         table_name="shingled_chunks",
         doc_id_field="shingle_id",
-        overwrite=False) | \
+        overwrite=False,
+        fail_on_error=False,
+        batch_size=_LANCEDB_BATCH_SIZE,
+        optimize_on_batch=True) | \
     ToDict(field_list="shingle_id,shingle,source,title")
     yield from pipeline(items)
 
@@ -235,7 +243,7 @@ def watch_into_vector_db(source_path: Annotated[str, "Path to watch"],
                          polling: Annotated[bool, "Use polling-based observer"] = False,
                          ignore_common: Annotated[bool, "Ignore common temp/hidden files"] = True,
                          overwrite: Annotated[bool, "If true, overwrite existing tables and indexes"] = False,
-                         delete_after_indexing: Annotated[bool, "If true, delete source files after successfully indexing them"] = False,
+                         delete_after_reading: Annotated[bool, "If true, delete source files after successfully indexing them"] = False,
                          debounce_seconds: Annotated[float, "Seconds to wait for file stability before processing (0 to disable)"] = 1.0):
     """
     Source that watches a directory and processes file changes into a vector database and full-text index.
@@ -271,14 +279,14 @@ def watch_into_vector_db(source_path: Annotated[str, "Path to watch"],
         build_vector_db_from_paths(
             vault_path=vault_path,
             overwrite=overwrite,
-            delete_after_indexing=delete_after_indexing)
+            delete_after_reading=delete_after_reading)
     else:
         pipeline = watcher | \
         Print() | \
         build_vector_db_from_paths(
             vault_path=vault_path,
             overwrite=overwrite,
-            delete_after_indexing=delete_after_indexing)
+            delete_after_reading=delete_after_reading)
 
     yield from pipeline()
 
@@ -287,7 +295,7 @@ def watch_into_vector_db(source_path: Annotated[str, "Path to watch"],
 def list_into_vector_db(source_pattern: Annotated[str, "Glob pattern to match files (e.g., '/path/**/*.pdf')"],
                          vault_path: Annotated[str, "Base path for vault storage. Vector DB stored at vault_path/vector_vault, full-text index at vault_path/fulltext_vault"],
                          overwrite: Annotated[bool, "If true, overwrite existing tables and indexes"] = False,
-                         delete_after_indexing: Annotated[bool, "If true, delete source files after successfully indexing them"] = False):
+                         delete_after_reading: Annotated[bool, "If true, delete source files after successfully indexing them"] = False):
     """
     Source that batch processes files matching a glob pattern into a vector database and full-text index.
 
@@ -306,5 +314,5 @@ def list_into_vector_db(source_pattern: Annotated[str, "Glob pattern to match fi
     build_vector_db_from_paths(
         vault_path=vault_path,
         overwrite=overwrite,
-        delete_after_indexing=delete_after_indexing)
+        delete_after_reading=delete_after_reading)
     yield from pipeline([source_pattern])

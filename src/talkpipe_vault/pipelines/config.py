@@ -2,7 +2,8 @@ from talkpipe.util.data_manipulation import dict_to_text
 
 EMBEDDING_MODEL="embeddinggemma"
 EMBEDDING_SOURCE="ollama"
-CHAT_MODEL="gpt-oss:latest"
+#CHAT_MODEL="gpt-oss:latest"
+CHAT_MODEL="mistral-small"
 CHAT_SOURCE="ollama"
 
 RAG_PREFIX_PROMPTS = dict_to_text({

@@ -234,7 +234,14 @@ document.addEventListener('DOMContentLoaded', function() {
     questionInput.addEventListener('keydown', function(e) {
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
-            askForm.dispatchEvent(new Event('submit'));
+            // Use requestSubmit when available so the submit event is a trusted
+            // user-initiated submit (avoids untrusted submit deprecation warnings
+            // and potential browser-specific behavior differences).
+            if (typeof askForm.requestSubmit === 'function') {
+                askForm.requestSubmit();
+            } else {
+                askForm.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+            }
         }
     });
 
@@ -286,6 +293,14 @@ document.addEventListener('DOMContentLoaded', function() {
 
             const html = await response.text();
 
+            // If server returned non-OK, log details and show an error
+            if (!response.ok) {
+                console.error('Chat request failed', response.status, response.statusText, html);
+                hideLoading();
+                showAnswer('Server error: ' + response.status + ' ' + response.statusText, true);
+                return;
+            }
+
             // Parse response to extract answer
             const parser = new DOMParser();
             const doc = parser.parseFromString(html, 'text/html');
@@ -300,6 +315,9 @@ document.addEventListener('DOMContentLoaded', function() {
                 showAnswer('Error: ' + serverError.getAttribute('data-content'), true);
             } else if (serverResponse) {
                 showAnswer(serverResponse.getAttribute('data-content'));
+            } else {
+                console.warn('No server-response or server-error found in HTML');
+                showAnswer('No response from server.', true);
             }
         } catch (err) {
             hideLoading();

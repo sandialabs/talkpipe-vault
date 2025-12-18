@@ -53,7 +53,7 @@ def watch_vectordb_main() -> None:
         help="Overwrite existing tables and indexes (default: don't overwrite)"
     )
     parser.add_argument(
-        "--delete-after-indexing", action="store_true", default=False,
+        "--delete-after-reading", action="store_true", default=False,
         help="Delete source files after successfully indexing them (default: keep files)"
     )
     parser.add_argument(
@@ -75,7 +75,7 @@ def watch_vectordb_main() -> None:
         polling=args.polling,
         ignore_common=not args.include_common,
         overwrite=args.overwrite,
-        delete_after_indexing=args.delete_after_indexing,
+        delete_after_reading=args.delete_after_reading,
         debounce_seconds=args.debounce_seconds
     ) | \
     ToDict(field_list="shingle_id") | \
@@ -102,7 +102,7 @@ def list_vectordb_main() -> None:
         help="Overwrite existing tables and indexes (default: don't overwrite)"
     )
     parser.add_argument(
-        "--delete-after-indexing", action="store_true", default=False,
+        "--delete-after-reading", action="store_true", default=False,
         help="Delete source files after successfully indexing them (default: keep files)"
     )
 
@@ -113,7 +113,7 @@ def list_vectordb_main() -> None:
         source_pattern=args.source_pattern,
         vault_path=args.vault_path,
         overwrite=args.overwrite,
-        delete_after_indexing=args.delete_after_indexing,
+        delete_after_reading=args.delete_after_reading,
     ) | \
     ToDict(field_list="shingle_id") | \
     Print()
