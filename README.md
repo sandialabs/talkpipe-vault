@@ -12,21 +12,19 @@
 
 ## What is TalkPipe Vault?
 
-**TalkPipe Vault** helps you find information in your personal documents using natural language and AI. Instead of remembering exactly where you saved something or what you named a file, you can search using concepts and ideas.
+**TalkPipe Vault** is a set of practical tools and reusable components for turning folders of files into a searchable “vault” you can explore with semantic search, keyword search, and retrieval‑augmented Q&A. It is a production‑oriented example built on the **[TalkPipe](https://github.com/sandialabs/talkpipe)** framework, demonstrating how to assemble document processing, vector search, and RAG with clean, composable pipelines.
 
-Imagine having thousands of documents, notes, PDFs, and text files scattered across your computer. TalkPipe Vault watches these folders, reads your documents, and creates an intelligent index that understands the *meaning* of your content—not just keywords. This means you can ask questions like "notes about machine learning from last month" or find related documents even if they use different terminology.
+What you get:
+- **CLI applications for indexing**: `vault-watch-into-vectordb` (watch a directory and index changes) and `vault-list-into-vectordb` (bulk index from a path or glob).
+- **A web application for discovery**: `vault-query` starts a FastAPI UI for semantic search, keyword search, and single‑turn Q&A over your vault.
+- **Reusable building blocks**: TalkPipe sources, segments, and end‑to‑end pipelines that you can compose to build your own file/document management workflows.
 
-### Built with TalkPipe
+How it works (at a glance):
+- Watches directories or enumerates files, converts documents to text (Docling), and stores full‑document and shingled‑chunk embeddings in LanceDB.
+- Builds a Whoosh full‑text index for precise keyword queries alongside semantic search.
+- Supports local models (Ollama) and cloud providers (OpenAI) via simple configuration.
 
-TalkPipe Vault is built on **[TalkPipe](https://github.com/sandialabs/talkpipe)**, a Python framework for creating composable AI data pipelines. TalkPipe Vault demonstrates what you can build with TalkPipe—a complete document intelligence system created by connecting simple, reusable pipeline components.
-
-**TalkPipe Vault serves as a real-world example** of how TalkPipe enables you to:
-- Chain together document processing, AI models, and databases without boilerplate
-- Create reusable pipeline components that can be mixed and matched
-- Build production-ready AI applications with minimal code
-- Extend existing pipelines with custom functionality
-
-If you're interested in building your own AI-powered data processing tools, TalkPipe Vault showcases the framework's capabilities for real-world applications.
+Together, these applications and components provide both ready‑to‑use capabilities and a clear blueprint for creating custom pipelines with TalkPipe.
 
 ### Key Features
 
@@ -73,33 +71,27 @@ pip install -e .[dev]
 **Watch a folder and build a searchable database:**
 
 ```bash
-# Using Ollama (local, privacy-friendly)
+# Watch a directory and index matching files
 vault-watch-into-vectordb "/path/to/documents" \
-    --vectordb-path ~/my-vault \
-    --embedding-model mxbai-embed-large:latest \
-    --embedding-source ollama \
-    --polling
-
-# Using OpenAI (requires OPENAI_API_KEY environment variable)
-vault-watch-into-vectordb "/path/to/documents" \
-    --vectordb-path ~/my-vault \
-    --embedding-model text-embedding-3-small \
-    --embedding-source openai
+    --vault-path ~/my-vault \
+    --patterns "*.txt" "*.md" \
+    --ignore-patterns "*/node_modules/*" \
+    --polling \
+    --overwrite
 ```
 
 **Index an existing collection:**
 
 ```bash
 vault-list-into-vectordb "/path/to/documents/**/*.txt" \
-    --vectordb-path ~/my-vault \
-    --embedding-model mxbai-embed-large:latest \
-    --embedding-source ollama \
+    --vault-path ~/my-vault \
     --overwrite
 ```
 
-The commands above create two searchable tables in your vector database:
-- `full_documents`: Complete documents for broad searches
-- `shingled_chunks`: Overlapping text segments for precise retrieval
+The commands above populate a vault at `~/my-vault` with:
+- `vector_vault/full_documents`: Embeddings for full documents (broad search)
+- `vector_vault/shingled_chunks`: Embeddings for shingled text windows (precise retrieval)
+- `fulltext_vault`: Whoosh full‑text index for keyword search
 
 ---
 
@@ -145,45 +137,51 @@ TalkPipe Vault provides several CLI commands:
 Monitors a directory and automatically processes documents as they're created or modified.
 
 ```bash
-vault-watch-into-vectordb [PATH] [OPTIONS]
+vault-watch-into-vectordb [SOURCE_PATH] [OPTIONS]
 ```
 
 **Options:**
-- `--vectordb-path TEXT`: LanceDB database path (supports `file://`, `memory://`, `tmp://`)
-- `--embedding-model TEXT`: Model name (e.g., `mxbai-embed-large:latest`, `text-embedding-3-small`)
-- `--embedding-source TEXT`: `ollama` or `openai`
-- `--patterns TEXT`: Glob patterns to include (can specify multiple)
-- `--ignore-patterns TEXT`: Glob patterns to exclude
-- `--polling`: Use polling observer instead of native file system events
-- `--overwrite`: Overwrite existing tables (use on first run)
+- `--vault-path TEXT`: Base path for vault storage. Vector DB at `vault_path/vector_vault`, full‑text index at `vault_path/fulltext_vault` (required)
+- `--patterns PATTERN [PATTERN ...]`: Glob patterns to include (e.g., `"*.txt" "*.md"`)
+- `--ignore-patterns PATTERN [PATTERN ...]`: Glob patterns to exclude
+- `--include-directories`: Include directory events (default: ignore directories)
+- `--case-sensitive`: Case‑sensitive pattern matching
+- `--max-events INT`: Maximum number of events to process
+- `--polling`: Use polling observer (fallback when native events unavailable)
+- `--include-common`: Include common temp/hidden files (default: ignore)
+- `--overwrite`: Overwrite existing tables and indexes
+- `--delete-after-reading`: Delete source files after successful indexing
+- `--debounce-seconds FLOAT`: Wait for file stability before processing (default: 1.0; 0 to disable)
 
 **Example:**
 
 ```bash
 vault-watch-into-vectordb ~/Documents \
-    --vectordb-path ~/vault-db \
-    --embedding-model mxbai-embed-large:latest \
-    --embedding-source ollama \
-    --patterns "*.txt" --patterns "*.md" \
+    --vault-path ~/vault-db \
+    --patterns "*.txt" "*.md" \
     --ignore-patterns "*/node_modules/*" \
-    --polling
+    --polling \
+    --overwrite
 ```
 
 #### `vault-list-into-vectordb`
 
-Processes an existing collection of files matching a glob pattern.
+Processes an existing collection of files matching a path or glob pattern.
 
 ```bash
-vault-list-into-vectordb [PATTERN] [OPTIONS]
+vault-list-into-vectordb [SOURCE_PATTERN] [OPTIONS]
 ```
+
+**Options:**
+- `--vault-path TEXT`: Base path for vault storage (required)
+- `--overwrite`: Overwrite existing tables and indexes
+- `--delete-after-reading`: Delete source files after successful indexing
 
 **Example:**
 
 ```bash
 vault-list-into-vectordb "~/Documents/**/*.pdf" \
-    --vectordb-path ~/vault-db \
-    --embedding-model text-embedding-3-small \
-    --embedding-source openai \
+    --vault-path ~/vault-db \
     --overwrite
 ```
 
@@ -296,21 +294,15 @@ list(pipeline())
 
 This composability is what makes TalkPipe powerful—you can build sophisticated AI applications by connecting well-tested components like Lego blocks.
 
-### Vector Database Structure
+### Vault Storage Structure
 
-LanceDB tables created by TalkPipe Vault:
+The vault at `vault_path` contains:
 
-**`full_documents` table:**
-- `path`: Document file path (unique ID)
-- `full_content`: Complete document text
-- `vector`: Embedding of full document
+- `vector_vault/full_documents`: Embeddings for templated full‑document content (unique id is document‑based)
+- `vector_vault/shingled_chunks`: Embeddings for overlapping chunk windows with composite ids like `first-last-source`
+- `fulltext_vault`: Whoosh full‑text index over full document content
 
-**`shingled_chunks` table:**
-- `id`: Composite ID (`{first_para}-{last_para}-{path}`)
-- `path`: Source document path
-- `shingle`: Overlapping text window
-- `shingle_detail`: Metadata (paragraph indices, context)
-- `vector`: Embedding of shingled chunk
+These are produced by the pipelines in [src/talkpipe_vault/pipelines/building_and_watching.py](src/talkpipe_vault/pipelines/building_and_watching.py).
 
 ### Development Setup
 
@@ -343,10 +335,15 @@ bandit -r src/
 safety check
 ```
 
-### Environment Variables
+### Model Configuration & Environment
 
-- `OPENAI_API_KEY`: Required when using `--embedding-source openai`
-- `OLLAMA_BASE_URL`: Ollama server URL (default: `http://localhost:11434`)
+- Models are configured in [src/talkpipe_vault/pipelines/config.py](src/talkpipe_vault/pipelines/config.py):
+    - **Embeddings:** `EMBEDDING_MODEL` (default: `embeddinggemma`), `EMBEDDING_SOURCE` (default: `ollama`)
+    - **Chat:** `CHAT_MODEL` (default: `mistral-small`), `CHAT_SOURCE` (default: `ollama`)
+- To use OpenAI instead, set sources to `"openai"` in the config and ensure:
+    - `OPENAI_API_KEY` is set in your environment
+- For Ollama, you can customize the server with:
+    - `OLLAMA_BASE_URL` (default: `http://localhost:11434`)
 
 ### Project Structure
 
