@@ -30,12 +30,6 @@ dependencies = [
     "fastapi[standard]>=0.104.1",
     "uvicorn>=0.24.0",
     "jinja2>=3.1.2",
-    "python-multipart>=0.0.6",
-    "pydantic>=2.0.0",
-    "fastapi-users[sqlalchemy]>=13.0.0",
-    "sqlalchemy[asyncio]>=2.0.0",
-    "aiosqlite>=0.19.0",
-    "alembic>=1.12.0",
     "watchdog[watchmedo]",
     "docling"
 ]
@@ -177,7 +171,6 @@ watchIntoVectorDB = "talkpipe_vault.pipelines.building_and_watching:watch_into_v
 listIntoVectorDB = "talkpipe_vault.pipelines.building_and_watching:list_into_vector_db"
 
 [project.entry-points."talkpipe.segments"]
-diagPrint = "talkpipe_vault.util:DiagPrint"
 buildVectorDBFromPaths = "talkpipe_vault.pipelines.building_and_watching:build_vector_db_from_paths"
 vaultChat = "talkpipe_vault.pipelines.searching_and_prompting:VaultChat"
 vaultSearch = "talkpipe_vault.pipelines.searching_and_prompting:VaultSearch"

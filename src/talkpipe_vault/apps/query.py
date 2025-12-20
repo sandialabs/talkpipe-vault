@@ -41,6 +41,9 @@ class AppState:
     search_pipeline: Callable[[str], Any] | None = None
     chat_pipeline: Callable[[str], str] | None = None
     keyword_search_pipeline: Callable[[str], list[Any]] | None = None
+    full_documents_count: int = 0
+    shingled_chunks_count: int = 0
+    fulltext_documents_count: int = 0
 
 
 # Application state singleton
@@ -67,6 +70,9 @@ def init_pipelines(vault_path: str) -> None:
         vault_path: Base path for vault storage. Vector DB is located at
             vault_path/vector_vault, full-text index at vault_path/fulltext_vault.
     """
+    import os
+    from pathlib import Path
+    
     _state.vault_path = vault_path
     _state.search_pipeline = VaultSearch(vault_path=vault_path).as_function(
         single_in=True, single_out=True
@@ -77,6 +83,48 @@ def init_pipelines(vault_path: str) -> None:
     _state.keyword_search_pipeline = VaultTextSearch(vault_path=vault_path).as_function(
         single_in=True, single_out=False
     )
+    
+    # Get document counts from storage locations
+    _update_document_counts(vault_path)
+
+
+def _update_document_counts(vault_path: str) -> None:
+    """Update document counts from vault storage locations."""
+    import os
+    from pathlib import Path
+    
+    vectordb_path = os.path.join(vault_path, "vector_vault")
+    whoosh_path = os.path.join(vault_path, "fulltext_vault")
+    
+    # Get counts from LanceDB tables
+    try:
+        from talkpipe.search.lancedb import LanceDBDocumentStore
+        
+        # Full documents count
+        try:
+            db = LanceDBDocumentStore(path=vectordb_path, table_name="full_documents")
+            _state.full_documents_count = db.count()
+        except Exception:
+            _state.full_documents_count = 0
+        
+        # Shingled chunks count
+        try:
+            db = LanceDBDocumentStore(path=vectordb_path, table_name="shingled_chunks")
+            _state.shingled_chunks_count = db.count()
+        except Exception:
+            _state.shingled_chunks_count = 0
+    except Exception:
+        _state.full_documents_count = 0
+        _state.shingled_chunks_count = 0
+    
+    # Get count from Whoosh index
+    try:
+        from whoosh.index import open_dir
+        ix = open_dir(whoosh_path)
+        with ix.searcher() as searcher:
+            _state.fulltext_documents_count = searcher.doc_count_all()
+    except Exception:
+        _state.fulltext_documents_count = 0
 
 
 def _get_field(obj: Any, field: str, default: Any = "") -> Any:
@@ -211,7 +259,13 @@ async def home(
 ) -> HTMLResponse:
     """Render the home page with navigation to search and chat."""
     return templates.TemplateResponse(
-        "home.html", {"request": request, "vault_path": state.vault_path}
+        "home.html", {
+            "request": request,
+            "vault_path": state.vault_path,
+            "full_documents_count": state.full_documents_count,
+            "shingled_chunks_count": state.shingled_chunks_count,
+            "fulltext_documents_count": state.fulltext_documents_count,
+        }
     )
 
 
@@ -222,7 +276,15 @@ async def search_page(
     """Render the semantic search interface page."""
     return templates.TemplateResponse(
         "search.html",
-        {"request": request, "vault_path": state.vault_path, "query": "", "results": None},
+        {
+            "request": request,
+            "vault_path": state.vault_path,
+            "query": "",
+            "results": None,
+            "full_documents_count": state.full_documents_count,
+            "shingled_chunks_count": state.shingled_chunks_count,
+            "fulltext_documents_count": state.fulltext_documents_count,
+        },
     )
 
 
@@ -258,6 +320,9 @@ async def search_results(
             "query": query,
             "results": results,
             "error": error,
+            "full_documents_count": state.full_documents_count,
+            "shingled_chunks_count": state.shingled_chunks_count,
+            "fulltext_documents_count": state.fulltext_documents_count,
         },
     )
 
@@ -269,7 +334,15 @@ async def keyword_search_page(
     """Render the keyword search interface page."""
     return templates.TemplateResponse(
         "keyword_search.html",
-        {"request": request, "vault_path": state.vault_path, "query": "", "results": None},
+        {
+            "request": request,
+            "vault_path": state.vault_path,
+            "query": "",
+            "results": None,
+            "full_documents_count": state.full_documents_count,
+            "shingled_chunks_count": state.shingled_chunks_count,
+            "fulltext_documents_count": state.fulltext_documents_count,
+        },
     )
 
 
@@ -305,6 +378,9 @@ async def keyword_search_results(
             "query": query,
             "results": results,
             "error": error,
+            "full_documents_count": state.full_documents_count,
+            "shingled_chunks_count": state.shingled_chunks_count,
+            "fulltext_documents_count": state.fulltext_documents_count,
         },
     )
 
@@ -316,7 +392,14 @@ async def chat_page(
     """Render the Ask interface page."""
     return templates.TemplateResponse(
         "chat.html",
-        {"request": request, "vault_path": state.vault_path, "messages": []},
+        {
+            "request": request,
+            "vault_path": state.vault_path,
+            "messages": [],
+            "full_documents_count": state.full_documents_count,
+            "shingled_chunks_count": state.shingled_chunks_count,
+            "fulltext_documents_count": state.fulltext_documents_count,
+        },
     )
 
 
@@ -353,6 +436,9 @@ async def chat_response(
             "vault_path": state.vault_path,
             "messages": messages,
             "error": error,
+            "full_documents_count": state.full_documents_count,
+            "shingled_chunks_count": state.shingled_chunks_count,
+            "fulltext_documents_count": state.fulltext_documents_count,
         },
     )
 

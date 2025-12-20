@@ -1,146 +1,16 @@
 import os
-import time
-import threading
-from queue import Queue, Empty
 from typing import Annotated, Any
 from talkpipe import segment, register_segment, source, register_source
 from talkpipe.pipe.io import Print
 from talkpipe.data.extraction import listFiles, ReadFile
 from talkpipe.pipelines.vector_databases import MakeVectorDatabaseSegment
 from talkpipe_vault.watchdog import file_watcher
-from talkpipe.pipe.basic import ToDict, FilterExpression, EvalExpression, setAs, fillTemplate
+from talkpipe.pipe.basic import ToDict, FilterExpression, EvalExpression, setAs, fillTemplate, Debounce
+from talkpipe.pipe.io import FileExistsFilter, DeleteFile
 from talkpipe.util.data_manipulation import extract_property
 from talkpipe.data.text.chunking_units import splitText, ShingleText
 from talkpipe.search.whoosh import indexWhoosh
 from .config import EMBEDDING_MODEL, EMBEDDING_SOURCE, DOCUMENT_TEMPLATE, SHINGLE_TEMPLATE
-
-
-@register_segment("debounce")
-@segment()
-def Debounce(items: Any,
-             key_field: Annotated[str, "Field name to use as the debounce key"] = "path",
-             debounce_seconds: Annotated[float, "Seconds to wait for stability before yielding"] = 1.0):
-    """
-    Segment that debounces events by a key field, waiting for stability before yielding.
-
-    Expects input items as dicts with a field to use as the debounce key (default: "path").
-    When multiple events arrive for the same key, only the last event is yielded after
-    no new events have arrived for that key within the debounce period.
-
-    This is useful for handling race conditions where files are created and then
-    immediately modified (e.g., create with 0 bytes, then write content). The debounce
-    ensures processing only happens after the file has stabilized.
-
-    Yields the most recent event for each key after the debounce period expires.
-    """
-    pending = {}  # key -> (item, timestamp)
-    lock = threading.Lock()
-    output_queue = Queue()
-    stop_event = threading.Event()
-    input_done = threading.Event()
-
-    def add_pending(item):
-        key = item.get(key_field) if isinstance(item, dict) else None
-        if key is None:
-            output_queue.put(item)
-            return
-        with lock:
-            pending[key] = (item, time.time())
-
-    def input_consumer():
-        try:
-            for item in items:
-                if stop_event.is_set():
-                    break
-                add_pending(item)
-        finally:
-            input_done.set()
-
-    def checker():
-        while not stop_event.is_set():
-            time.sleep(0.1)
-            now = time.time()
-            with lock:
-                stable_keys = [
-                    k for k, (item, ts) in pending.items()
-                    if now - ts >= debounce_seconds
-                ]
-                for k in stable_keys:
-                    item, _ = pending.pop(k)
-                    output_queue.put(item)
-
-            # Signal completion when input is done and no pending items
-            if input_done.is_set():
-                with lock:
-                    if not pending:
-                        output_queue.put(None)  # Sentinel to signal done
-                        break
-
-    input_thread = threading.Thread(target=input_consumer, daemon=True)
-    checker_thread = threading.Thread(target=checker, daemon=True)
-    input_thread.start()
-    checker_thread.start()
-
-    try:
-        while True:
-            item = output_queue.get()
-            if item is None:  # Sentinel
-                break
-            yield item
-    finally:
-        stop_event.set()
-        input_thread.join(timeout=1.0)
-        checker_thread.join(timeout=1.0)
-
-
-@register_segment("fileExistsFilter")
-@segment()
-def FileExistsFilter(items: Any,
-                       path_field: Annotated[str, "Field name containing the file path to check"] = "path"):
-    """
-    Segment that filters out items where the file path doesn't exist.
-
-    Expects input items as dicts with a field containing a file path.
-    Only yields items where the file exists on the filesystem.
-
-    This is useful for handling race conditions where files are deleted
-    between watchdog detection and processing, or for filtering out
-    temporary files that may have been cleaned up.
-
-    Yields items where the specified path field points to an existing file.
-    """
-    for item in items:
-        path = item.get(path_field)
-        if path and os.path.exists(path):
-            yield item
-
-
-@register_segment("deleteFile")
-@segment()
-def DeleteFile(items: Any,
-               path_field: Annotated[str, "Field name containing the file path to delete"] = "source"):
-    """
-    Segment that deletes source files after yielding items.
-
-    Expects input items as dicts or pydantic objects with a field containing a file path.
-    Yields all items unchanged, but deletes the source file after each item is yielded.
-
-    This is useful for cleaning up source files after they've been successfully
-    indexed into the vault. Use with caution as deletion is permanent.
-
-    Silently skips deletion if the file doesn't exist or can't be deleted.
-    """
-    for item in items:
-        yield item
-        # Delete the file after yielding to ensure downstream processing can complete
-        path = extract_property(item, path_field, fail_on_missing=True)
-        if path and os.path.exists(path):
-            try:
-                os.remove(path)
-            except (OSError, PermissionError) as e:
-                # Log but don't fail if we can't delete
-                import logging
-                logging.warning(f"Failed to delete {path}: {e}")
 
 _LANCEDB_BATCH_SIZE = 1000
 
