@@ -1,6 +1,11 @@
 """Unit tests for the docling_extract function."""
 
 from pathlib import Path
+import pytest
+
+# Skip all tests in this module if docling is not installed
+pytest.importorskip("docling")
+
 from talkpipe import compile
 from talkpipe.data.extraction import ExtractionResult
 from talkpipe_vault.docling import docling_extract

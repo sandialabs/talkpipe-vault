@@ -8,21 +8,23 @@ services:
       target: runtime
     container_name: vault
     ports:
-      - "8001:8001"
+      - "${VAULT_PORT:-8002}:${VAULT_PORT:-8002}"
     volumes:
-      # Database volume - persists user data, documents, and snapshots
-      - vault_db:/app/data
+      # Watch directory - mount your documents here to be indexed
+      - ${VAULT_WATCH_DIR:-./watch}:/watch
+      # Vault storage - where LanceDB and Whoosh indices are stored
+      - ${VAULT_PATH:-./vault}:/vault
     env_file:
-      - .env.podman.NOCOMMIT
+      - .env
     environment:
-      - VAULT_HOST=0.0.0.0
-      - VAULT_PORT=8001
-      - VAULT_DB_PATH=/app/data/vault.db
-      - VAULT_SECRET=${VAULT_SECRET:-CHANGE_THIS_IN_PRODUCTION}
       - PYTHONUNBUFFERED=1
+      - VAULT_PATH=/vault
+      - VAULT_WATCH_DIR=/watch
+      - VAULT_HOST=${VAULT_HOST:-0.0.0.0}
+      - VAULT_PORT=${VAULT_PORT:-8002}
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import vault; print('OK')"]
+      test: ["CMD", "python", "-c", "import talkpipe_vault; print('OK')"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -40,21 +42,20 @@ services:
       target: builder
     container_name: vault-dev
     ports:
-      - "8001:8001"
+      - "${VAULT_PORT:-8002}:${VAULT_PORT:-8002}"
     volumes:
       - .:/app
       - vault_dev_cache:/home/builder/.cache
-      - vault_dev_db:/app/data
-    env_file:
-      - .env.podman.NOCOMMIT
+      - ${VAULT_WATCH_DIR:-./watch}:/watch
+      - ${VAULT_PATH:-./vault}:/vault
     environment:
-      - VAULT_HOST=0.0.0.0
-      - VAULT_PORT=8001
-      - VAULT_DB_PATH=/app/data/vault.db
-      - VAULT_SECRET=${VAULT_SECRET:-DEV_SECRET_CHANGE_IN_PRODUCTION}
       - PYTHONUNBUFFERED=1
+      - VAULT_PATH=/vault
+      - VAULT_WATCH_DIR=/watch
+      - VAULT_HOST=${VAULT_HOST:-0.0.0.0}
+      - VAULT_PORT=${VAULT_PORT:-8002}
     working_dir: /app
-    command: ["python", "-m", "uvicorn", "src.vault.app.main:app", "--host", "0.0.0.0", "--port", "8001", "--reload"]
+    command: ["python", "-m", "uvicorn", "src.talkpipe_vault.apps.query:app", "--host", "0.0.0.0", "--port", "8002", "--reload"]
     extra_hosts:  # <--- ADD THIS
       - "host.containers.internal:host-gateway"
     networks:
@@ -63,12 +64,6 @@ services:
       - dev
 
 volumes:
-  # Database volume for production
-  vault_db:
-    driver: local
-  # Database volume for development
-  vault_dev_db:
-    driver: local
   # Build cache for development
   vault_dev_cache:
     driver: local

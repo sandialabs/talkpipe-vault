@@ -17,6 +17,8 @@ RUN dnf update -y && \
         libxml2-devel \
         libxslt-devel \
         openssl-devel \
+        libglvnd-glx \
+        mesa-libGL \
         && dnf clean all
 
 # Create build user
@@ -39,9 +41,13 @@ COPY --chown=builder:builder tests/ tests/
 
 # Install Python dependencies and build the package
 RUN python3 -m pip install --user --upgrade pip setuptools wheel build
+# Pre-install numpy with pre-built wheels to avoid compilation issues
+RUN python3 -m pip install --user --only-binary=:all: numpy
 ENV SETUPTOOLS_SCM_PRETEND_VERSION_FOR_TALKPIPE_VAULT=0.1.0
-RUN python3 -m pip install --user -e .[dev]
-RUN python3 -m pytest --log-cli-level=DEBUG || true  # Allow tests to fail during build
+RUN python3 -m pip install --user -e .[dev,docling]
+# Run tests - they will be skipped if ollama is not available
+# If ollama is available, tests must pass or the build fails
+RUN python3 -m pytest tests/ --log-cli-level=INFO
 RUN python3 -m build --wheel
 
 # Stage 2: Runtime stage with minimal dependencies
@@ -53,6 +59,8 @@ RUN dnf update -y && \
         python3 \
         python3-pip \
         git \
+        libglvnd-glx \
+        mesa-libGL \
         && dnf clean all && \
         rm -rf /var/cache/dnf
 
@@ -63,45 +71,53 @@ RUN groupadd -r -g 1001 app && \
 
 # Set up application directory
 WORKDIR /app
-RUN mkdir -p /app/data /tmp/numba_cache && \
+RUN mkdir -p /app/data /app/watch /tmp/numba_cache && \
     chown -R app:app /app && \
     chmod 777 /tmp/numba_cache
 
 # Copy the built wheel from builder stage
 COPY --from=builder --chown=app:app /build/dist/*.whl /tmp/
 
-# Install runtime Python dependencies and the application
+# Install runtime Python dependencies with binary wheels where possible
 RUN python3 -m pip install --no-cache-dir --upgrade pip && \
+    python3 -m pip install --no-cache-dir --only-binary=:all: numpy && \
+    python3 -m pip install --no-cache-dir accelerate && \
+    python3 -m pip install --no-cache-dir --no-deps docling && \
     python3 -m pip install --no-cache-dir /tmp/*.whl && \
     rm -f /tmp/*.whl
 
 # Copy only necessary runtime files
 COPY --chown=app:app pyproject.toml ./
 
-# Create data volume mount point for the database
-VOLUME ["/app/data"]
+# Copy entrypoint script
+COPY --chown=app:app entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+
+# Create volume mount points for watch and vault directories
+VOLUME ["/watch", "/vault"]
 
 # Switch to non-root user
 USER app
 
 # Expose the application port
-EXPOSE 8001
+EXPOSE 8002
 
 # Health check to ensure the application starts correctly
-# Checks that Python imports work and database is accessible
+# Checks that Python imports work
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD python3 -c "import vault; import os; db_path=os.getenv('VAULT_DB_PATH', '/app/data/vault.db'); print(f'Health check passed, DB: {db_path}')" || exit 1
+    CMD python3 -c "import talkpipe_vault; print('OK')" || exit 1
 
 # Set environment variables for better container behavior
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
+    PIP_PREFER_BINARY=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     NUMBA_CACHE_DIR=/tmp/numba_cache \
+    VAULT_PATH=/vault \
+    VAULT_WATCH_DIR=/watch \
     VAULT_HOST=0.0.0.0 \
-    VAULT_PORT=8001 \
-    VAULT_DB_PATH=/app/data/vault.db \
-    VAULT_SECRET=CHANGE_THIS_IN_PRODUCTION_PLEASE
+    VAULT_PORT=8002
 
-# Default command to run the application
-CMD ["python3", "-m", "vault.app.server"]
+# Default command runs both watcher and web app
+CMD ["/app/entrypoint.sh"]

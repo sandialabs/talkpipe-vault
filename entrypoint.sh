@@ -1,0 +1,33 @@
+#!/bin/bash
+set -e
+
+# Default values
+VAULT_PATH="${VAULT_PATH:-/vault}"
+VAULT_WATCH_DIR="${VAULT_WATCH_DIR:-/watch}"
+VAULT_HOST="${VAULT_HOST:-0.0.0.0}"
+VAULT_PORT="${VAULT_PORT:-8002}"
+
+echo "Starting TalkPipe Vault..."
+echo "  Vault storage: ${VAULT_PATH}"
+echo "  Watch directory: ${VAULT_WATCH_DIR}"
+echo "  Web server: ${VAULT_HOST}:${VAULT_PORT}"
+
+# Start the file watcher in the background
+echo "Starting file watcher..."
+vault-watch-into-vectordb "${VAULT_WATCH_DIR}" \
+    --vault-path "${VAULT_PATH}" \
+    --polling \
+    --debounce-seconds 2.0 \
+    &
+
+WATCHER_PID=$!
+echo "File watcher started (PID: ${WATCHER_PID})"
+
+# Give the watcher a moment to initialize
+sleep 2
+
+# Start the web application in the foreground
+echo "Starting web application..."
+exec vault-query "${VAULT_PATH}" \
+    --host "${VAULT_HOST}" \
+    --port "${VAULT_PORT}"
