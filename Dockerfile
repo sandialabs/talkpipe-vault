@@ -17,8 +17,8 @@ RUN dnf update -y && \
         libxml2-devel \
         libxslt-devel \
         openssl-devel \
-        libglvnd-glx \
-        mesa-libGL \
+        java-21-openjdk \
+        java-21-openjdk-devel \
         && dnf clean all
 
 # Create build user
@@ -44,7 +44,7 @@ RUN python3 -m pip install --user --upgrade pip setuptools wheel build
 # Pre-install numpy with pre-built wheels to avoid compilation issues
 RUN python3 -m pip install --user --only-binary=:all: numpy
 ENV SETUPTOOLS_SCM_PRETEND_VERSION_FOR_TALKPIPE_VAULT=0.1.0
-RUN python3 -m pip install --user -e .[dev,docling]
+RUN python3 -m pip install --user -e .[dev,tika]
 # Run tests - they will be skipped if ollama is not available
 # If ollama is available, tests must pass or the build fails
 RUN python3 -m pytest tests/ --log-cli-level=INFO
@@ -53,7 +53,7 @@ RUN python3 -m build --wheel
 # Stage 2: Runtime stage with minimal dependencies
 FROM fedora:latest AS runtime
 
-# Install runtime system dependencies including docling requirements
+# Install runtime system dependencies including tika requirements
 RUN dnf update -y && \
     dnf install -y \
         python3 \
@@ -61,8 +61,7 @@ RUN dnf update -y && \
         git \
         libxml2 \
         libxslt \
-        libglvnd-glx \
-        mesa-libGL \
+        java-21-openjdk-headless \
         && dnf clean all && \
         rm -rf /var/cache/dnf
 
@@ -83,8 +82,7 @@ COPY --from=builder --chown=app:app /build/dist/*.whl /tmp/
 # Install runtime Python dependencies with binary wheels where possible
 RUN python3 -m pip install --no-cache-dir --upgrade pip && \
     python3 -m pip install --no-cache-dir --only-binary=:all: numpy && \
-    python3 -m pip install --no-cache-dir accelerate && \
-    python3 -m pip install --no-cache-dir docling && \
+    python3 -m pip install --no-cache-dir tika && \
     python3 -m pip install --no-cache-dir /tmp/*.whl && \
     rm -f /tmp/*.whl
 

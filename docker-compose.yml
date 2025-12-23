@@ -24,12 +24,12 @@ services:
       - VAULT_PORT=${VAULT_PORT:-8002}
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import talkpipe_vault; print('OK')"]
+      test: ["CMD", "python3", "-c", "import talkpipe_vault; print('OK')"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 60s
-    extra_hosts:  # <--- ADD THIS
+    extra_hosts:
       - "host.containers.internal:host-gateway"
     networks:
       - vault-network
@@ -55,8 +55,8 @@ services:
       - VAULT_HOST=${VAULT_HOST:-0.0.0.0}
       - VAULT_PORT=${VAULT_PORT:-8002}
     working_dir: /app
-    command: ["python", "-m", "uvicorn", "src.talkpipe_vault.apps.query:app", "--host", "0.0.0.0", "--port", "8002", "--reload"]
-    extra_hosts:  # <--- ADD THIS
+    command: ["python3", "-m", "uvicorn", "src.talkpipe_vault.apps.query:app", "--host", "0.0.0.0", "--port", "8002", "--reload"]
+    extra_hosts:
       - "host.containers.internal:host-gateway"
     networks:
       - vault-network
