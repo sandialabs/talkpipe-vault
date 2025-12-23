@@ -35,6 +35,9 @@ dependencies = [
 dynamic = ["version"]
 
 [project.optional-dependencies]
+tika = [
+    "tika"
+]
 docling = [
     "docling"
 ]
@@ -153,6 +156,7 @@ module = [
     "talkpipe.*",
     "uvicorn.*",
     "docling.*",
+    "tika.*",
     "watchdog.*",
 ]
 ignore_missing_imports = true
@@ -177,3 +181,5 @@ buildVectorDBFromPaths = "talkpipe_vault.pipelines.building_and_watching:build_v
 vaultChat = "talkpipe_vault.pipelines.searching_and_prompting:VaultChat"
 vaultSearch = "talkpipe_vault.pipelines.searching_and_prompting:VaultSearch"
 vaultTextSearch = "talkpipe_vault.pipelines.searching_and_prompting:VaultTextSearch"
+tikaToText = "talkpipe_vault.segments:TikaToText"
+doclingToText = "talkpipe_vault.segments:DoclingToText"

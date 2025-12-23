@@ -53,12 +53,14 @@ RUN python3 -m build --wheel
 # Stage 2: Runtime stage with minimal dependencies
 FROM fedora:latest AS runtime
 
-# Install only runtime system dependencies
+# Install runtime system dependencies including docling requirements
 RUN dnf update -y && \
     dnf install -y \
         python3 \
         python3-pip \
         git \
+        libxml2 \
+        libxslt \
         libglvnd-glx \
         mesa-libGL \
         && dnf clean all && \
@@ -82,7 +84,7 @@ COPY --from=builder --chown=app:app /build/dist/*.whl /tmp/
 RUN python3 -m pip install --no-cache-dir --upgrade pip && \
     python3 -m pip install --no-cache-dir --only-binary=:all: numpy && \
     python3 -m pip install --no-cache-dir accelerate && \
-    python3 -m pip install --no-cache-dir --no-deps docling && \
+    python3 -m pip install --no-cache-dir docling && \
     python3 -m pip install --no-cache-dir /tmp/*.whl && \
     rm -f /tmp/*.whl
 
