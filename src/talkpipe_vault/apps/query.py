@@ -7,6 +7,7 @@ Provides three interaction modes via web interface:
 - Ask: Single-turn RAG-based Q&A interface
 """
 import argparse
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Any, Callable
@@ -44,6 +45,7 @@ class AppState:
     full_documents_count: int = 0
     shingled_chunks_count: int = 0
     fulltext_documents_count: int = 0
+    last_refresh_time: float = 0.0
 
 
 # Application state singleton
@@ -74,6 +76,40 @@ def init_pipelines(vault_path: str) -> None:
     from pathlib import Path
     
     _state.vault_path = vault_path
+    _refresh_pipelines()
+    
+    # Get document counts from storage locations
+    _update_document_counts(vault_path)
+
+
+def _refresh_pipelines(force: bool = False) -> None:
+    """
+    Refresh/reinitialize the pipelines to ensure fresh database connections.
+    
+    This is useful when new documents are added to ensure the pipelines
+    see the latest data from the databases.
+    
+    Args:
+        force: If True, always refresh. If False, refresh only if more than
+            5 seconds have passed since last refresh (to avoid excessive refreshes).
+            Set to False to disable automatic refresh (for testing).
+    """
+    import time
+    
+    vault_path = _state.vault_path
+    if not vault_path:
+        return
+    
+    # For testing: can disable refresh by setting environment variable
+    # This allows us to verify the problem exists without the fix
+    if os.environ.get("DISABLE_PIPELINE_REFRESH", "").lower() == "true":
+        return
+    
+    current_time = time.time()
+    # Refresh if forced or if more than 5 seconds have passed
+    if not force and (current_time - _state.last_refresh_time) < 5.0:
+        return
+    
     _state.search_pipeline = VaultSearch(vault_path=vault_path).as_function(
         single_in=True, single_out=True
     )
@@ -83,9 +119,7 @@ def init_pipelines(vault_path: str) -> None:
     _state.keyword_search_pipeline = VaultTextSearch(vault_path=vault_path).as_function(
         single_in=True, single_out=False
     )
-    
-    # Get document counts from storage locations
-    _update_document_counts(vault_path)
+    _state.last_refresh_time = current_time
 
 
 def _update_document_counts(vault_path: str) -> None:
@@ -258,6 +292,8 @@ async def home(
     request: Request, state: AppState = Depends(get_state)
 ) -> HTMLResponse:
     """Render the home page with navigation to search and chat."""
+    # Refresh document counts on home page load
+    _update_document_counts(state.vault_path)
     return templates.TemplateResponse(
         "home.html", {
             "request": request,
@@ -267,6 +303,18 @@ async def home(
             "fulltext_documents_count": state.fulltext_documents_count,
         }
     )
+
+
+@app.post("/refresh", response_class=HTMLResponse)
+async def refresh(
+    request: Request, state: AppState = Depends(get_state)
+) -> HTMLResponse:
+    """Refresh pipelines and document counts, then redirect to home."""
+    _refresh_pipelines(force=True)
+    _update_document_counts(state.vault_path)
+    # Redirect to home page
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url="/", status_code=303)
 
 
 @app.get("/search", response_class=HTMLResponse)
@@ -307,6 +355,11 @@ async def search_results(
 
     if query.strip() and state.search_pipeline:
         try:
+            # Refresh pipelines to ensure fresh database connections
+            _refresh_pipelines()
+            # Update document counts to reflect latest state
+            _update_document_counts(state.vault_path)
+            # Perform search with refreshed pipeline
             raw_results = state.search_pipeline(query)
             results = _process_semantic_results(raw_results)
         except Exception as e:
@@ -365,6 +418,11 @@ async def keyword_search_results(
 
     if query.strip() and state.keyword_search_pipeline:
         try:
+            # Refresh pipelines to ensure fresh database connections
+            _refresh_pipelines()
+            # Update document counts to reflect latest state
+            _update_document_counts(state.vault_path)
+            # Perform search with refreshed pipeline
             raw_results = list(state.keyword_search_pipeline(query))
             results = _process_keyword_results(raw_results)
         except Exception as e:
@@ -424,6 +482,11 @@ async def chat_response(
         messages.append({"role": "user", "content": message})
 
         try:
+            # Refresh pipelines to ensure fresh database connections
+            _refresh_pipelines()
+            # Update document counts to reflect latest state
+            _update_document_counts(state.vault_path)
+            # Perform chat with refreshed pipeline
             response = state.chat_pipeline(message)
             messages.append({"role": "assistant", "content": response})
         except Exception as e:

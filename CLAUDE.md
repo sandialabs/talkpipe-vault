@@ -47,11 +47,11 @@ src/talkpipe_vault/
 ### CLI Commands
 ```bash
 # Watch directory and build vector DB in real-time
-vault-watch-into-vectordb /path/to/docs --vectordb-path ~/my-vault \
-    --embedding-model mxbai-embed-large:latest --embedding-source ollama
+vault-watch-into-vectordb /path/to/docs --vault-path ~/my-vault \
+    --patterns "*.txt" "*.md" --polling
 
 # Batch process files into vector DB
-vault-list-into-vectordb "/path/to/docs/**/*.pdf" --vectordb-path ~/my-vault
+vault-list-into-vectordb "/path/to/docs/**/*.pdf" --vault-path ~/my-vault
 ```
 
 ## Development Commands

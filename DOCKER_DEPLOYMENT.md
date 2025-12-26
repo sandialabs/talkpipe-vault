@@ -50,8 +50,9 @@ Create a `.env` file in this directory:
 
 ```bash
 # .env file
-VAULT_WATCH_DIR=./watch
-VAULT_PATH=./vault
+# Container paths (these are fixed - /watch and /vault inside the container)
+VAULT_WATCH_DIR=/watch
+VAULT_PATH=/vault
 VAULT_HOST=0.0.0.0
 VAULT_PORT=8002
 
@@ -59,6 +60,8 @@ VAULT_PORT=8002
 OPENAI_API_KEY=sk-your-key-here
 # OLLAMA_BASE_URL=http://host.containers.internal:11434
 ```
+
+**Important**: The `VAULT_WATCH_DIR` and `VAULT_PATH` in the `.env` file should be the container paths (`/watch` and `/vault`), not the host paths. The host paths are specified in the volume mounts when running the container.
 
 Run the container with Docker:
 
@@ -127,8 +130,8 @@ The container is configured via environment variables, typically set in a `.env`
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `VAULT_WATCH_DIR` | Host path to watch for documents | `./watch` |
-| `VAULT_PATH` | Host path for vault storage (indices) | `./vault` |
+| `VAULT_WATCH_DIR` | Container path to watch for documents (maps to `/watch` in container) | `/watch` |
+| `VAULT_PATH` | Container path for vault storage (maps to `/vault` in container) | `/vault` |
 | `VAULT_HOST` | Web server bind address | `0.0.0.0` |
 | `VAULT_PORT` | Web server port | `8002` |
 | `OPENAI_API_KEY` | OpenAI API key (optional) | - |
@@ -137,9 +140,10 @@ The container is configured via environment variables, typically set in a `.env`
 ### Example .env File
 
 ```env
-# Directory paths (relative to where you run docker/podman)
-VAULT_WATCH_DIR=./watch
-VAULT_PATH=./vault
+# Container paths (these are fixed - /watch and /vault inside the container)
+# The host paths are specified in the volume mounts when running the container
+VAULT_WATCH_DIR=/watch
+VAULT_PATH=/vault
 
 # Web server
 VAULT_HOST=0.0.0.0
@@ -232,15 +236,15 @@ docker run -d --name talkpipe-vault --env-file .env \
 mkdir ~/talkpipe-production
 cd ~/talkpipe-production
 
-# Create .env with absolute paths
+# Create .env with container paths
 cat > .env << 'EOF'
-VAULT_WATCH_DIR=/home/user/documents
-VAULT_PATH=/home/user/vault-data
+VAULT_WATCH_DIR=/watch
+VAULT_PATH=/vault
 VAULT_PORT=8002
 OPENAI_API_KEY=sk-...
 EOF
 
-# Run
+# Run (host paths specified in volume mounts)
 podman run -d --name vault --env-file .env \
   -p 8002:8002 \
   -v /home/user/documents:/watch:Z \
@@ -254,8 +258,8 @@ podman run -d --name vault --env-file .env \
 # Vault 1: Personal documents on port 8002
 mkdir -p ~/vault1 && cd ~/vault1
 cat > .env << EOF
-VAULT_WATCH_DIR=./watch
-VAULT_PATH=./vault
+VAULT_WATCH_DIR=/watch
+VAULT_PATH=/vault
 VAULT_PORT=8002
 EOF
 
@@ -268,8 +272,8 @@ podman run -d --name vault-personal --env-file .env \
 # Vault 2: Work documents on port 8003
 mkdir -p ~/vault2 && cd ~/vault2
 cat > .env << EOF
-VAULT_WATCH_DIR=./watch
-VAULT_PATH=./vault
+VAULT_WATCH_DIR=/watch
+VAULT_PATH=/vault
 VAULT_PORT=8003
 EOF
 
@@ -414,8 +418,16 @@ VAULT_PORT=8003
 
 **Volume permission errors (Podman):**
 ```bash
-# Add :Z flag for SELinux
-podman run -v "$(pwd)/vault:/vault:Z" ...
+# Option 1: Use --userns=keep-id to map your user ID into the container
+podman run --userns=keep-id --user $(id -u):$(id -g) -v "$(pwd)/vault:/vault:Z" ...
+
+# Option 2: Add :Z flag for SELinux (if using root in container)
+podman run --user 0:0 -v "$(pwd)/vault:/vault:Z" ...
+
+# Option 3: Export UID/GID and use docker-compose
+export UID=$(id -u)
+export GID=$(id -g)
+podman-compose up --userns=keep-id
 ```
 
 **Watch directory not accessible:**
@@ -474,17 +486,36 @@ sudo firewall-cmd --reload
 
 ### Index Lock Issues
 
-If you see index lock errors (rare):
+If you see `PermissionError: [Errno 13] Permission denied: '/vault/fulltext_vault/MAIN_WRITELOCK'`:
 
+**1. Check host directory permissions:**
 ```bash
-# Restart the container
-docker restart talkpipe-vault
+# Ensure the vault directory is writable
+ls -ld /home/travis/vaultdb
+# If needed, fix permissions (be careful with this)
+sudo chmod -R u+rwX /home/travis/vaultdb
+sudo chown -R $(id -u):$(id -g) /home/travis/vaultdb
+```
 
-# Or stop, remove, and restart
-docker stop talkpipe-vault
-docker rm talkpipe-vault
+**2. Clean up stale lock files:**
+```bash
+# Remove stale Whoosh lock files
+find /home/travis/vaultdb/fulltext_vault -name "*LOCK" -type f -delete
+```
+
+**3. Restart the container:**
+```bash
+podman stop talkpipe-vault
+podman rm talkpipe-vault
 # Run command again
 ```
+
+**4. For Podman with SELinux, ensure `:Z` flag is used:**
+```bash
+podman run -v /home/travis/vaultdb:/vault:Z ...
+```
+
+The entrypoint script now automatically cleans up stale lock files older than 10 minutes on startup.
 
 ### High Memory/CPU Usage
 
@@ -655,8 +686,9 @@ Complete example for a production deployment:
 
 ```env
 # production-vault/.env
-VAULT_WATCH_DIR=./watch
-VAULT_PATH=./vault
+# Container paths (these are fixed - /watch and /vault inside the container)
+VAULT_WATCH_DIR=/watch
+VAULT_PATH=/vault
 VAULT_HOST=0.0.0.0
 VAULT_PORT=8002
 

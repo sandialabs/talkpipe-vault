@@ -7,8 +7,7 @@ services:
       dockerfile: Dockerfile
       target: runtime
     container_name: vault
-    ports:
-      - "${VAULT_PORT:-8002}:${VAULT_PORT:-8002}"
+    network_mode: host
     volumes:
       # Watch directory - mount your documents here to be indexed
       - ${VAULT_WATCH_DIR:-./watch}:/watch
@@ -29,10 +28,13 @@ services:
       timeout: 10s
       retries: 3
       start_period: 60s
-    extra_hosts:
-      - "host.containers.internal:host-gateway"
-    networks:
-      - vault-network
+    security_opt:
+      - label=disable
+    # Run as the same UID/GID as the user running podman/docker
+    # This allows the container to access files owned by the host user
+    # For podman, use: podman-compose with --userns=keep-id flag
+    # For docker, this works directly
+    user: "${UID:-1000}:${GID:-1000}"
 
   # Development service for local development
   vault-dev:
@@ -41,8 +43,7 @@ services:
       dockerfile: Dockerfile
       target: builder
     container_name: vault-dev
-    ports:
-      - "${VAULT_PORT:-8002}:${VAULT_PORT:-8002}"
+    network_mode: host
     volumes:
       - .:/app
       - vault_dev_cache:/home/builder/.cache
@@ -56,10 +57,10 @@ services:
       - VAULT_PORT=${VAULT_PORT:-8002}
     working_dir: /app
     command: ["python3", "-m", "uvicorn", "src.talkpipe_vault.apps.query:app", "--host", "0.0.0.0", "--port", "8002", "--reload"]
-    extra_hosts:
-      - "host.containers.internal:host-gateway"
-    networks:
-      - vault-network
+    security_opt:
+      - label=disable
+    # Run as the same UID/GID as the user running podman/docker
+    user: "${UID:-1000}:${GID:-1000}"
     profiles:
       - dev
 
@@ -67,7 +68,3 @@ volumes:
   # Build cache for development
   vault_dev_cache:
     driver: local
-
-networks:
-  vault-network:
-    driver: bridge

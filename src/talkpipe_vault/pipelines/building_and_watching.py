@@ -12,14 +12,14 @@ from talkpipe.data.text.chunking_units import splitText, ShingleText
 from talkpipe.search.whoosh import indexWhoosh
 from .config import EMBEDDING_MODEL, EMBEDDING_SOURCE, DOCUMENT_TEMPLATE, SHINGLE_TEMPLATE
 
-_LANCEDB_BATCH_SIZE = 1000
-
 @register_segment("buildVectorDBFromPaths")
 @segment()
 def build_vector_db_from_paths(items: Any,
                                vault_path: Annotated[str, "Base path for vault storage. Vector DB stored at vault_path/vector_vault, full-text index at vault_path/fulltext_vault"],
                                overwrite: Annotated[bool, "If true, overwrite existing tables and indexes"] = False,
-                               delete_after_reading: Annotated[bool, "If true, delete source files after successfully indexing them"] = False):
+                               delete_after_reading: Annotated[bool, "If true, delete source files after successfully indexing them"] = False,
+                               batch_size: Annotated[int, "LanceDB batch size for writes. Smaller values ensure immediate availability but may reduce performance for bulk operations."] = 1,
+                               commit_seconds: Annotated[float, "Whoosh index commit interval in seconds. 0 for immediate commits, higher values batch commits for performance."] = 0):
     """
     Segment that builds a vector database and full-text search index from file paths.
 
@@ -69,14 +69,14 @@ def build_vector_db_from_paths(items: Any,
         doc_id_field="id",
         overwrite=overwrite,
         fail_on_error=False,
-        batch_size=_LANCEDB_BATCH_SIZE,
+        batch_size=batch_size,
         optimize_on_batch=True) | \
     setAs(field_list="id:doc_id") | \
     indexWhoosh(
         index_path=whoosh_index_path,
         field_list="content:content,source:path,title:filename",
         overwrite=overwrite,
-        commit_seconds=120) | \
+        commit_seconds=commit_seconds) | \
     ToDict(field_list="id,content,title,source") | \
     splitText(field="content", criteria=500, set_as="chunk") | \
     FilterExpression(expression="item.get('chunk') and len(item.get('chunk', '').strip()) > 0") | \
@@ -95,7 +95,7 @@ def build_vector_db_from_paths(items: Any,
         doc_id_field="shingle_id",
         overwrite=False,
         fail_on_error=False,
-        batch_size=_LANCEDB_BATCH_SIZE,
+        batch_size=batch_size,
         optimize_on_batch=True) | \
     ToDict(field_list="shingle_id,shingle,source,title")
     yield from pipeline(items)
@@ -149,14 +149,18 @@ def watch_into_vector_db(source_path: Annotated[str, "Path to watch"],
         build_vector_db_from_paths(
             vault_path=vault_path,
             overwrite=overwrite,
-            delete_after_reading=delete_after_reading)
+            delete_after_reading=delete_after_reading,
+            batch_size=1,
+            commit_seconds=0)
     else:
         pipeline = watcher | \
         Print() | \
         build_vector_db_from_paths(
             vault_path=vault_path,
             overwrite=overwrite,
-            delete_after_reading=delete_after_reading)
+            delete_after_reading=delete_after_reading,
+            batch_size=1,
+            commit_seconds=0)
 
     yield from pipeline()
 
@@ -184,5 +188,7 @@ def list_into_vector_db(source_pattern: Annotated[str, "Glob pattern to match fi
     build_vector_db_from_paths(
         vault_path=vault_path,
         overwrite=overwrite,
-        delete_after_reading=delete_after_reading)
+        delete_after_reading=delete_after_reading,
+        batch_size=1000,
+        commit_seconds=120)
     yield from pipeline([source_pattern])
