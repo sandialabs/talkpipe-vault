@@ -337,13 +337,143 @@ safety check
 
 ### Model Configuration & Environment
 
-- Models are configured in [src/talkpipe_vault/pipelines/config.py](src/talkpipe_vault/pipelines/config.py):
-    - **Embeddings:** `EMBEDDING_MODEL` (default: `embeddinggemma`), `EMBEDDING_SOURCE` (default: `ollama`)
-    - **Chat:** `CHAT_MODEL` (default: `mistral-small`), `CHAT_SOURCE` (default: `ollama`)
-- To use OpenAI instead, set sources to `"openai"` in the config and ensure:
-    - `OPENAI_API_KEY` is set in your environment
-- For Ollama, you can customize the server with:
-    - `OLLAMA_BASE_URL` (default: `http://localhost:11434`)
+TalkPipe Vault supports flexible model configuration through multiple methods, with the following precedence (highest to lowest):
+
+1. **Explicit parameters** in code/CLI (always takes precedence)
+2. **TalkPipe configuration** (from `~/.talkpipe.toml` or `TALKPIPE_*` environment variables)
+3. **Default values** in `config.py` (fallback)
+
+#### Configuration Methods
+
+**Method 1: TalkPipe Config File (`~/.talkpipe.toml`)**
+
+Create or edit `~/.talkpipe.toml`:
+
+```toml
+[vault]
+embedding_model = "text-embedding-3-large"
+embedding_source = "openai"
+chat_model = "gpt-4"
+chat_source = "openai"
+```
+
+Or use top-level keys:
+
+```toml
+embedding_model = "text-embedding-3-large"
+embedding_source = "openai"
+chat_model = "gpt-4"
+chat_source = "openai"
+```
+
+**Method 2: Environment Variables**
+
+Set environment variables with `TALKPIPE_` prefix:
+
+```bash
+export TALKPIPE_EMBEDDING_MODEL="text-embedding-3-large"
+export TALKPIPE_EMBEDDING_SOURCE="openai"
+export TALKPIPE_CHAT_MODEL="gpt-4"
+export TALKPIPE_CHAT_SOURCE="openai"
+```
+
+**Method 3: Default Values**
+
+If not configured via TalkPipe, defaults from `config.py` are used:
+- **Embeddings:** `EMBEDDING_MODEL="embeddinggemma"`, `EMBEDDING_SOURCE="ollama"`
+- **Chat:** `CHAT_MODEL="mistral-small"`, `CHAT_SOURCE="ollama"`
+
+#### Supported Configuration Keys
+
+The following keys are recognized (checked in order):
+
+| Key | Alternative Keys | Description | Default |
+|-----|------------------|-------------|---------|
+| `embedding_model` | `EMBEDDING_MODEL`, `default_embedding_model_name` | Model name for generating embeddings | `embeddinggemma` |
+| `embedding_source` | `EMBEDDING_SOURCE`, `default_embedding_model_source` | Provider for embedding model (`ollama`, `openai`, etc.) | `ollama` |
+| `chat_model` | `CHAT_MODEL`, `default_model_name` | Model name for chat/completion | `mistral-small` |
+| `chat_source` | `CHAT_SOURCE`, `default_model_source` | Provider for chat model (`ollama`, `openai`, etc.) | `ollama` |
+| `document_template` | `DOCUMENT_TEMPLATE` | Template for formatting full documents before embedding. Placeholders: `{title}`, `{content}` | `"title: {title} \| text: {content}"` |
+| `shingle_template` | `SHINGLE_TEMPLATE` | Template for formatting shingled chunks before embedding. Placeholders: `{title}`, `{shingle}` | `"title: {title} \| text: {shingle}"` |
+| `retrieval_template` | `RETRIEVAL_TEMPLATE` | Template for formatting search queries before embedding. Placeholders: `{query}` | `"task: search result \| query: {query}"` |
+
+Keys can be specified:
+- In the `[vault]` section of `~/.talkpipe.toml`
+- At the top level of `~/.talkpipe.toml`
+- As `TALKPIPE_*` environment variables (uppercase)
+
+#### Provider-Specific Configuration
+
+**OpenAI:**
+- Set `embedding_source="openai"` and/or `chat_source="openai"`
+- Ensure `OPENAI_API_KEY` is set in your environment
+
+**Ollama:**
+- Set `embedding_source="ollama"` and/or `chat_source="ollama"`
+- Customize server URL with `OLLAMA_BASE_URL` (default: `http://localhost:11434`)
+
+#### Example: Switching to OpenAI
+
+```bash
+# Via environment variables
+export TALKPIPE_EMBEDDING_MODEL="text-embedding-3-large"
+export TALKPIPE_EMBEDDING_SOURCE="openai"
+export TALKPIPE_CHAT_MODEL="gpt-4"
+export TALKPIPE_CHAT_SOURCE="openai"
+export OPENAI_API_KEY="sk-your-key-here"
+```
+
+Or via config file (`~/.talkpipe.toml`):
+
+```toml
+[vault]
+embedding_model = "text-embedding-3-large"
+embedding_source = "openai"
+chat_model = "gpt-4"
+chat_source = "openai"
+```
+
+Then set `OPENAI_API_KEY` in your environment.
+
+#### Example: Customizing Templates
+
+Templates control how text is formatted before embedding. You can customize them to improve embedding quality:
+
+```bash
+# Via environment variables
+export TALKPIPE_DOCUMENT_TEMPLATE="Document: {title}\nContent: {content}"
+export TALKPIPE_SHINGLE_TEMPLATE="Chunk from {title}: {shingle}"
+export TALKPIPE_RETRIEVAL_TEMPLATE="Search for: {query}"
+```
+
+Or via config file (`~/.talkpipe.toml`):
+
+```toml
+[vault]
+document_template = "Document: {title}\nContent: {content}"
+shingle_template = "Chunk from {title}: {shingle}"
+retrieval_template = "Search for: {query}"
+```
+
+**Template Placeholders:**
+- `document_template`: `{title}`, `{content}`
+- `shingle_template`: `{title}`, `{shingle}`
+- `retrieval_template`: `{query}`
+
+#### Overriding in Code
+
+You can still override configuration explicitly when calling segments/sources:
+
+```python
+from talkpipe_vault.pipelines.building_and_watching import build_vector_db_from_paths
+
+# Explicit override (takes precedence over all config)
+build_vector_db_from_paths(
+    vault_path="/path/to/vault",
+    embedding_model="custom-model",
+    embedding_source="custom-source"
+)
+```
 
 ### Project Structure
 

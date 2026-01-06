@@ -8,13 +8,13 @@ from talkpipe.pipelines.vector_databases import SearchVectorDatabaseSegment
 from talkpipe.search.whoosh import searchWhoosh
 
 from .config import (
-    RETRIEVAL_TEMPLATE,
-    EMBEDDING_MODEL,
-    EMBEDDING_SOURCE,
-    CHAT_MODEL,
-    CHAT_SOURCE,
     RAG_PREFIX_PROMPTS,
     RAG_PROMPT_DIRECTIVE,
+    get_embedding_model,
+    get_embedding_source,
+    get_chat_model,
+    get_chat_source,
+    get_retrieval_template,
 )
 
 @register_segment("vaultSearch")
@@ -34,18 +34,27 @@ class VaultSearch(AbstractFieldSegment):
         field: Annotated[str, "The field to extract. If none, use full item."] = None,
         set_as: Annotated[str, "The field to set/append the result as."] = None,
         multi_emit: Annotated[bool, "Whether this class potentially emits multiple results per item."
-                                    "Should be set by the subclass constructor call or the field_segment decorator, not by the user."] = False):
+                                    "Should be set by the subclass constructor call or the field_segment decorator, not by the user."] = False,
+        embedding_model: Annotated[str | None, "Model name for generating embeddings. If None, uses TalkPipe config or default."] = None,
+        embedding_source: Annotated[str | None, "Source/provider for the embedding model (e.g., 'ollama', 'openai'). If None, uses TalkPipe config or default."] = None):
         super().__init__(field=field, set_as=set_as, multi_emit=multi_emit)
+        # Resolve model configuration: use provided value, or TalkPipe config, or default
+        embedding_model = embedding_model if embedding_model is not None else get_embedding_model()
+        embedding_source = embedding_source if embedding_source is not None else get_embedding_source()
+        
+        # Get retrieval template from TalkPipe config or default
+        retrieval_template = get_retrieval_template()
+        
         self.vault_path = vault_path
         vectordb_path = os.path.join(vault_path, "vector_vault")
         self.pipeline = (ToDict(field_list="_:query") |  \
-            fillTemplate(template=RETRIEVAL_TEMPLATE, set_as="templated_query") | \
+            fillTemplate(template=retrieval_template, set_as="templated_query") | \
             SearchVectorDatabaseSegment(
                 path=vectordb_path,
                 table_name="shingled_chunks",
                 query_field="templated_query",
-                embedding_model=EMBEDDING_MODEL,
-                embedding_source=EMBEDDING_SOURCE,
+                embedding_model=embedding_model,
+                embedding_source=embedding_source,
             )).as_function(single_in=True, single_out=True)
 
     def process_value(self, value: str) -> Any:
@@ -69,22 +78,35 @@ class VaultChat(AbstractFieldSegment):
         field: Annotated[str, "The field to extract. If none, use full item."] = None,
         set_as: Annotated[str, "The field to set/append the result as."] = None,
         multi_emit: Annotated[bool, "Whether this class potentially emits multiple results per item."
-                                    "Should be set by the subclass constructor call or the field_segment decorator, not by the user."] = False):
+                                    "Should be set by the subclass constructor call or the field_segment decorator, not by the user."] = False,
+        embedding_model: Annotated[str | None, "Model name for generating embeddings. If None, uses TalkPipe config or default."] = None,
+        embedding_source: Annotated[str | None, "Source/provider for the embedding model (e.g., 'ollama', 'openai'). If None, uses TalkPipe config or default."] = None,
+        chat_model: Annotated[str | None, "Model name for chat/completion. If None, uses TalkPipe config or default."] = None,
+        chat_source: Annotated[str | None, "Source/provider for the chat model (e.g., 'ollama', 'openai'). If None, uses TalkPipe config or default."] = None):
         super().__init__(field=field, set_as=set_as, multi_emit=multi_emit)
+        # Resolve model configuration: use provided value, or TalkPipe config, or default
+        embedding_model = embedding_model if embedding_model is not None else get_embedding_model()
+        embedding_source = embedding_source if embedding_source is not None else get_embedding_source()
+        chat_model = chat_model if chat_model is not None else get_chat_model()
+        chat_source = chat_source if chat_source is not None else get_chat_source()
+        
+        # Get retrieval template from TalkPipe config or default
+        retrieval_template = get_retrieval_template()
+        
         self.vault_path = vault_path
         vectordb_path = os.path.join(vault_path, "vector_vault")
         self.pipeline = (ToDict(field_list="_:query") | \
-            fillTemplate(template=RETRIEVAL_TEMPLATE, set_as="templated_query") | \
+            fillTemplate(template=retrieval_template, set_as="templated_query") | \
             RAGToText(
                 path=vectordb_path,
                 content_field="query",
                 embedding_prompt="templated_query",
                 table_name="shingled_chunks",
                 set_as="chat_response",
-                embedding_model=EMBEDDING_MODEL,
-                embedding_source=EMBEDDING_SOURCE,
-                completion_model=CHAT_MODEL,
-                completion_source=CHAT_SOURCE,
+                embedding_model=embedding_model,
+                embedding_source=embedding_source,
+                completion_model=chat_model,
+                completion_source=chat_source,
                 role_map=RAG_PREFIX_PROMPTS,
                 prompt_directive=RAG_PROMPT_DIRECTIVE,
                 diagPrintOutput="stdout"

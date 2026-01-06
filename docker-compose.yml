@@ -8,6 +8,7 @@ services:
       target: runtime
     container_name: vault
     network_mode: host
+    userns: keep-id
     volumes:
       # Watch directory - mount your documents here to be indexed
       - ${VAULT_WATCH_DIR:-./watch}:/watch

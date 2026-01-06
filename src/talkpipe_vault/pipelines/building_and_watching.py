@@ -10,7 +10,12 @@ from talkpipe.pipe.io import FileExistsFilter, DeleteFile
 from talkpipe.util.data_manipulation import extract_property
 from talkpipe.data.text.chunking_units import splitText, ShingleText
 from talkpipe.search.whoosh import indexWhoosh
-from .config import EMBEDDING_MODEL, EMBEDDING_SOURCE, DOCUMENT_TEMPLATE, SHINGLE_TEMPLATE
+from .config import (
+    get_document_template,
+    get_shingle_template,
+    get_embedding_model,
+    get_embedding_source,
+)
 
 @register_segment("buildVectorDBFromPaths")
 @segment()
@@ -19,7 +24,9 @@ def build_vector_db_from_paths(items: Any,
                                overwrite: Annotated[bool, "If true, overwrite existing tables and indexes"] = False,
                                delete_after_reading: Annotated[bool, "If true, delete source files after successfully indexing them"] = False,
                                batch_size: Annotated[int, "LanceDB batch size for writes. Smaller values ensure immediate availability but may reduce performance for bulk operations."] = 1,
-                               commit_seconds: Annotated[float, "Whoosh index commit interval in seconds. 0 for immediate commits, higher values batch commits for performance."] = 0):
+                               commit_seconds: Annotated[float, "Whoosh index commit interval in seconds. 0 for immediate commits, higher values batch commits for performance."] = 0,
+                               embedding_model: Annotated[str | None, "Model name for generating embeddings. If None, uses TalkPipe config or default."] = None,
+                               embedding_source: Annotated[str | None, "Source/provider for the embedding model (e.g., 'ollama', 'openai'). If None, uses TalkPipe config or default."] = None):
     """
     Segment that builds a vector database and full-text search index from file paths.
 
@@ -43,6 +50,14 @@ def build_vector_db_from_paths(items: Any,
         - "source": str - Source file path
         - "title": str - Source file name (from ExtractionResult)
     """
+    # Resolve model configuration: use provided value, or TalkPipe config, or default
+    embedding_model = embedding_model if embedding_model is not None else get_embedding_model()
+    embedding_source = embedding_source if embedding_source is not None else get_embedding_source()
+    
+    # Get templates from TalkPipe config or defaults
+    document_template = get_document_template()
+    shingle_template = get_shingle_template()
+    
     vectordb_path = os.path.join(vault_path, "vector_vault")
     whoosh_index_path = os.path.join(vault_path, "fulltext_vault")
 
@@ -59,11 +74,11 @@ def build_vector_db_from_paths(items: Any,
     pipeline = base_pipeline | \
     ToDict(field_list="content,source,id,title") | \
     FilterExpression(expression="item.get('content') and len(item.get('content', '').strip()) > 0") | \
-    fillTemplate(template=DOCUMENT_TEMPLATE, set_as="doc_save_query") | \
+    fillTemplate(template=document_template, set_as="doc_save_query") | \
     MakeVectorDatabaseSegment(
         path=vectordb_path,
-        embedding_model=EMBEDDING_MODEL,
-        embedding_source=EMBEDDING_SOURCE,
+        embedding_model=embedding_model,
+        embedding_source=embedding_source,
         embedding_field="doc_save_query",
         table_name="full_documents",
         doc_id_field="id",
@@ -85,11 +100,11 @@ def build_vector_db_from_paths(items: Any,
     EvalExpression(set_as="shingle_id", expression="""str(item['shingle_detail']['first_paragraph'])+'-'+str(item['shingle_detail']['last_paragraph'])+'-'+str(item['source'])""") | \
     FilterExpression(expression="item.get('shingle') and len(item.get('shingle', '').strip()) > 0") | \
     ToDict(field_list="shingle_id,shingle,source,title") | \
-    fillTemplate(template=SHINGLE_TEMPLATE, set_as="shingle") | \
+    fillTemplate(template=shingle_template, set_as="shingle") | \
     MakeVectorDatabaseSegment(
         path=vectordb_path,
-        embedding_model=EMBEDDING_MODEL,
-        embedding_source=EMBEDDING_SOURCE,
+        embedding_model=embedding_model,
+        embedding_source=embedding_source,
         embedding_field="shingle",
         table_name="shingled_chunks",
         doc_id_field="shingle_id",
@@ -114,7 +129,9 @@ def watch_into_vector_db(source_path: Annotated[str, "Path to watch"],
                          ignore_common: Annotated[bool, "Ignore common temp/hidden files"] = True,
                          overwrite: Annotated[bool, "If true, overwrite existing tables and indexes"] = False,
                          delete_after_reading: Annotated[bool, "If true, delete source files after successfully indexing them"] = False,
-                         debounce_seconds: Annotated[float, "Seconds to wait for file stability before processing (0 to disable)"] = 1.0):
+                         debounce_seconds: Annotated[float, "Seconds to wait for file stability before processing (0 to disable)"] = 1.0,
+                         embedding_model: Annotated[str | None, "Model name for generating embeddings. If None, uses TalkPipe config or default."] = None,
+                         embedding_source: Annotated[str | None, "Source/provider for the embedding model (e.g., 'ollama', 'openai'). If None, uses TalkPipe config or default."] = None):
     """
     Source that watches a directory and processes file changes into a vector database and full-text index.
 
@@ -132,6 +149,10 @@ def watch_into_vector_db(source_path: Annotated[str, "Path to watch"],
         - "source": str - Source file path
         - "title": str - Source file name
     """
+    # Resolve model configuration: use provided value, or TalkPipe config, or default
+    embedding_model = embedding_model if embedding_model is not None else get_embedding_model()
+    embedding_source = embedding_source if embedding_source is not None else get_embedding_source()
+    
     watcher = file_watcher(
         path=source_path,
         patterns=patterns,
@@ -151,7 +172,9 @@ def watch_into_vector_db(source_path: Annotated[str, "Path to watch"],
             overwrite=overwrite,
             delete_after_reading=delete_after_reading,
             batch_size=1,
-            commit_seconds=0)
+            commit_seconds=0,
+            embedding_model=embedding_model,
+            embedding_source=embedding_source)
     else:
         pipeline = watcher | \
         Print() | \
@@ -160,7 +183,9 @@ def watch_into_vector_db(source_path: Annotated[str, "Path to watch"],
             overwrite=overwrite,
             delete_after_reading=delete_after_reading,
             batch_size=1,
-            commit_seconds=0)
+            commit_seconds=0,
+            embedding_model=embedding_model,
+            embedding_source=embedding_source)
 
     yield from pipeline()
 
@@ -169,7 +194,9 @@ def watch_into_vector_db(source_path: Annotated[str, "Path to watch"],
 def list_into_vector_db(source_pattern: Annotated[str, "Glob pattern to match files (e.g., '/path/**/*.pdf')"],
                          vault_path: Annotated[str, "Base path for vault storage. Vector DB stored at vault_path/vector_vault, full-text index at vault_path/fulltext_vault"],
                          overwrite: Annotated[bool, "If true, overwrite existing tables and indexes"] = False,
-                         delete_after_reading: Annotated[bool, "If true, delete source files after successfully indexing them"] = False):
+                         delete_after_reading: Annotated[bool, "If true, delete source files after successfully indexing them"] = False,
+                         embedding_model: Annotated[str | None, "Model name for generating embeddings. If None, uses TalkPipe config or default."] = None,
+                         embedding_source: Annotated[str | None, "Source/provider for the embedding model (e.g., 'ollama', 'openai'). If None, uses TalkPipe config or default."] = None):
     """
     Source that batch processes files matching a glob pattern into a vector database and full-text index.
 
@@ -182,6 +209,10 @@ def list_into_vector_db(source_pattern: Annotated[str, "Glob pattern to match fi
         - "source": str - Source file path
         - "title": str - Source file name
     """
+    # Resolve model configuration: use provided value, or TalkPipe config, or default
+    embedding_model = embedding_model if embedding_model is not None else get_embedding_model()
+    embedding_source = embedding_source if embedding_source is not None else get_embedding_source()
+    
     pipeline = listFiles(full_path=True, files_only=True) | \
     ToDict(field_list="_:path") | \
     Print() | \
@@ -190,5 +221,7 @@ def list_into_vector_db(source_pattern: Annotated[str, "Glob pattern to match fi
         overwrite=overwrite,
         delete_after_reading=delete_after_reading,
         batch_size=1000,
-        commit_seconds=120)
+        commit_seconds=120,
+        embedding_model=embedding_model,
+        embedding_source=embedding_source)
     yield from pipeline([source_pattern])
