@@ -20,7 +20,7 @@ In the TalkPipe Vault codebase directory:
 
 ```bash
 # Clone the repository (first time only)
-git clone https://github.com/yourusername/talkpipe-vault.git
+git clone https://github.com/sandialabs/talkpipe-vault.git
 cd talkpipe-vault
 
 # Build the image with Docker
@@ -83,6 +83,7 @@ Or with Podman:
 ```bash
 podman run -d \
   --name talkpipe-vault \
+  --userns=keep-id \
   --env-file .env \
   -p 8002:8002 \
   -v "$(pwd)/watch:/watch:Z" \
@@ -93,7 +94,9 @@ podman run -d \
 podman logs -f talkpipe-vault
 ```
 
-**Note**: The `:Z` suffix on Podman volumes sets the correct SELinux context for container access.
+**Note**: 
+- The `:Z` suffix on Podman volumes sets the correct SELinux context for container access.
+- The `--userns=keep-id` flag maps your host user's UID/GID into the container, allowing it to access directories you own on the host.
 
 Access the web interface at: `http://localhost:8002`
 
@@ -103,7 +106,7 @@ For development or simpler deployments, use docker-compose in the codebase direc
 
 ```bash
 # Clone and enter repository
-git clone https://github.com/yourusername/talkpipe-vault.git
+git clone https://github.com/sandialabs/talkpipe-vault.git
 cd talkpipe-vault
 
 # Create .env file
@@ -134,8 +137,15 @@ The container is configured via environment variables, typically set in a `.env`
 | `VAULT_PATH` | Container path for vault storage (maps to `/vault` in container) | `/vault` |
 | `VAULT_HOST` | Web server bind address | `0.0.0.0` |
 | `VAULT_PORT` | Web server port | `8002` |
-| `OPENAI_API_KEY` | OpenAI API key (optional) | - |
-| `OLLAMA_BASE_URL` | Ollama server URL (optional) | `http://localhost:11434` |
+| `OPENAI_API_KEY` | OpenAI API key (optional, required if using OpenAI models) | - |
+| `OLLAMA_BASE_URL` | Ollama server URL (optional, required if using Ollama models) | `http://localhost:11434` |
+| `TALKPIPE_EMBEDDING_MODEL` | Embedding model name (e.g., `text-embedding-3-large`, `embeddinggemma`) | `embeddinggemma` |
+| `TALKPIPE_EMBEDDING_SOURCE` | Embedding provider (`openai`, `ollama`, etc.) | `ollama` |
+| `TALKPIPE_CHAT_MODEL` | Chat/completion model name (e.g., `gpt-4`, `mistral-small`) | `mistral-small` |
+| `TALKPIPE_CHAT_SOURCE` | Chat provider (`openai`, `ollama`, etc.) | `ollama` |
+| `TALKPIPE_DOCUMENT_TEMPLATE` | Template for formatting documents (optional) | `"title: {title} \| text: {content}"` |
+| `TALKPIPE_SHINGLE_TEMPLATE` | Template for formatting shingled chunks (optional) | `"title: {title} \| text: {shingle}"` |
+| `TALKPIPE_RETRIEVAL_TEMPLATE` | Template for formatting search queries (optional) | `"task: search result \| query: {query}"` |
 
 ### Example .env File
 
@@ -152,6 +162,12 @@ VAULT_PORT=8002
 # AI providers (pick one or both)
 OPENAI_API_KEY=sk-your-openai-key
 OLLAMA_BASE_URL=http://host.containers.internal:11434
+
+# Optional: Model configuration (if not set, uses defaults)
+# TALKPIPE_EMBEDDING_MODEL=text-embedding-3-large
+# TALKPIPE_EMBEDDING_SOURCE=openai
+# TALKPIPE_CHAT_MODEL=gpt-4
+# TALKPIPE_CHAT_SOURCE=openai
 ```
 
 ### Volume Mounts
@@ -245,7 +261,7 @@ OPENAI_API_KEY=sk-...
 EOF
 
 # Run (host paths specified in volume mounts)
-podman run -d --name vault --env-file .env \
+podman run -d --name vault --userns=keep-id --env-file .env \
   -p 8002:8002 \
   -v /home/user/documents:/watch:Z \
   -v /home/user/vault-data:/vault:Z \
@@ -263,7 +279,7 @@ VAULT_PATH=/vault
 VAULT_PORT=8002
 EOF
 
-podman run -d --name vault-personal --env-file .env \
+podman run -d --name vault-personal --userns=keep-id --env-file .env \
   -p 8002:8002 \
   -v "$(pwd)/watch:/watch:Z" \
   -v "$(pwd)/vault:/vault:Z" \
@@ -277,7 +293,7 @@ VAULT_PATH=/vault
 VAULT_PORT=8003
 EOF
 
-podman run -d --name vault-work --env-file .env \
+podman run -d --name vault-work --userns=keep-id --env-file .env \
   -p 8003:8003 \
   -v "$(pwd)/watch:/watch:Z" \
   -v "$(pwd)/vault:/vault:Z" \
@@ -289,7 +305,7 @@ podman run -d --name vault-work --env-file .env \
 If you want to index existing documents without moving them:
 
 ```bash
-podman run -d --name vault --env-file .env \
+podman run -d --name vault --userns=keep-id --env-file .env \
   -p 8002:8002 \
   -v /path/to/readonly/docs:/watch:ro,Z \
   -v "$(pwd)/vault:/vault:Z" \
@@ -418,13 +434,24 @@ VAULT_PORT=8003
 
 **Volume permission errors (Podman):**
 ```bash
-# Option 1: Use --userns=keep-id to map your user ID into the container
-podman run --userns=keep-id --user $(id -u):$(id -g) -v "$(pwd)/vault:/vault:Z" ...
+# Option 1: Use --userns=keep-id (RECOMMENDED for Podman)
+# This maps your host user's UID/GID into the container
+podman run -d --name talkpipe-vault --userns=keep-id \
+  --env-file .env \
+  -p 8002:8002 \
+  -v "$(pwd)/watch:/watch:Z" \
+  -v "$(pwd)/vault:/vault:Z" \
+  talkpipe-vault:latest
 
-# Option 2: Add :Z flag for SELinux (if using root in container)
+# Option 2: Fix permissions on host directories
+# Make sure the vault directory is writable by your user
+chmod -R u+rwX "$(pwd)/vault"
+chmod -R u+rX "$(pwd)/watch"
+
+# Option 3: Run as root (NOT RECOMMENDED for security)
 podman run --user 0:0 -v "$(pwd)/vault:/vault:Z" ...
 
-# Option 3: Export UID/GID and use docker-compose
+# Option 4: Export UID/GID and use docker-compose
 export UID=$(id -u)
 export GID=$(id -g)
 podman-compose up --userns=keep-id
@@ -488,34 +515,111 @@ sudo firewall-cmd --reload
 
 If you see `PermissionError: [Errno 13] Permission denied: '/vault/fulltext_vault/MAIN_WRITELOCK'`:
 
-**1. Check host directory permissions:**
-```bash
-# Ensure the vault directory is writable
-ls -ld /home/travis/vaultdb
-# If needed, fix permissions (be careful with this)
-sudo chmod -R u+rwX /home/travis/vaultdb
-sudo chown -R $(id -u):$(id -g) /home/travis/vaultdb
-```
+This is usually a permissions issue where the container user cannot write to the mounted vault directory.
 
-**2. Clean up stale lock files:**
-```bash
-# Remove stale Whoosh lock files
-find /home/travis/vaultdb/fulltext_vault -name "*LOCK" -type f -delete
-```
+**Why this happens:**
 
-**3. Restart the container:**
+The error `PermissionError: [Errno 13] Permission denied: '/vault/fulltext_vault/MAIN_WRITELOCK'` occurs when Whoosh tries to **create** the lock file, but the container user cannot write to the directory. This happens even if the lock file doesn't exist yet - it's a directory permission issue, not a file permission issue.
+
+**Step-by-step fix:**
+
+**1. Stop the container:**
 ```bash
+# If using podman/docker directly
 podman stop talkpipe-vault
 podman rm talkpipe-vault
-# Run command again
+
+# If using docker-compose
+docker-compose down
+# or
+podman compose down
 ```
 
-**4. For Podman with SELinux, ensure `:Z` flag is used:**
+**2. Verify your user ID matches:**
 ```bash
-podman run -v /home/travis/vaultdb:/vault:Z ...
+# Check your user ID
+id -u
+# Should match the container user when using --userns=keep-id
+
+# Check directory ownership
+ls -ld /home/travis/vaultdb/fulltext_vault
+# Owner should match your user
 ```
 
-The entrypoint script now automatically cleans up stale lock files older than 10 minutes on startup.
+**3. Fix host directory permissions (CRITICAL):**
+```bash
+# Ensure the vault directory is owned by your user and has write permissions
+# Replace /home/travis/vaultdb with your actual vault path
+sudo chown -R $(id -u):$(id -g) /home/travis/vaultdb
+
+# Ensure the directory itself is writable (not just readable)
+chmod -R u+rwX /home/travis/vaultdb
+
+# Verify the fulltext_vault directory is writable:
+touch /home/travis/vaultdb/fulltext_vault/.test_write 2>/dev/null && rm /home/travis/vaultdb/fulltext_vault/.test_write && echo "Directory is writable" || echo "Directory is NOT writable - fix permissions"
+
+# Also fix watch directory if needed
+sudo chown -R $(id -u):$(id -g) /mnt/gonk-shared/research_papers
+chmod -R u+rX /mnt/gonk-shared/research_papers
+```
+
+**4. Clean up any stale lock files:**
+```bash
+# Remove all lock files from the vault directory
+find /home/travis/vaultdb/fulltext_vault -name "*LOCK" -type f -delete 2>/dev/null || true
+
+# Or if you need to force removal:
+sudo find /home/travis/vaultdb/fulltext_vault -name "*LOCK" -type f -delete
+```
+
+**4. For Podman with docker-compose:**
+The `userns: keep-id` setting in docker-compose.yml should handle this, but make sure:
+- Export your UID/GID before running compose:
+  ```bash
+  export UID=$(id -u)
+  export GID=$(id -g)
+  podman compose up -d
+  ```
+
+**5. For Podman with direct run commands:**
+```bash
+# Always use --userns=keep-id
+podman run -d --name talkpipe-vault --userns=keep-id \
+  --env-file .env \
+  -p 8002:8002 \
+  -v "$(pwd)/watch:/watch:Z" \
+  -v "$(pwd)/vault:/vault:Z" \
+  talkpipe-vault:latest
+```
+
+**6. For Docker (without Podman):**
+```bash
+# Option A: Change ownership to UID 1001 (container user)
+sudo chown -R 1001:1001 /home/travis/vaultdb
+
+# Option B: Make directories world-writable (less secure, not recommended)
+sudo chmod -R 777 /home/travis/vaultdb
+```
+
+**7. Rebuild the image (if entrypoint.sh was updated):**
+```bash
+# In the talkpipe-vault repository directory
+docker build -t talkpipe-vault:latest .
+# or
+podman build -t talkpipe-vault:latest .
+```
+
+**8. Restart the container:**
+```bash
+# With docker-compose
+docker-compose up -d
+# or
+podman compose up -d
+
+# Or with direct run command (see step 5)
+```
+
+The entrypoint script automatically attempts to clean up stale lock files on startup, but it cannot override host-level permission restrictions. Always fix permissions on the host first.
 
 ### High Memory/CPU Usage
 
@@ -615,12 +719,68 @@ docker rm vault-test
 
 ### Custom AI Models
 
+TalkPipe Vault supports configuring models via TalkPipe configuration. You can set model names and sources using environment variables with the `TALKPIPE_` prefix, or by mounting a TalkPipe config file.
+
+#### Configuration Methods
+
+**Method 1: Environment Variables (Recommended for Docker)**
+
+Add to your `.env` file:
+
+```env
+# Model configuration via TalkPipe environment variables
+TALKPIPE_EMBEDDING_MODEL=text-embedding-3-large
+TALKPIPE_EMBEDDING_SOURCE=openai
+TALKPIPE_CHAT_MODEL=gpt-4
+TALKPIPE_CHAT_SOURCE=openai
+
+# Or for Ollama
+TALKPIPE_EMBEDDING_MODEL=embeddinggemma
+TALKPIPE_EMBEDDING_SOURCE=ollama
+TALKPIPE_CHAT_MODEL=mistral-small
+TALKPIPE_CHAT_SOURCE=ollama
+
+# Provider-specific configuration
+OPENAI_API_KEY=sk-your-actual-key-here
+OLLAMA_BASE_URL=http://host.containers.internal:11434
+```
+
+**Method 2: TalkPipe Config File**
+
+Mount a TalkPipe config file into the container:
+
+```bash
+docker run -d \
+  --name talkpipe-vault \
+  --env-file .env \
+  -v "$(pwd)/watch:/watch" \
+  -v "$(pwd)/vault:/vault" \
+  -v "$HOME/.talkpipe.toml:/home/app/.talkpipe.toml:ro" \
+  talkpipe-vault:latest
+```
+
+With `~/.talkpipe.toml` containing:
+
+```toml
+[vault]
+embedding_model = "text-embedding-3-large"
+embedding_source = "openai"
+chat_model = "gpt-4"
+chat_source = "openai"
+```
+
 #### Using Local Ollama
 
 In your `.env`:
 ```env
 # Point to Ollama on host machine
 OLLAMA_BASE_URL=http://host.containers.internal:11434
+
+# Configure models to use Ollama
+TALKPIPE_EMBEDDING_MODEL=embeddinggemma
+TALKPIPE_EMBEDDING_SOURCE=ollama
+TALKPIPE_CHAT_MODEL=mistral-small
+TALKPIPE_CHAT_SOURCE=ollama
 ```
 
 Make sure Ollama is running on your host:
@@ -632,8 +792,28 @@ ollama serve
 #### Using OpenAI
 
 ```env
+# OpenAI API key
 OPENAI_API_KEY=sk-your-actual-key-here
+
+# Configure models to use OpenAI
+TALKPIPE_EMBEDDING_MODEL=text-embedding-3-large
+TALKPIPE_EMBEDDING_SOURCE=openai
+TALKPIPE_CHAT_MODEL=gpt-4
+TALKPIPE_CHAT_SOURCE=openai
 ```
+
+#### Custom Templates
+
+You can also customize the templates used for formatting text before embedding:
+
+```env
+# Custom templates
+TALKPIPE_DOCUMENT_TEMPLATE="Document: {title}\nContent: {content}"
+TALKPIPE_SHINGLE_TEMPLATE="Chunk from {title}: {shingle}"
+TALKPIPE_RETRIEVAL_TEMPLATE="Search for: {query}"
+```
+
+See the [README.md](README.md) for details on template placeholders and configuration options.
 
 ### Running Additional Commands
 
@@ -694,6 +874,12 @@ VAULT_PORT=8002
 
 # AI configuration
 OPENAI_API_KEY=sk-prod-key-here
+
+# Model configuration (optional, uses defaults if not set)
+TALKPIPE_EMBEDDING_MODEL=text-embedding-3-large
+TALKPIPE_EMBEDDING_SOURCE=openai
+TALKPIPE_CHAT_MODEL=gpt-4
+TALKPIPE_CHAT_SOURCE=openai
 
 # Optional: resource limits set via docker run flags
 ```
@@ -824,7 +1010,7 @@ sudo systemctl reload nginx
 
 The container includes a health check that runs every 30 seconds:
 ```bash
-python -c "import talkpipe_vault; print('OK')"
+python3 -c "import talkpipe_vault; print('OK')"
 ```
 
 Check health status:
@@ -840,8 +1026,13 @@ docker inspect --format='{{.State.Health.Status}}' talkpipe-vault
 | `VAULT_PATH` | Maps to `/vault` | Index storage |
 | `VAULT_HOST` | Used by web app | Bind address |
 | `VAULT_PORT` | Used by web app | Listen port |
-| `OPENAI_API_KEY` | Used by AI pipelines | OpenAI auth |
+| `OPENAI_API_KEY` | Used by AI pipelines | OpenAI authentication |
 | `OLLAMA_BASE_URL` | Used by AI pipelines | Local LLM endpoint |
+| `TALKPIPE_EMBEDDING_MODEL` | TalkPipe config | Embedding model name |
+| `TALKPIPE_EMBEDDING_SOURCE` | TalkPipe config | Embedding provider |
+| `TALKPIPE_CHAT_MODEL` | TalkPipe config | Chat model name |
+| `TALKPIPE_CHAT_SOURCE` | TalkPipe config | Chat provider |
+| `TALKPIPE_*_TEMPLATE` | TalkPipe config | Text formatting templates |
 
 ### Entrypoint Script
 

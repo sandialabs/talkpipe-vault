@@ -68,6 +68,12 @@ VAULT_PORT=8002
 # Optional: AI provider configuration
 OPENAI_API_KEY=sk-your-key-here
 # OLLAMA_BASE_URL=http://host.containers.internal:11434
+
+# Optional: Model configuration (if not set, uses defaults)
+# TALKPIPE_EMBEDDING_MODEL=text-embedding-3-large
+# TALKPIPE_EMBEDDING_SOURCE=openai
+# TALKPIPE_CHAT_MODEL=gpt-4
+# TALKPIPE_CHAT_SOURCE=openai
 EOF
 ```
 
