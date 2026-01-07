@@ -1,0 +1,52 @@
+# Git files (keep .git for setuptools-scm, but ignore other git files)
+.gitignore
+
+# Python cache and virtual environments
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+.venv
+venv/
+env/
+ENV/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Test files
+tests/
+.pytest_cache/
+.coverage
+htmlcov/
+*.cover
+
+# Documentation
+docs/
+*.md
+!README.md
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# CI/CD
+.github/
+
+# Container files (don't copy into container)
+Dockerfile
+Containerfile
+.dockerignore
+.containerignore
+podman-*.sh
+
+# Other
+*.log
+.DS_Store
+
