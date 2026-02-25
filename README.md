@@ -10,6 +10,10 @@
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Development Status](https://img.shields.io/badge/status-alpha-yellow.svg)](https://github.com/sandialabs/talkpipe-vault)
 
+<p align="center">
+<img src="docs/talkpipe_homepage.png" alt="Talkpipe Homepage" width="100%">
+</p>
+
 ## What is TalkPipe Vault?
 
 **TalkPipe Vault** is a set of practical tools and reusable components for turning folders of files into a searchable “vault” you can explore with semantic search, keyword search, and retrieval‑augmented Q&A. It is a production‑oriented example built on the **[TalkPipe](https://github.com/sandialabs/talkpipe)** framework, demonstrating how to assemble document processing, vector search, and RAG with clean, composable pipelines.
