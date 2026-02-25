@@ -1,4 +1,5 @@
 import os
+import time
 from pathlib import Path
 from typing import Annotated
 from queue import Queue, Empty
@@ -6,6 +7,7 @@ from talkpipe import source, register_source
 from watchdog.observers import Observer
 from watchdog.observers.polling import PollingObserver
 from watchdog.events import PatternMatchingEventHandler, FileSystemEventHandler
+from watchdog.utils.patterns import match_any_paths
 
 
 # Common patterns for temp files, hidden files, editor backups, etc.
@@ -111,59 +113,99 @@ def file_watcher(
         def on_deleted(self, event):
             self.queue.put({"event": "deleted", "path": event.src_path})
 
+        # on_moved: handled by MoveOnlyHandler (bypasses pattern filter on src_path)
+
+    # Move-only handler: receives ALL move events without pattern filtering.
+    # PatternMatchingEventHandler can filter out moves when src_path is outside
+    # the watch tree (e.g., mv from /tmp, drag-and-drop from file manager).
+    class MoveOnlyHandler(FileSystemEventHandler):
+        def __init__(self, queue, watch_path, ignore_dirs, patterns, ignore_patterns, case_sensitive):
+            self.queue = queue
+            self.watch_path = os.path.normpath(watch_path)
+            self.ignore_dirs = ignore_dirs
+            self.patterns = patterns
+            self.ignore_patterns = ignore_patterns
+            self.case_sensitive = case_sensitive
+
+        def on_moved(self, event):
+            if not hasattr(event, "dest_path") or not event.dest_path:
+                return
+            if self.ignore_dirs and getattr(event, "is_directory", False):
+                return
+            dest = os.path.normpath(event.dest_path)
+            if not (dest.startswith(self.watch_path + os.sep) or dest == self.watch_path):
+                return
+            if not match_any_paths(
+                [event.dest_path],
+                included_patterns=self.patterns,
+                excluded_patterns=self.ignore_patterns,
+                case_sensitive=self.case_sensitive,
+            ):
+                return
+            self.queue.put({"event": "created", "path": event.dest_path})
+
     observer = PollingObserver() if polling else Observer()
     handler = WatchdogHandler(queue=event_queue)
+    move_handler = MoveOnlyHandler(
+        event_queue,
+        watch_path,
+        ignore_directories,
+        final_patterns,
+        final_ignore_patterns,
+        case_sensitive,
+    )
     observer.schedule(handler, watch_path, recursive=True)
+    observer.schedule(move_handler, watch_path, recursive=True)
     observer.start()
 
-    # Block until observer is fully ready by using a sentinel file
-    # This ensures inotify watches are actually registered before proceeding
-    ready_queue = Queue()
+    # Block until observer is fully ready (native Observer only).
+    # PollingObserver does not need this: it polls the filesystem directly and
+    # the sentinel check can fail in containers (bind mounts, permission issues).
+    if not polling:
+        ready_queue = Queue()
 
-    class ReadyHandler(FileSystemEventHandler):
-        def on_created(self, event):
-            if event.src_path.endswith(".watchdog_ready"):
-                ready_queue.put(True)
+        class ReadyHandler(FileSystemEventHandler):
+            def on_created(self, event):
+                if event.src_path.endswith(".watchdog_ready"):
+                    ready_queue.put(True)
 
-    ready_handler = ReadyHandler()
-    ready_watch = observer.schedule(ready_handler, watch_path, recursive=False)
+        ready_handler = ReadyHandler()
+        ready_watch = observer.schedule(ready_handler, watch_path, recursive=False)
 
-    # Create sentinel file and wait for its event
-    sentinel_path = os.path.join(watch_path, ".watchdog_ready")
-    try:
-        with open(sentinel_path, "w") as f:
-            f.write("ready")
-        # Wait for the sentinel event with timeout
+        sentinel_path = os.path.join(watch_path, ".watchdog_ready")
         try:
-            ready_queue.get(timeout=5.0)
-        except Empty:
-            # Timeout indicates filesystem events are slow or unavailable
-            raise RuntimeError(
-                f"Watchdog initialization timed out after 5 seconds for path: {watch_path}\n"
-                "This typically occurs with:\n"
-                "  - Network filesystems (NFS, SMB, CIFS)\n"
-                "  - Slow storage devices\n"
-                "  - Filesystems that don't support native event notifications\n"
-                "\n"
-                "Solution: Add the --polling flag to use polling-based file monitoring.\n"
-                "Example: vault-watch-into-vectordb <path> --polling ..."
-            )
-    finally:
-        # Clean up sentinel file
-        if os.path.exists(sentinel_path):
-            os.remove(sentinel_path)
-        observer.unschedule(ready_watch)
+            with open(sentinel_path, "w") as f:
+                f.write("ready")
+            try:
+                ready_queue.get(timeout=5.0)
+            except Empty:
+                raise RuntimeError(
+                    f"Watchdog initialization timed out after 5 seconds for path: {watch_path}\n"
+                    "This typically occurs with:\n"
+                    "  - Network filesystems (NFS, SMB, CIFS)\n"
+                    "  - Slow storage devices\n"
+                    "  - Filesystems that don't support native event notifications\n"
+                    "\n"
+                    "Solution: Add the --polling flag to use polling-based file monitoring.\n"
+                    "Example: vault-watch-into-vectordb <path> --polling ..."
+                )
+        finally:
+            if os.path.exists(sentinel_path):
+                os.remove(sentinel_path)
+            observer.unschedule(ready_watch)
 
-    # Drain any sentinel-related events from the main queue
-    while True:
-        try:
-            evt = event_queue.get_nowait()
-            if ".watchdog_ready" not in evt.get("path", ""):
-                # Put back non-sentinel events
-                event_queue.put(evt)
+        # Drain any sentinel-related events from the main queue
+        while True:
+            try:
+                evt = event_queue.get_nowait()
+                if ".watchdog_ready" not in evt.get("path", ""):
+                    event_queue.put(evt)
+                    break
+            except Empty:
                 break
-        except Empty:
-            break
+    else:
+        # Give PollingObserver time for first snapshot
+        time.sleep(0.5)
 
     try:
         event_count = 0

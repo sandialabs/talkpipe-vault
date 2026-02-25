@@ -211,7 +211,7 @@ GitHub Actions workflow on push/PR to main/master/develop:
 
 - `pyproject.toml`: Package config, dependencies, tool settings, entry points
 - `docker-compose.yml`: Service definitions (vault, vault-dev)
-- `Dockerfile`: Multi-stage build
+- `Containerfile`: Container image build
 - `.github/workflows/ci-cd.yml`: CI/CD pipeline
 
 ## Default Configuration

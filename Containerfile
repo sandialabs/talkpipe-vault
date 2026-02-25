@@ -32,6 +32,9 @@ RUN pip install --no-cache-dir --upgrade pip && \
 COPY entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 
+# Copy test script for podman-shell.sh debugging
+COPY talkpipe_tests.sh /app/talkpipe_tests.sh
+
 # Switch to non-root user
 USER vault
 

@@ -40,7 +40,6 @@ docs/
 .github/
 
 # Container files (don't copy into container)
-Dockerfile
 Containerfile
 .dockerignore
 .containerignore

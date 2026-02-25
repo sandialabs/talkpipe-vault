@@ -2,6 +2,35 @@
 
 ## In Development
 
+### Documentation
+
+#### Podman Deployment
+- Added README section for Podman deployment: prerequisites, quick start, configuration, scripts, debugging, Ollama access, troubleshooting
+
+### Bug Fixes
+
+#### File Watcher on Linux
+- **Move-only handler**: Added a second handler that receives all `FileMovedEvent` events without pattern filtering. `PatternMatchingEventHandler` filters moves when `src_path` is outside the watch tree (e.g., `mv` from `/tmp`, drag-and-drop), causing them to be dropped. The new handler bypasses this and correctly indexes moved files.
+- **PollingObserver startup**: Skip sentinel file check when using `--polling`. The check required writing to the watch directory and could fail in container bind-mount setups; PollingObserver does not need inotify verification.
+
+### Refactoring
+
+#### Podman Scripts
+- Removed duplicate `Dockerfile`; kept `Containerfile` only
+- Simplified `podman-build.sh` (removed Containerfile/Dockerfile branching)
+- `podman-run.sh` delegates to `podman-build.sh` when image is missing
+- Added `podman-config.sh` for shared IMAGE_NAME, VAULT_DIR, WATCH_DIR, DESKTOP_DIR
+- Simplified `podman-shell.sh` flag handling with `case` statement
+- Baked `talkpipe_tests.sh` into container image for faster shell connects
+- Refactored `entrypoint.sh` with `check_writable()` and `cleanup_lock_files()` helpers
+
+#### `building_and_watching` Simplifications
+- Removed unused `extract_property` import
+- Added `resolve_embedding_config()` and `get_vault_paths()` helpers in config module
+- Unified `watch_into_vector_db` pipeline construction (single branch with conditional Debounce)
+- Extracted `_non_empty_filter()` helper using lambdaFilter (FilterExpression) for content/chunk/shingle
+- Split `build_vector_db_from_paths` pipeline into named `full_doc_stage` and `shingle_stage` for readability
+
 ### New Features
 
 #### `fileWatcher` Source

@@ -95,6 +95,103 @@ The commands above populate a vault at `~/my-vault` with:
 
 ---
 
+## Podman Deployment
+
+TalkPipe Vault can run in a Podman container with no local Python installation. The container watches a directory, indexes documents, and serves the web interface.
+
+### Prerequisites
+
+- [Podman](https://podman.io/) installed
+- For local AI models: [Ollama](https://ollama.ai/) running on the host (container uses `--network host` to reach it)
+
+### Quick Start
+
+```bash
+# Build the image (auto-builds on first run if missing)
+./podman-build.sh
+
+# Run the container
+./podman-run.sh
+```
+
+The web interface is at **http://localhost:8002**. Add documents to `~/Desktop/watch`; they are indexed automatically. The vault database is stored in `~/Desktop/vault`.
+
+### Configuration
+
+Paths and image name are set in `podman-config.sh` or via environment variables:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `IMAGE_NAME` | `talkpipe-vault` | Container image name |
+| `DESKTOP_DIR` | `~/Desktop` | Base directory for vault and watch folders |
+| `VAULT_DIR` | `$DESKTOP_DIR/vault` | Where the vector DB and full-text index are stored |
+| `WATCH_DIR` | `$DESKTOP_DIR/watch` | Directory to monitor for new/modified documents |
+
+Example: use custom paths without editing the config:
+
+```bash
+export VAULT_DIR=~/my-vault
+export WATCH_DIR=~/my-docs
+./podman-run.sh
+```
+
+### Scripts
+
+| Script | Purpose |
+|--------|---------|
+| `podman-build.sh` | Build the container image |
+| `podman-run.sh` | Run the container (builds image if missing) |
+| `podman-shell.sh` | Open a shell in a running container for debugging |
+
+### Debugging
+
+Connect to a running container:
+
+```bash
+./podman-shell.sh
+```
+
+This opens an interactive shell with test helpers loaded. Run `test-all` to check network, Ollama, and Tika. Non-interactive options:
+
+```bash
+./podman-shell.sh --test          # Run all tests
+./podman-shell.sh --test-network  # Test network connectivity
+./podman-shell.sh --test-ollama   # Test Ollama connectivity
+./podman-shell.sh --test-tika     # Test Tika functionality
+```
+
+### Ollama Access
+
+The container uses `--network host`, so it can reach `localhost:11434` on the host where Ollama runs. If Ollama is elsewhere, set `OLLAMA_BASE_URL` when running:
+
+```bash
+podman run -it --rm \
+    --userns=keep-id \
+    --network host \
+    -v "${VAULT_DIR}:/vault:Z" \
+    -v "${WATCH_DIR}:/watch:Z" \
+    -e VAULT_PATH=/vault \
+    -e VAULT_WATCH_DIR=/watch \
+    -e OLLAMA_BASE_URL=http://host.containers.internal:11434 \
+    talkpipe-vault
+```
+
+### Troubleshooting
+
+**Permission errors on vault directory**
+
+Use `--userns=keep-id` (already set in `podman-run.sh`) so the container runs as your user. If problems persist:
+
+```bash
+chmod -R u+rwX ~/Desktop/vault
+```
+
+**Ollama not reachable**
+
+Ensure Ollama is running on the host. With `--network host`, the container shares the host network; `localhost:11434` in the container is the host’s Ollama.
+
+---
+
 ## For Developers
 
 ### Architecture
@@ -495,8 +592,11 @@ talkpipe-vault/
 │   └── talkpipe_vault.jpg                  # Project logo
 ├── tests/                                  # Test suite
 ├── pyproject.toml                          # Package configuration
-├── Dockerfile                              # Container image
-└── docker-compose.yml                      # Service orchestration
+├── Containerfile                           # Container image
+├── podman-build.sh                         # Build container image
+├── podman-run.sh                           # Run container
+├── podman-shell.sh                         # Debug shell in running container
+└── podman-config.sh                        # Shared config for podman scripts
 ```
 
 ## Requirements

@@ -117,6 +117,37 @@ class TestFileWatcher:
             assert event["path"] == str(test_file)
             assert event["event"] == "deleted"
 
+    def test_file_moved_into_watch_dir(self):
+        """Test that files moved into the watch directory are detected (e.g., drag-and-drop)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create file outside watch dir, then move it in
+            outside = Path(tmpdir).parent / "moved_file.txt"
+            outside.write_text("Moved content")
+            dest = Path(tmpdir) / "moved_file.txt"
+
+            results = []
+
+            def run_pipeline():
+                script = f'INPUT FROM fileWatcher[path="{tmpdir}", max_events=1] | toList'
+                compiled = compile(script)
+                ans = list(compiled())
+                results.extend(ans)
+
+            thread = Thread(target=run_pipeline, daemon=True)
+            thread.start()
+
+            time.sleep(0.5)
+
+            # Move file into watch directory (simulates drag-and-drop)
+            outside.rename(dest)
+
+            thread.join(timeout=5.0)
+
+            assert len(results) == 1
+            event = results[0][0]
+            assert event["path"] == str(dest)
+            assert event["event"] == "created"
+
     def test_multiple_events(self):
         """Test that multiple file events are detected in order."""
         with tempfile.TemporaryDirectory() as tmpdir:

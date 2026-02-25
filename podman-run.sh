@@ -4,22 +4,17 @@
 
 set -e
 
-# Default values - adjust these to match your desktop paths
-DESKTOP_DIR="${HOME}/Desktop"
-VAULT_DIR="${DESKTOP_DIR}/vault"
-WATCH_DIR="${DESKTOP_DIR}/watch"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=podman-config.sh
+source "${SCRIPT_DIR}/podman-config.sh"
 
 # Create directories if they don't exist
 mkdir -p "${VAULT_DIR}"
 mkdir -p "${WATCH_DIR}"
 
-# Get the image name (defaults to talkpipe-vault)
-IMAGE_NAME="${IMAGE_NAME:-talkpipe-vault}"
-
 # Check if image exists, if not, build it
 if ! podman image exists "${IMAGE_NAME}" 2>/dev/null; then
-    echo "Image ${IMAGE_NAME} not found. Building..."
-    podman build -t "${IMAGE_NAME}" .
+    "${SCRIPT_DIR}/podman-build.sh"
 fi
 
 # Run the container
@@ -38,5 +33,3 @@ podman run -it --rm \
     -e VAULT_HOST=0.0.0.0 \
     -e VAULT_PORT=8002 \
     "${IMAGE_NAME}"
-
-
