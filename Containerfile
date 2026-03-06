@@ -23,7 +23,7 @@ WORKDIR /app
 RUN mkdir -p /app/data/vault /app/data/watch && chown -R vault:vault /app/data
 
 # Define volumes
-VOLUME ["/app/data/vault", "/app/data/watch"]
+VOLUME ["/app/data"]
 
 # Copy project files (including .git for setuptools-scm version detection)
 COPY pyproject.toml README.md ./

@@ -26,9 +26,9 @@
 
 #### Container Simplification
 - Moved internal container data directories to `/app/data/vault` and `/app/data/watch`
-- Updated `Containerfile` to create directories with correct ownership and define volumes
+- Updated `Containerfile` to define a single volume at `/app/data`
 - Simplified `entrypoint.sh`: removed complex permission repair logic in favor of simple writability check
-- Updated `podman-run.sh` to mount to new paths and use default environment variables
+- Updated `podman-run.sh` to mount a single data directory to `/app/data`
 
 #### `building_and_watching` Simplifications
 - Removed unused `extract_property` import

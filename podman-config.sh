@@ -4,5 +4,6 @@
 
 IMAGE_NAME="${IMAGE_NAME:-talkpipe-vault}"
 DESKTOP_DIR="${DESKTOP_DIR:-${HOME}/Desktop}"
-VAULT_DIR="${VAULT_DIR:-${DESKTOP_DIR}/vault}"
-WATCH_DIR="${WATCH_DIR:-${DESKTOP_DIR}/watch}"
+DATA_DIR="${DATA_DIR:-${DESKTOP_DIR}/talkpipe-data}"
+VAULT_DIR="${DATA_DIR}/vault"
+WATCH_DIR="${DATA_DIR}/watch"
