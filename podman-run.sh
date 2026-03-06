@@ -26,10 +26,8 @@ echo "  Web interface: http://localhost:8002"
 podman run -it --rm \
     --userns=keep-id \
     --network host \
-    -v "${VAULT_DIR}:/vault:Z" \
-    -v "${WATCH_DIR}:/watch:Z" \
-    -e VAULT_PATH=/vault \
-    -e VAULT_WATCH_DIR=/watch \
+    -v "${VAULT_DIR}:/app/data/vault:Z" \
+    -v "${WATCH_DIR}:/app/data/watch:Z" \
     -e VAULT_HOST=0.0.0.0 \
     -e VAULT_PORT=8002 \
     "${IMAGE_NAME}"

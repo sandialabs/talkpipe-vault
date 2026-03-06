@@ -24,6 +24,12 @@
 - Baked `talkpipe_tests.sh` into container image for faster shell connects
 - Refactored `entrypoint.sh` with `check_writable()` and `cleanup_lock_files()` helpers
 
+#### Container Simplification
+- Moved internal container data directories to `/app/data/vault` and `/app/data/watch`
+- Updated `Containerfile` to create directories with correct ownership and define volumes
+- Simplified `entrypoint.sh`: removed complex permission repair logic in favor of simple writability check
+- Updated `podman-run.sh` to mount to new paths and use default environment variables
+
 #### `building_and_watching` Simplifications
 - Removed unused `extract_property` import
 - Added `resolve_embedding_config()` and `get_vault_paths()` helpers in config module
@@ -81,4 +87,3 @@ A TalkPipe source that monitors a directory and automatically indexes new/modifi
 - Real-time document indexing as files are created or modified
 - Inherits all `fileWatcher` filtering capabilities (patterns, ignore patterns, polling mode)
 - Configurable embedding model and vector database destination
-

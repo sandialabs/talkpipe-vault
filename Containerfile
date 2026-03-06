@@ -19,6 +19,12 @@ RUN useradd -m -u 1000 -s /bin/bash vault
 # Set working directory
 WORKDIR /app
 
+# Create vault and watch directories
+RUN mkdir -p /app/data/vault /app/data/watch && chown -R vault:vault /app/data
+
+# Define volumes
+VOLUME ["/app/data/vault", "/app/data/watch"]
+
 # Copy project files (including .git for setuptools-scm version detection)
 COPY pyproject.toml README.md ./
 COPY .git/ ./.git/
@@ -39,8 +45,8 @@ COPY talkpipe_tests.sh /app/talkpipe_tests.sh
 USER vault
 
 # Default environment variables
-ENV VAULT_PATH=/vault
-ENV VAULT_WATCH_DIR=/watch
+ENV VAULT_PATH=/app/data/vault
+ENV VAULT_WATCH_DIR=/app/data/watch
 ENV VAULT_HOST=0.0.0.0
 ENV VAULT_PORT=8002
 
@@ -49,4 +55,3 @@ EXPOSE 8002
 
 # Run entrypoint
 ENTRYPOINT ["/app/entrypoint.sh"]
-

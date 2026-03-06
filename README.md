@@ -120,6 +120,8 @@ TalkPipe Vault can run in a Podman container with no local Python installation. 
 
 The web interface is at **http://localhost:8002**. Add documents to `~/Desktop/watch`; they are indexed automatically. The vault database is stored in `~/Desktop/vault`.
 
+**Note:** The container expects the vault volume at `/app/data/vault` and the watch volume at `/app/data/watch`.
+
 ### Configuration
 
 Paths and image name are set in `podman-config.sh` or via environment variables:
@@ -166,16 +168,14 @@ This opens an interactive shell with test helpers loaded. Run `test-all` to chec
 
 ### Ollama Access
 
-The container uses `--network host`, so it can reach `localhost:11434` on the host where Ollama runs. If Ollama is elsewhere, set `OLLAMA_BASE_URL` when running:
+The container uses `--network host`, so it can reach `localhost:11434` on the host where Ollama runs. If Ollama is elsewhere, set `OLLAMA_BASE_URL` when running (ensure `${VAULT_DIR}` and `${WATCH_DIR}` exist):
 
 ```bash
 podman run -it --rm \
     --userns=keep-id \
     --network host \
-    -v "${VAULT_DIR}:/vault:Z" \
-    -v "${WATCH_DIR}:/watch:Z" \
-    -e VAULT_PATH=/vault \
-    -e VAULT_WATCH_DIR=/watch \
+    -v "${VAULT_DIR}:/app/data/vault:Z" \
+    -v "${WATCH_DIR}:/app/data/watch:Z" \
     -e OLLAMA_BASE_URL=http://host.containers.internal:11434 \
     talkpipe-vault
 ```
