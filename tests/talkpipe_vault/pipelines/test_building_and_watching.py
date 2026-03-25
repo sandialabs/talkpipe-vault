@@ -11,10 +11,9 @@ from talkpipe import compile
 
 from talkpipe_vault.pipelines.building_and_watching import (
     build_vector_db_from_paths,
-    watch_into_vector_db,
     list_into_vector_db,
+    watch_into_vector_db,
 )
-
 
 # Get the path to sample documents
 SAMPLE_DOCS_DIR = Path(__file__).parent.parent.parent / "sampledocs"

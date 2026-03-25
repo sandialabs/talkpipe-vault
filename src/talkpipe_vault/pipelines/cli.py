@@ -1,9 +1,10 @@
 """CLI entry points for building and watching pipelines."""
 import argparse
 
-from talkpipe.util.config import configure_logger
 from talkpipe.pipe.basic import ToDict
 from talkpipe.pipe.io import Print
+from talkpipe.util.config import configure_logger
+
 from talkpipe_vault.pipelines.building_and_watching import (
     list_into_vector_db,
     watch_into_vector_db,

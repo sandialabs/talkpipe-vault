@@ -12,17 +12,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Any, Callable
 
-from fastapi import FastAPI, Request, Form, Depends
+import uvicorn
+from fastapi import Depends, FastAPI, Form, Request
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-import uvicorn
-
 from talkpipe.util.config import configure_logger
 
 from talkpipe_vault.pipelines.searching_and_prompting import (
-    VaultSearch,
     VaultChat,
+    VaultSearch,
     VaultTextSearch,
 )
 
@@ -133,7 +132,7 @@ def _update_document_counts(vault_path: str) -> None:
     # Get counts from LanceDB tables
     try:
         from talkpipe.search.lancedb import LanceDBDocumentStore
-        
+
         # Full documents count
         try:
             db = LanceDBDocumentStore(path=vectordb_path, table_name="full_documents")

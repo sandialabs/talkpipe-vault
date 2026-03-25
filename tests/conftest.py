@@ -1,6 +1,7 @@
 """Pytest configuration and fixtures for talkpipe-vault tests."""
 
 import subprocess
+
 import pytest
 
 

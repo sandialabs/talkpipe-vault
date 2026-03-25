@@ -8,9 +8,9 @@ import threading
 import time
 from pathlib import Path
 
-from talkpipe.util.config import configure_logger
 from talkpipe.pipe.basic import ToDict
 from talkpipe.pipe.io import Print
+from talkpipe.util.config import configure_logger
 
 from talkpipe_vault.apps.query import run_app
 from talkpipe_vault.pipelines.building_and_watching import watch_into_vector_db

@@ -1,6 +1,7 @@
 """Unit tests for the tika_extract function."""
 
 from pathlib import Path
+
 import pytest
 
 # Skip all tests in this module if tika is not installed
@@ -8,8 +9,8 @@ pytest.importorskip("tika")
 
 from talkpipe import compile
 from talkpipe.data.extraction import ExtractionResult
-from talkpipe_vault.tika import tika_extract
 
+from talkpipe_vault.tika import tika_extract
 
 # Get the path to sample documents
 SAMPLE_DOCS_DIR = Path(__file__).parent.parent / "sampledocs"

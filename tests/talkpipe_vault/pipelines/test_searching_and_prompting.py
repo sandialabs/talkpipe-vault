@@ -7,12 +7,11 @@ import pytest
 from talkpipe import compile
 from talkpipe.search.lancedb import LanceDBDocumentStore
 
-from talkpipe_vault.pipelines.searching_and_prompting import (
-    VaultSearch,
-    VaultChat,
-)
 from talkpipe_vault.pipelines.building_and_watching import list_into_vector_db
-
+from talkpipe_vault.pipelines.searching_and_prompting import (
+    VaultChat,
+    VaultSearch,
+)
 
 # Get the path to sample documents
 SAMPLE_DOCS_DIR = Path(__file__).parent.parent.parent / "sampledocs"

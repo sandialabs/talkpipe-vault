@@ -3,10 +3,10 @@
 import os
 
 from talkpipe_vault.pipelines.config import (
-    VECTOR_VAULT_SUBDIR,
     FULLTEXT_VAULT_SUBDIR,
-    resolve_embedding_config,
+    VECTOR_VAULT_SUBDIR,
     get_vault_paths,
+    resolve_embedding_config,
 )
 
 

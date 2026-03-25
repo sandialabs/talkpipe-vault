@@ -2,7 +2,12 @@ import os
 from typing import Annotated, Any
 
 from talkpipe.chatterlang import register_segment
-from talkpipe.pipe.basic import ToDict, AbstractFieldSegment, fillTemplate, EvalExpression
+from talkpipe.pipe.basic import (
+    AbstractFieldSegment,
+    EvalExpression,
+    ToDict,
+    fillTemplate,
+)
 from talkpipe.pipelines.basic_rag import RAGToText
 from talkpipe.pipelines.vector_databases import SearchVectorDatabaseSegment
 from talkpipe.search.whoosh import searchWhoosh
@@ -10,12 +15,13 @@ from talkpipe.search.whoosh import searchWhoosh
 from .config import (
     RAG_PREFIX_PROMPTS,
     RAG_PROMPT_DIRECTIVE,
-    get_embedding_model,
-    get_embedding_source,
     get_chat_model,
     get_chat_source,
+    get_embedding_model,
+    get_embedding_source,
     get_retrieval_template,
 )
+
 
 @register_segment("vaultSearch")
 class VaultSearch(AbstractFieldSegment):

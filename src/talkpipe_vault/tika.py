@@ -10,8 +10,8 @@ import logging
 from pathlib import Path
 from typing import Iterator, Union
 
-from tika import parser
 from talkpipe.data.extraction import ExtractionResult
+from tika import parser
 
 logger = logging.getLogger(__name__)
 

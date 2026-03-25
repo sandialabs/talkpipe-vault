@@ -1,11 +1,11 @@
 """Unit tests for text extraction segments (tikaToText and doclingToText)."""
 
 from pathlib import Path
+
 import pytest
-
 from talkpipe import compile
-from talkpipe_vault.segments import TikaToText, DoclingToText
 
+from talkpipe_vault.segments import DoclingToText, TikaToText
 
 # Get the path to sample documents
 SAMPLE_DOCS_DIR = Path(__file__).parent.parent / "sampledocs"

@@ -1,14 +1,14 @@
 import os
 import time
 from pathlib import Path
+from queue import Empty, Queue
 from typing import Annotated
-from queue import Queue, Empty
-from talkpipe import source, register_source
+
+from talkpipe import register_source, source
+from watchdog.events import FileSystemEventHandler, PatternMatchingEventHandler
 from watchdog.observers import Observer
 from watchdog.observers.polling import PollingObserver
-from watchdog.events import PatternMatchingEventHandler, FileSystemEventHandler
 from watchdog.utils.patterns import match_any_paths
-
 
 # Common patterns for temp files, hidden files, editor backups, etc.
 COMMON_IGNORE_PATTERNS = [

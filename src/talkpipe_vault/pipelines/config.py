@@ -50,8 +50,8 @@ Configuration can be set via:
 
 import os
 
-from talkpipe.util.data_manipulation import dict_to_text
 from talkpipe.util.config import get_config
+from talkpipe.util.data_manipulation import dict_to_text
 
 # Default values (used if not specified in TalkPipe config)
 EMBEDDING_MODEL = "embeddinggemma"

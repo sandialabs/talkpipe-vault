@@ -1,25 +1,27 @@
 from typing import Annotated, Any
-from talkpipe import segment, register_segment, source, register_source
-from talkpipe.pipe.io import Print
-from talkpipe.data.extraction import listFiles, ReadFile
-from talkpipe.pipelines.vector_databases import MakeVectorDatabaseSegment
-from talkpipe_vault.watchdog import file_watcher
+
+from talkpipe import register_segment, register_source, segment, source
+from talkpipe.data.extraction import ReadFile, listFiles
+from talkpipe.data.text.chunking_units import ShingleText, splitText
 from talkpipe.pipe.basic import (
-    ToDict,
-    FilterExpression,
-    EvalExpression,
-    setAs,
-    fillTemplate,
     Debounce,
+    EvalExpression,
+    FilterExpression,
+    ToDict,
+    fillTemplate,
+    setAs,
 )
-from talkpipe.pipe.io import FileExistsFilter, DeleteFile
-from talkpipe.data.text.chunking_units import splitText, ShingleText
+from talkpipe.pipe.io import DeleteFile, FileExistsFilter, Print
+from talkpipe.pipelines.vector_databases import MakeVectorDatabaseSegment
 from talkpipe.search.whoosh import indexWhoosh
+
+from talkpipe_vault.watchdog import file_watcher
+
 from .config import (
     get_document_template,
     get_shingle_template,
-    resolve_embedding_config,
     get_vault_paths,
+    resolve_embedding_config,
 )
 
 

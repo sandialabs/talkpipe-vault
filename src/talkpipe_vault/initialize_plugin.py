@@ -19,7 +19,7 @@ def initialize_plugin() -> None:
     Falls back to docling_extract if tika is not available.
     """
     from talkpipe.data.extraction import global_extractor_registry
-    
+
     # Try to register Tika as the default extractor
     try:
         from talkpipe_vault.tika import tika_extract
