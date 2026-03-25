@@ -60,12 +60,12 @@ class TestBuildVectorDbFromPaths:
 
             input_data = [
                 {"path": PDF_FILE, "event": "created"},
-                {"path": DOCX_FILE, "event": "created"},
                 {"path": HTML_FILE, "event": "created"},
+                {"path": DOCX_FILE, "event": "created"},
             ]
             results = list(segment(input_data))
 
-            assert len(results) > 0
+            assert len(results) == 3
 
     def test_build_vector_db_creates_tables(self):
         """Test that both full_documents and shingled_chunks tables are created."""

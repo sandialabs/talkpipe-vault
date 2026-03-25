@@ -2,9 +2,9 @@ name: CI/CD Pipeline
 
 on:
   push:
-    branches: [ main, develop, master ]
+    branches: [ main, develop, master, 'bugfix/**', 'feature/**', 'chore/**' ]
   pull_request:
-    branches: [ main, develop, master ]
+    branches: [ main, develop, master, 'bugfix/**', 'feature/**', 'chore/**' ]
   release:
     types: [ published ]
 
