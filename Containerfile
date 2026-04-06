@@ -1,16 +1,14 @@
 FROM fedora:latest
 
-# Install Python, pip, git (for setuptools-scm), Java (for Tika), and network tools
+# Install Python, pip, git (for setuptools-scm), and network tools
 RUN dnf install -y --setopt=install_weak_deps=False \
     python3 \
     python3-pip \
     git \
-    java-21-openjdk-headless \
     curl \
     iputils \
     bind-utils \
     && python3 --version \
-    && java -version \
     && dnf clean all
 
 # Create non-root user
@@ -32,7 +30,7 @@ COPY src/ ./src/
 
 # Install the package
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir .[tika]
+    pip install --no-cache-dir .
 
 # Copy entrypoint script
 COPY entrypoint.sh /app/entrypoint.sh

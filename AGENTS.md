@@ -13,12 +13,11 @@ application, but constituent parts can also be used in other applications.
 
 ## Project Structure
 - `src/talkpipe_vault/` - Main library source code
-  - `apps/` - Application code (query interface, vault server)
-  - `pipelines/` - Pipeline implementations (building vector DBs, searching, watching)
-  - `segments.py` - Text extraction segments (Tika, Docling)
-  - `watchdog.py` - File monitoring source
-  - `tika.py`, `docling.py` - Text extraction modules
-  - `initialize_plugin.py` - TalkPipe plugin initialization
+ - `apps/` - Application code (query interface, vault server)
+ - `pipelines/` - Pipeline implementations (building vector DBs, searching, watching)
+ - `segments.py` - Text extraction segments
+ - `watchdog.py` - File monitoring source
+ - `initialize_plugin.py` - TalkPipe plugin initialization
 - `tests/talkpipe_vault/` - Unit tests mirroring source structure
 - `docs/` - Documentation files
 - Root directory contains configuration files (pyproject.toml, docker files, etc.)

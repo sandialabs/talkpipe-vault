@@ -15,6 +15,9 @@
 
 ### Refactoring
 
+#### Dependency Cleanup
+- Removed `docling` and `tika` references from package metadata, container/test scripts, and project documentation to align with the current text extraction pipeline.
+
 #### Podman Scripts
 - Removed duplicate `Dockerfile`; kept `Containerfile` only
 - Simplified `podman-build.sh` (removed Containerfile/Dockerfile branching)

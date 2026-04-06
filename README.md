@@ -24,7 +24,7 @@ What you get:
 - **Reusable building blocks**: TalkPipe sources, segments, and end‑to‑end pipelines that you can compose to build your own file/document management workflows.
 
 How it works (at a glance):
-- Watches directories or enumerates files, converts documents to text (Docling), and stores full‑document and shingled‑chunk embeddings in LanceDB.
+- Watches directories or enumerates files, converts documents to text, and stores full‑document and shingled‑chunk embeddings in LanceDB.
 - Builds a Whoosh full‑text index for precise keyword queries alongside semantic search.
 - Supports local models (Ollama) and cloud providers (OpenAI) via simple configuration.
 
@@ -35,7 +35,7 @@ Together, these applications and components provide both ready‑to‑use capabi
 - **Automatic Document Monitoring**: Watches folders and automatically processes new or modified documents
 - **Semantic Search**: Find documents by meaning, not just keywords
 - **Multiple AI Backends**: Works with OpenAI or local Ollama models (privacy-friendly, no cloud required)
-- **Format Support**: Handles various document formats via [Docling](https://github.com/DS4SD/docling)
+- **Format Support**: Handles diverse document formats through the extraction pipeline
 - **Vector Database**: Uses [LanceDB](https://lancedb.com/) for efficient similarity search
 - **Intelligent Chunking**: Breaks documents into overlapping chunks for better search accuracy
 
@@ -157,13 +157,12 @@ Connect to a running container:
 ./podman-shell.sh
 ```
 
-This opens an interactive shell with test helpers loaded. Run `test-all` to check network, Ollama, and Tika. Non-interactive options:
+This opens an interactive shell with test helpers loaded. Run `test-all` to check network and Ollama. Non-interactive options:
 
 ```bash
 ./podman-shell.sh --test          # Run all tests
 ./podman-shell.sh --test-network  # Test network connectivity
 ./podman-shell.sh --test-ollama   # Test Ollama connectivity
-./podman-shell.sh --test-tika     # Test Tika functionality
 ```
 
 ### Ollama Access
@@ -205,7 +204,7 @@ TalkPipe Vault is built on [TalkPipe](https://github.com/sandialabs/talkpipe), a
 **Technology Stack:**
 
 - **Pipeline Framework**: TalkPipe for composable data processing
-- **Document Processing**: Docling for multi-format document conversion
+- **Document Processing**: Text extraction pipeline for document conversion
 - **Vector Database**: LanceDB for semantic search
 - **Full-Text Search**: Whoosh for keyword-based search
 - **File Monitoring**: Watchdog for filesystem events
@@ -222,7 +221,7 @@ Text Chunking → Shingle Generation → Chunk Embedding → Vector Storage
 ```
 
 1. **File Watcher**: Monitors directories for file system events (create, modify, delete)
-2. **Document Parsing**: Converts various formats to text using Docling
+2. **Document Parsing**: Converts various formats to text
 3. **Filtering**: Removes empty or deleted documents
 4. **Full Document Embedding**: Stores complete documents in `full_documents` table
 5. **Text Chunking**: Splits documents into ~500 character chunks
@@ -319,7 +318,6 @@ TalkPipe Vault registers custom sources and segments with TalkPipe:
 - `listIntoVectorDB`: Batch processing from glob patterns
 
 **Segments:**
-- `doclingToText`: Document format conversion
 - `buildVectorDBFromPaths`: Complete document processing pipeline
 - `vaultSearch`: Semantic search on vault's vector database
 - `vaultTextSearch`: Full-text keyword search using Whoosh index
@@ -348,7 +346,7 @@ for event in pipeline():
 
 ```python
 from talkpipe_vault.watchdog import file_watcher
-from talkpipe_vault.docling import DoclingFileToText
+from talkpipe.data.extraction import ReadFile
 from talkpipe.pipe.basic import FilterExpression
 from talkpipe.pipelines.vector_databases import MakeVectorDatabaseSegment
 
@@ -356,7 +354,7 @@ from talkpipe.pipelines.vector_databases import MakeVectorDatabaseSegment
 pipeline = \
     file_watcher(path="/path/to/watch") | \
     FilterExpression(expression="item['event'] != 'deleted'") | \
-    DoclingFileToText(field="path", set_as="full_content") | \
+    ReadFile(field="path", set_as="full_content") | \
     FilterExpression(expression="len(item.get('full_content', '').strip()) > 0") | \
     MakeVectorDatabaseSegment(
         path="~/my-vault",
@@ -591,7 +589,7 @@ talkpipe-vault/
 │       │   ├── query.py                    # Web application
 │       │   └── templates/                  # HTML templates
 │       ├── watchdog.py                     # File system monitoring
-│       └── docling.py                      # Document conversion
+│       └── segments.py                     # Text extraction segments
 ├── docs/
 │   └── talkpipe_vault.jpg                  # Project logo
 ├── tests/                                  # Test suite
@@ -629,7 +627,6 @@ Apache License 2.0 - See [LICENSE](LICENSE) file for details.
 ## Acknowledgments
 
 - Built with [TalkPipe](https://github.com/sandialabs/talkpipe)
-- Document processing via [Docling](https://github.com/DS4SD/docling)
 - Vector storage using [LanceDB](https://lancedb.com/)
 - File monitoring with [Watchdog](https://github.com/gorakhargosh/watchdog)
 

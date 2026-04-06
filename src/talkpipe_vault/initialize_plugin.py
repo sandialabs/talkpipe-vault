@@ -1,8 +1,6 @@
 """Plugin initialization module for talkpipe_vault.
 
-This module is loaded by talkpipe's plugin system and registers Tika-based
-file extraction as the default handler for the global extractor registry.
-Docling is kept available as a fallback option.
+This module is loaded by talkpipe's plugin system.
 """
 
 import logging

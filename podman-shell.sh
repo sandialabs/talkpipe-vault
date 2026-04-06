@@ -41,10 +41,6 @@ case "${1:-}" in
         podman exec "${CONTAINER_ID}" /bin/bash -c "source ${TESTS_SH} && test_ollama"
         exit 0
         ;;
-    --test-tika|-k)
-        podman exec "${CONTAINER_ID}" /bin/bash -c "source ${TESTS_SH} && test_tika"
-        exit 0
-        ;;
     "")
         ;;
     *)
@@ -59,7 +55,6 @@ echo ""
 echo "Available test commands:"
 echo "  test_network  or  test-net   - Test network connectivity"
 echo "  test_ollama   or  test-ollama - Test Ollama connectivity"
-echo "  test_tika     or  test-tika   - Test Tika functionality"
 echo "  test-all                      - Run all tests"
 echo ""
 echo "Type 'exit' to leave the container shell."

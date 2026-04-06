@@ -22,7 +22,7 @@ TalkPipe Vault is an AI-powered personal information assistant that automaticall
 ```
 src/talkpipe_vault/
 ├── __init__.py                 # Package initialization
-├── docling.py                  # Document conversion (50+ formats)
+├── segments.py                 # Text extraction segments
 ├── watchdog.py                 # File system monitoring
 └── pipelines/
     ├── config.py               # Default embedding/template config
@@ -39,7 +39,6 @@ src/talkpipe_vault/
 - `listIntoVectorDB` - Batch process files matching glob pattern
 
 ### TalkPipe Segments (registered entry points)
-- `doclingToText` - Extract text from 50+ file formats
 - `buildVectorDBFromPaths` - Core document processing pipeline
 - `vaultSearch` - Semantic search in vector database
 - `vaultChat` - RAG-based conversational AI
@@ -134,7 +133,7 @@ docker-compose down
 
 - **Pipeline Framework**: TalkPipe (>=0.10.2a1) with OpenAI/Ollama support
 - **Vector Database**: LanceDB
-- **Document Conversion**: Docling (50+ formats)
+- **Document Conversion**: Text extraction pipeline
 - **File Monitoring**: Watchdog
 - **Web Framework**: FastAPI + Uvicorn (infrastructure exists, not yet used)
 
@@ -143,7 +142,7 @@ docker-compose down
 ```
 File Events/Paths
     ↓
-DoclingFileToText (extract content from PDF, DOCX, source code, etc.)
+ReadFile (extract textual content from files)
     ↓
 Template formatting
     ↓

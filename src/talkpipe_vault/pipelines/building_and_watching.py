@@ -70,7 +70,7 @@ def build_vector_db_from_paths(
         - "path": str - File path to process
         - "event": str (optional) - If present and equals "deleted", item is skipped
 
-    Processes each file through readFile (using docling for documents) to extract text
+    Processes each file through readFile to extract text
     as ExtractionResult objects, then creates embeddings for both full documents and
     shingled chunks. Stores results in two LanceDB tables: 'full_documents' and
     'shingled_chunks'. Also indexes full documents in a Whoosh full-text search index
