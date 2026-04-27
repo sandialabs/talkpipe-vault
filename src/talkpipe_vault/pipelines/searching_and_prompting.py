@@ -1,6 +1,7 @@
-import os
+import json
 from typing import Annotated, Any
 
+from talkpipe import segment
 from talkpipe.chatterlang import register_segment
 from talkpipe.pipe.basic import (
     AbstractFieldSegment,
@@ -8,11 +9,15 @@ from talkpipe.pipe.basic import (
     ToDict,
     fillTemplate,
 )
+from talkpipe.pipe.core import is_metadata
+from talkpipe.pipe.metadata import Flush
 from talkpipe.pipelines.basic_rag import RAGToText
 from talkpipe.pipelines.vector_databases import SearchVectorDatabaseSegment
-from talkpipe.search.whoosh import searchWhoosh
+from talkpipe.search.lancedb import LanceDBDocumentStore
+from talkpipe.util.data_manipulation import assign_property, extract_property
 
 from .config import (
+    DEFAULT_VECTOR_TABLE_NAME,
     RAG_PREFIX_PROMPTS,
     RAG_PROMPT_DIRECTIVE,
     get_chat_model,
@@ -20,7 +25,111 @@ from .config import (
     get_embedding_model,
     get_embedding_source,
     get_retrieval_template,
+    get_vector_db_path,
 )
+
+
+def _has_document_fts_index(table: Any, field_name: str) -> bool:
+    """Return True when an FTS index exists for the target field."""
+    try:
+        indices = table.list_indices()
+    except Exception:
+        return False
+
+    for index in indices:
+        try:
+            if index.index_type != "FTS":
+                continue
+            if field_name in list(index.columns):
+                return True
+        except Exception:
+            continue
+    return False
+
+
+@register_segment("searchLance")
+@segment(process_metadata=True)
+def searchLance(
+    queries: Annotated[object, "Iterator of query strings"],
+    path: Annotated[
+        str,
+        "Path to LanceDB directory containing the target table",
+    ],
+    table_name: Annotated[str, "Table name to search"] = DEFAULT_VECTOR_TABLE_NAME,
+    limit: Annotated[int, "Maximum number of results per query"] = 100,
+    all_results_at_once: Annotated[
+        bool,
+        "If True, emit a list of results per query. Otherwise emit one result at a time.",
+    ] = False,
+    continue_on_error: Annotated[
+        bool, "If True, continue processing when a query fails"
+    ] = True,
+    field: Annotated[str, "Field to extract query from"] = "_",
+    set_as: Annotated[str | None, "Field name to set results on input items"] = None,
+):
+    """
+    Search LanceDB documents using LanceDB's native full-text search index.
+
+    Expects a LanceDB table containing TalkPipe document records where each row can
+    be loaded through LanceDBDocumentStore and converted to a dict-like document.
+    """
+    if set_as is not None and not all_results_at_once:
+        raise ValueError("set_as requires all_results_at_once=True")
+
+    doc_store = LanceDBDocumentStore(path=path, table_name=table_name)
+    table, _ = doc_store._get_table()
+    # Build the FTS index once, then reuse it on later searches.
+    if not _has_document_fts_index(table, "document"):
+        table.create_fts_index("document")
+
+    for item in queries:
+        if is_metadata(item) and isinstance(item, Flush):
+            continue
+
+        query = extract_property(item, field, fail_on_missing=True)
+        try:
+            rows = (
+                table.search(str(query), query_type="fts")
+                .limit(limit)
+                .to_list()
+            )
+            results: list[dict[str, Any]] = []
+            for row in rows:
+                raw_document = row.get("document", "{}")
+                if isinstance(raw_document, str):
+                    try:
+                        document = json.loads(raw_document)
+                    except json.JSONDecodeError:
+                        document = {"content": raw_document}
+                elif isinstance(raw_document, dict):
+                    document = raw_document
+                else:
+                    document = {"content": str(raw_document)}
+
+                results.append(
+                    {
+                        "doc_id": row.get("id", ""),
+                        "score": float(row.get("_score", 0.0)),
+                        "document": document,
+                    }
+                )
+
+            if all_results_at_once:
+                if set_as:
+                    assign_property(item, set_as, results)
+                    yield item
+                else:
+                    yield results
+            else:
+                if set_as:
+                    raise ValueError(
+                        "set_as only works with this segment if all_results_at_once is True."
+                    )
+                for result in results:
+                    yield result
+        except Exception:
+            if not continue_on_error:
+                raise
 
 
 @register_segment("vaultSearch")
@@ -30,13 +139,13 @@ class VaultSearch(AbstractFieldSegment):
 
     Expects input items containing a search query string (either as the full item
     or in a specified field). The query is templated and used to search the
-    'shingled_chunks' table in LanceDB.
+    'docs' table in LanceDB.
 
     Emits search results from the vector database containing matching document chunks.
     """
     def __init__(
         self,
-        vault_path: Annotated[str, "Base path for vault storage. Vector DB at vault_path/vector_vault, full-text index at vault_path/fulltext_vault"],
+        vault_path: Annotated[str, "Path to LanceDB created by makevectordatabase"],
         field: Annotated[str, "The field to extract. If none, use full item."] = None,
         set_as: Annotated[str, "The field to set/append the result as."] = None,
         multi_emit: Annotated[bool, "Whether this class potentially emits multiple results per item."
@@ -52,12 +161,12 @@ class VaultSearch(AbstractFieldSegment):
         retrieval_template = get_retrieval_template()
         
         self.vault_path = vault_path
-        vectordb_path = os.path.join(vault_path, "vector_vault")
+        vectordb_path = get_vector_db_path(vault_path)
         self.pipeline = (ToDict(field_list="_:query") |  \
             fillTemplate(template=retrieval_template, set_as="templated_query") | \
             SearchVectorDatabaseSegment(
                 path=vectordb_path,
-                table_name="shingled_chunks",
+                table_name=DEFAULT_VECTOR_TABLE_NAME,
                 query_field="templated_query",
                 embedding_model=embedding_model,
                 embedding_source=embedding_source,
@@ -74,13 +183,13 @@ class VaultChat(AbstractFieldSegment):
 
     Expects input items containing a user query string (either as the full item
     or in a specified field). The query is used to retrieve relevant context from
-    the vault's 'shingled_chunks' table, which is then used to generate a response.
+    the vault's 'docs' table, which is then used to generate a response.
 
     Emits AI-generated response strings based on retrieved vault context.
     """
     def __init__(
         self,
-        vault_path: Annotated[str, "Base path for vault storage. Vector DB at vault_path/vector_vault, full-text index at vault_path/fulltext_vault"],
+        vault_path: Annotated[str, "Path to LanceDB created by makevectordatabase"],
         field: Annotated[str, "The field to extract. If none, use full item."] = None,
         set_as: Annotated[str, "The field to set/append the result as."] = None,
         multi_emit: Annotated[bool, "Whether this class potentially emits multiple results per item."
@@ -100,14 +209,14 @@ class VaultChat(AbstractFieldSegment):
         retrieval_template = get_retrieval_template()
         
         self.vault_path = vault_path
-        vectordb_path = os.path.join(vault_path, "vector_vault")
+        vectordb_path = get_vector_db_path(vault_path)
         self.pipeline = (ToDict(field_list="_:query") | \
             fillTemplate(template=retrieval_template, set_as="templated_query") | \
             RAGToText(
                 path=vectordb_path,
                 content_field="query",
                 embedding_prompt="templated_query",
-                table_name="shingled_chunks",
+                table_name=DEFAULT_VECTOR_TABLE_NAME,
                 set_as="chat_response",
                 embedding_model=embedding_model,
                 embedding_source=embedding_source,
@@ -126,11 +235,11 @@ class VaultChat(AbstractFieldSegment):
 @register_segment("vaultTextSearch")
 class VaultTextSearch(AbstractFieldSegment):
     """
-    Segment that performs full-text search on a vault's Whoosh index.
+    Segment that performs keyword search on a vault's LanceDB table.
 
     Expects input items containing a search query string (either as the full item
-    or in a specified field). The query uses Whoosh query syntax for keyword-based
-    searching of the 'content' field in the fulltext_vault index.
+    or in a specified field). The query is matched against document text fields
+    in the configured LanceDB table.
 
     Emits search results as dicts containing:
         - "doc_id": str - Document identifier (file path)
@@ -139,7 +248,7 @@ class VaultTextSearch(AbstractFieldSegment):
     """
     def __init__(
         self,
-        vault_path: Annotated[str, "Base path for vault storage. Vector DB at vault_path/vector_vault, full-text index at vault_path/fulltext_vault"],
+        vault_path: Annotated[str, "Path to LanceDB created by makevectordatabase"],
         limit: Annotated[int, "Maximum number of results to return"] = 10,
         field: Annotated[str, "The field to extract. If none, use full item."] = None,
         set_as: Annotated[str, "The field to set/append the result as."] = None,
@@ -147,9 +256,10 @@ class VaultTextSearch(AbstractFieldSegment):
                                     "Should be set by the subclass constructor call or the field_segment decorator, not by the user."] = True):
         super().__init__(field=field, set_as=set_as, multi_emit=multi_emit)
         self.vault_path = vault_path
-        whoosh_index_path = os.path.join(vault_path, "fulltext_vault")
-        self.pipeline = searchWhoosh(
-            index_path=whoosh_index_path,
+        vectordb_path = get_vector_db_path(vault_path)
+        self.pipeline = searchLance(
+            path=vectordb_path,
+            table_name=DEFAULT_VECTOR_TABLE_NAME,
             limit=limit,
             all_results_at_once=False
         ).as_function(single_in=True, single_out=False)

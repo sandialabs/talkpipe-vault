@@ -7,7 +7,15 @@
 #### Podman Deployment
 - Added README section for Podman deployment: prerequisites, quick start, configuration, scripts, debugging, Ollama access, troubleshooting
 
+#### TalkPipe 0.12 Compatibility Notes
+- Updated README and `vault-query` CLI help to clarify that query mode expects a LanceDB path containing TalkPipe's `docs` table (for example, output from `makevectordatabase`).
+
 ### Bug Fixes
+
+#### Query App Uses TalkPipe Native Vector DB
+- Updated `vaultSearch` and `vaultChat` to query the `docs` table used by TalkPipe's `makevectordatabase` and `serverag` commands.
+- Updated the web query app to treat `vault_path` as the LanceDB path and read document counts from the `docs` table.
+- Added a new `searchLance` segment and migrated `vaultTextSearch` from Whoosh to LanceDB-backed keyword search.
 
 #### File Watcher on Linux
 - **Move-only handler**: Added a second handler that receives all `FileMovedEvent` events without pattern filtering. `PatternMatchingEventHandler` filters moves when `src_path` is outside the watch tree (e.g., `mv` from `/tmp`, drag-and-drop), causing them to be dropped. The new handler bypasses this and correctly indexes moved files.

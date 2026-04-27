@@ -24,6 +24,10 @@ from talkpipe_vault.pipelines.searching_and_prompting import (
     VaultSearch,
     VaultTextSearch,
 )
+from talkpipe_vault.pipelines.config import (
+    DEFAULT_VECTOR_TABLE_NAME,
+    get_vector_db_path,
+)
 
 configure_logger("root:ERROR")
 
@@ -68,12 +72,9 @@ def init_pipelines(vault_path: str) -> None:
     for semantic search, keyword search, and RAG-based chat.
 
     Args:
-        vault_path: Base path for vault storage. Vector DB is located at
-            vault_path/vector_vault, full-text index at vault_path/fulltext_vault.
+        vault_path: Path to LanceDB created by makevectordatabase. Optional
+            Whoosh index is expected at vault_path/fulltext_vault.
     """
-    import os
-    from pathlib import Path
-    
     _state.vault_path = vault_path
     _refresh_pipelines()
     
@@ -123,29 +124,19 @@ def _refresh_pipelines(force: bool = False) -> None:
 
 def _update_document_counts(vault_path: str) -> None:
     """Update document counts from vault storage locations."""
-    import os
-    from pathlib import Path
-    
-    vectordb_path = os.path.join(vault_path, "vector_vault")
+    vectordb_path = get_vector_db_path(vault_path)
     whoosh_path = os.path.join(vault_path, "fulltext_vault")
     
     # Get counts from LanceDB tables
     try:
         from talkpipe.search.lancedb import LanceDBDocumentStore
 
-        # Full documents count
-        try:
-            db = LanceDBDocumentStore(path=vectordb_path, table_name="full_documents")
-            _state.full_documents_count = db.count()
-        except Exception:
-            _state.full_documents_count = 0
-        
-        # Shingled chunks count
-        try:
-            db = LanceDBDocumentStore(path=vectordb_path, table_name="shingled_chunks")
-            _state.shingled_chunks_count = db.count()
-        except Exception:
-            _state.shingled_chunks_count = 0
+        docs_count = LanceDBDocumentStore(
+            path=vectordb_path,
+            table_name=DEFAULT_VECTOR_TABLE_NAME,
+        ).count()
+        _state.full_documents_count = docs_count
+        _state.shingled_chunks_count = 0
     except Exception:
         _state.full_documents_count = 0
         _state.shingled_chunks_count = 0
@@ -510,8 +501,8 @@ def run_app(vault_path: str, host: str = "127.0.0.1", port: int = 8000) -> None:
     Start the web application server.
 
     Args:
-        vault_path: Base path for vault storage. Vector DB is located at
-            vault_path/vector_vault, full-text index at vault_path/fulltext_vault.
+        vault_path: Path to LanceDB created by makevectordatabase. Optional
+            Whoosh index is expected at vault_path/fulltext_vault.
         host: Host to bind to (default: 127.0.0.1)
         port: Port to listen on (default: 8000)
     """
@@ -526,7 +517,10 @@ def main() -> None:
     )
     parser.add_argument(
         "vault_path",
-        help="Path to vault storage directory",
+        help=(
+            "Path to LanceDB directory containing the TalkPipe docs table "
+            "(e.g., output path from makevectordatabase)"
+        ),
     )
     parser.add_argument(
         "--host",

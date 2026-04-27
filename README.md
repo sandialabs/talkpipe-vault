@@ -92,10 +92,13 @@ vault-list-into-vectordb "/path/to/documents/**/*.txt" \
     --overwrite
 ```
 
-The commands above populate a vault at `~/my-vault` with:
+The indexing commands above populate a vault at `~/my-vault` with:
 - `vector_vault/full_documents`: Embeddings for full documents (broad search)
 - `vector_vault/shingled_chunks`: Embeddings for shingled text windows (precise retrieval)
 - `fulltext_vault`: Whoosh full‑text index for keyword search
+
+When using TalkPipe's native `makevectordatabase` command, pass that LanceDB path directly
+to `vault-query` (it expects the `docs` table in the directory you provide).
 
 ---
 
@@ -294,6 +297,7 @@ vault-query [VAULT_PATH] [OPTIONS]
 ```
 
 **Options:**
+- `VAULT_PATH`: LanceDB directory path containing TalkPipe's `docs` table (required)
 - `--host TEXT`: Host to bind to (default: `127.0.0.1`)
 - `--port INT`: Port to listen on (default: `8000`)
 

@@ -1,16 +1,15 @@
 """Unit tests for the searching_and_prompting pipeline module."""
 
-import tempfile
+import subprocess
 from pathlib import Path
 
 import pytest
 from talkpipe import compile
-from talkpipe.search.lancedb import LanceDBDocumentStore
 
-from talkpipe_vault.pipelines.building_and_watching import list_into_vector_db
 from talkpipe_vault.pipelines.searching_and_prompting import (
     VaultChat,
     VaultSearch,
+    VaultTextSearch,
 )
 
 # Get the path to sample documents
@@ -22,11 +21,11 @@ HTML_FILE = str(SAMPLE_DOCS_DIR / "SampleDocument.html")
 
 @pytest.fixture
 def populated_vector_db(tmp_path):
-    """Create a populated vector database for testing."""
+    """Create a populated docs-table vector database for testing."""
     source_dir = tmp_path / "source"
     source_dir.mkdir()
-    vault_path = tmp_path / "vault"
-    vault_path.mkdir()
+    vectordb_path = tmp_path / "vectordb"
+    vectordb_path.mkdir()
 
     # Create test text files
     test_file1 = source_dir / "document1.txt"
@@ -47,16 +46,22 @@ def populated_vector_db(tmp_path):
         "It involves training models on data to make predictions."
     )
 
-    # Build vector database
-    source = list_into_vector_db(
-        source_pattern=str(source_dir),
-        vault_path=str(vault_path),
-        overwrite=True,
+    # Build vector database with TalkPipe's native makevectordatabase command
+    result = subprocess.run(
+        [
+            "makevectordatabase",
+            f"{source_dir}/*.txt",
+            "--path",
+            str(vectordb_path),
+            "--overwrite",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
     )
-    # Process all documents
-    list(source())
+    assert result.returncode == 0, result.stderr
 
-    yield str(vault_path)
+    yield str(vectordb_path)
 
 
 class TestVaultSearch:
@@ -210,6 +215,42 @@ class TestVaultChat:
         assert callable(segment.pipeline)
 
 
+class TestVaultTextSearch:
+    """Tests for the VaultTextSearch segment."""
+
+    def test_segment_is_registered(self):
+        """Test that the segment is properly registered with TalkPipe."""
+        script = compile("| vaultTextSearch[vault_path='/tmp/test_vault']")
+        assert script is not None
+
+    def test_segment_callable(self, tmp_path):
+        """Test that VaultTextSearch class is instantiable."""
+        segment = VaultTextSearch(vault_path=str(tmp_path))
+        assert segment is not None
+        assert hasattr(segment, "process_value")
+
+    def test_keyword_search_returns_results(self, populated_vector_db):
+        """Test keyword search returns matching documents from LanceDB."""
+        segment = VaultTextSearch(vault_path=populated_vector_db)
+        result = segment.process_value("FastAPI")
+
+        assert result is not None
+        assert isinstance(result, list)
+        assert len(result) > 0
+        assert all("doc_id" in item for item in result)
+        assert all("score" in item for item in result)
+        assert all("document" in item for item in result)
+
+    def test_keyword_search_with_phrase(self, populated_vector_db):
+        """Test quoted phrase query matching in keyword search."""
+        segment = VaultTextSearch(vault_path=populated_vector_db)
+        result = segment.process_value('"machine learning"')
+
+        assert result is not None
+        assert isinstance(result, list)
+        assert len(result) > 0
+
+
 class TestVaultSearchAdvanced:
     """Advanced tests for VaultSearch functionality."""
 
@@ -257,17 +298,23 @@ class TestIntegrationWithSampleDocs:
 
     @pytest.fixture
     def sample_docs_vector_db(self, tmp_path):
-        """Create a vector database from sample documents."""
-        vault_path = tmp_path / "vault"
-        vault_path.mkdir()
-        source = list_into_vector_db(
-            source_pattern=str(SAMPLE_DOCS_DIR),
-            vault_path=str(vault_path),
-            overwrite=True,
+        """Create a docs-table vector database from sample documents."""
+        vectordb_path = tmp_path / "vectordb"
+        vectordb_path.mkdir()
+        result = subprocess.run(
+            [
+                "makevectordatabase",
+                f"{SAMPLE_DOCS_DIR}/*",
+                "--path",
+                str(vectordb_path),
+                "--overwrite",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
         )
-        # Process all sample documents
-        list(source())
-        yield str(vault_path)
+        assert result.returncode == 0, result.stderr
+        yield str(vectordb_path)
 
     def test_search_sample_documents(self, sample_docs_vector_db):
         """Test searching the sample documents."""

@@ -135,6 +135,7 @@ def get_embedding_source() -> str:
 
 VECTOR_VAULT_SUBDIR = "vector_vault"
 FULLTEXT_VAULT_SUBDIR = "fulltext_vault"
+DEFAULT_VECTOR_TABLE_NAME = "docs"
 
 
 def resolve_embedding_config(
@@ -164,6 +165,13 @@ def get_vault_paths(vault_path: str) -> tuple[str, str]:
         os.path.join(vault_path, VECTOR_VAULT_SUBDIR),
         os.path.join(vault_path, FULLTEXT_VAULT_SUBDIR),
     )
+
+
+def get_vector_db_path(vault_path: str) -> str:
+    """
+    Return the LanceDB path expected by makevectordatabase/serverag.
+    """
+    return vault_path
 
 
 def get_chat_model() -> str:
