@@ -26,6 +26,7 @@
 - Hid source paths by default and added `--show-source-paths` to display HTTP links served by the query app.
 - Restricted source-file downloads to paths referenced by the current vault index.
 - Updated the app header to show the current chunk count only, removing the full-text index stat.
+- Refined the query app UI with a polished header, status badge, navigation, cards, and form styling.
 
 #### Query App Uses TalkPipe Native Vector DB
 - Updated `vaultSearch` and `vaultChat` to query the `docs` table used by TalkPipe's `makevectordatabase` and `serverag` commands.
