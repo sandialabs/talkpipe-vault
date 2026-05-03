@@ -14,7 +14,7 @@ from talkpipe.pipe.metadata import Flush
 from talkpipe.pipelines.basic_rag import RAGToText
 from talkpipe.pipelines.vector_databases import SearchVectorDatabaseSegment
 from talkpipe.search.lancedb import LanceDBDocumentStore
-from talkpipe.search.whoosh import searchWhoosh
+from talkpipe.search.whoosh import WhooshIndexError, searchWhoosh
 from talkpipe.util.data_manipulation import assign_property, extract_property
 
 from .config import (
@@ -275,17 +275,20 @@ class VaultTextSearch(AbstractFieldSegment):
 
     def process_value(self, value: str) -> list[dict[str, Any]]:
         results = []
-        for result in self.pipeline(value):
-            if isinstance(result, dict):
-                results.append(result)
-                continue
-            results.append(
-                {
-                    "doc_id": getattr(result, "doc_id", ""),
-                    "score": float(getattr(result, "score", 0.0)),
-                    "document": getattr(result, "document", {}),
-                }
-            )
+        try:
+            for result in self.pipeline(value):
+                if isinstance(result, dict):
+                    results.append(result)
+                    continue
+                results.append(
+                    {
+                        "doc_id": getattr(result, "doc_id", ""),
+                        "score": float(getattr(result, "score", 0.0)),
+                        "document": getattr(result, "document", {}),
+                    }
+                )
+        except WhooshIndexError:
+            return []
         return results
 
 
