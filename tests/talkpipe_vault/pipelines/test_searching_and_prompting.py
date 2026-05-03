@@ -69,9 +69,7 @@ class TestVaultSearch:
 
     def test_segment_is_registered(self):
         """Test that the segment is properly registered with TalkPipe."""
-        script = compile(
-            "| vaultSearch[vault_path='/tmp/test_vault']"
-        )
+        script = compile("| vaultSearch[vault_path='/tmp/test_vault']")
         assert script is not None
 
     def test_segment_callable(self, tmp_path):
@@ -96,7 +94,11 @@ class TestVaultSearch:
         # Verify results have expected structure (SearchResult objects)
         for item in result:
             # SearchResult objects have score, doc_id, and document attributes
-            assert hasattr(item, "score") or hasattr(item, "doc_id") or isinstance(item, dict)
+            assert (
+                hasattr(item, "score")
+                or hasattr(item, "doc_id")
+                or isinstance(item, dict)
+            )
             if hasattr(item, "document"):
                 assert isinstance(item.document, dict)
 
@@ -155,9 +157,7 @@ class TestVaultChat:
 
     def test_segment_is_registered(self):
         """Test that the segment is properly registered with TalkPipe."""
-        script = compile(
-            "| vaultChat[vault_path='/tmp/test_vault']"
-        )
+        script = compile("| vaultChat[vault_path='/tmp/test_vault']")
         assert script is not None
 
     def test_segment_callable(self, tmp_path):
@@ -229,26 +229,27 @@ class TestVaultTextSearch:
         assert segment is not None
         assert hasattr(segment, "process_value")
 
-    def test_keyword_search_returns_results(self, populated_vector_db):
-        """Test keyword search returns matching documents from LanceDB."""
+    def test_keyword_search_returns_empty_results_without_whoosh_index(
+        self, populated_vector_db
+    ):
+        """Test keyword search is disabled when Whoosh index is missing."""
         segment = VaultTextSearch(vault_path=populated_vector_db)
         result = segment.process_value("FastAPI")
 
         assert result is not None
         assert isinstance(result, list)
-        assert len(result) > 0
-        assert all("doc_id" in item for item in result)
-        assert all("score" in item for item in result)
-        assert all("document" in item for item in result)
+        assert result == []
 
-    def test_keyword_search_with_phrase(self, populated_vector_db):
-        """Test quoted phrase query matching in keyword search."""
+    def test_keyword_phrase_search_returns_empty_results_without_whoosh_index(
+        self, populated_vector_db
+    ):
+        """Test phrase keyword search is disabled when Whoosh index is missing."""
         segment = VaultTextSearch(vault_path=populated_vector_db)
         result = segment.process_value('"machine learning"')
 
         assert result is not None
         assert isinstance(result, list)
-        assert len(result) > 0
+        assert result == []
 
 
 class TestVaultSearchAdvanced:

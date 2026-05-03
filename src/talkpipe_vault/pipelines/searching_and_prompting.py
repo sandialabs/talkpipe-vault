@@ -14,6 +14,7 @@ from talkpipe.pipe.metadata import Flush
 from talkpipe.pipelines.basic_rag import RAGToText
 from talkpipe.pipelines.vector_databases import SearchVectorDatabaseSegment
 from talkpipe.search.lancedb import LanceDBDocumentStore
+from talkpipe.search.whoosh import searchWhoosh
 from talkpipe.util.data_manipulation import assign_property, extract_property
 
 from .config import (
@@ -25,6 +26,7 @@ from .config import (
     get_embedding_model,
     get_embedding_source,
     get_retrieval_template,
+    get_vault_paths,
     get_vector_db_path,
 )
 
@@ -38,13 +40,18 @@ def _has_document_fts_index(table: Any, field_name: str) -> bool:
 
     for index in indices:
         try:
-            if index.index_type != "FTS":
+            if str(index.index_type).upper() != "FTS":
                 continue
             if field_name in list(index.columns):
                 return True
         except Exception:
             continue
     return False
+
+
+def _run_fts_search(table: Any, query: str, limit: int) -> list[dict[str, Any]]:
+    """Run an FTS search using an existing LanceDB FTS index."""
+    return table.search(query, query_type="fts").limit(limit).to_list()
 
 
 @register_segment("searchLance")
@@ -68,7 +75,7 @@ def searchLance(
     set_as: Annotated[str | None, "Field name to set results on input items"] = None,
 ):
     """
-    Search LanceDB documents using LanceDB's native full-text search index.
+    Search LanceDB documents using an existing LanceDB full-text search index.
 
     Expects a LanceDB table containing TalkPipe document records where each row can
     be loaded through LanceDBDocumentStore and converted to a dict-like document.
@@ -78,21 +85,24 @@ def searchLance(
 
     doc_store = LanceDBDocumentStore(path=path, table_name=table_name)
     table, _ = doc_store._get_table()
-    # Build the FTS index once, then reuse it on later searches.
-    if not _has_document_fts_index(table, "document"):
-        table.create_fts_index("document")
+    keyword_search_enabled = _has_document_fts_index(table, "document")
 
     for item in queries:
         if is_metadata(item) and isinstance(item, Flush):
             continue
 
+        if not keyword_search_enabled:
+            if all_results_at_once:
+                if set_as:
+                    assign_property(item, set_as, [])
+                    yield item
+                else:
+                    yield []
+            continue
+
         query = extract_property(item, field, fail_on_missing=True)
         try:
-            rows = (
-                table.search(str(query), query_type="fts")
-                .limit(limit)
-                .to_list()
-            )
+            rows = _run_fts_search(table, str(query), limit)
             results: list[dict[str, Any]] = []
             for row in rows:
                 raw_document = row.get("document", "{}")
@@ -235,11 +245,11 @@ class VaultChat(AbstractFieldSegment):
 @register_segment("vaultTextSearch")
 class VaultTextSearch(AbstractFieldSegment):
     """
-    Segment that performs keyword search on a vault's LanceDB table.
+    Segment that performs keyword search on a vault's Whoosh index.
 
     Expects input items containing a search query string (either as the full item
-    or in a specified field). The query is matched against document text fields
-    in the configured LanceDB table.
+    or in a specified field). The query is matched against document fields in
+    the configured Whoosh full-text index.
 
     Emits search results as dicts containing:
         - "doc_id": str - Document identifier (file path)
@@ -249,22 +259,33 @@ class VaultTextSearch(AbstractFieldSegment):
     def __init__(
         self,
         vault_path: Annotated[str, "Path to LanceDB created by makevectordatabase"],
-        limit: Annotated[int, "Maximum number of results to return"] = 10,
+        limit: Annotated[int | None, "Maximum number of results to return"] = None,
         field: Annotated[str, "The field to extract. If none, use full item."] = None,
         set_as: Annotated[str, "The field to set/append the result as."] = None,
         multi_emit: Annotated[bool, "Whether this class potentially emits multiple results per item."
                                     "Should be set by the subclass constructor call or the field_segment decorator, not by the user."] = True):
         super().__init__(field=field, set_as=set_as, multi_emit=multi_emit)
         self.vault_path = vault_path
-        vectordb_path = get_vector_db_path(vault_path)
-        self.pipeline = searchLance(
-            path=vectordb_path,
-            table_name=DEFAULT_VECTOR_TABLE_NAME,
+        _, whoosh_index_path = get_vault_paths(vault_path)
+        self.pipeline = searchWhoosh(
+            index_path=whoosh_index_path,
             limit=limit,
-            all_results_at_once=False
+            all_results_at_once=False,
         ).as_function(single_in=True, single_out=False)
 
     def process_value(self, value: str) -> list[dict[str, Any]]:
-        return list(self.pipeline(value))
+        results = []
+        for result in self.pipeline(value):
+            if isinstance(result, dict):
+                results.append(result)
+                continue
+            results.append(
+                {
+                    "doc_id": getattr(result, "doc_id", ""),
+                    "score": float(getattr(result, "score", 0.0)),
+                    "document": getattr(result, "document", {}),
+                }
+            )
+        return results
 
 

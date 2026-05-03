@@ -12,10 +12,27 @@
 
 ### Bug Fixes
 
+#### Query App Whoosh Full-Text Flow
+- Switched `vaultTextSearch` to TalkPipe's `searchWhoosh` segment instead of LanceDB FTS.
+- Updated keyword-search enablement to detect a Whoosh index at `fulltext_vault`.
+- Added a keyword-search UI action to create a Whoosh index from existing LanceDB `docs` records using TalkPipe's `indexWhoosh` segment.
+- Updated keyword-search UI copy and error messages to reference Whoosh indexing behavior.
+- Fixed full-text result links so they can resolve content by LanceDB row id and snippet fragments from the middle of a document.
+- Added console output showing the full text of each document sent to the Whoosh index.
+- Stored LanceDB source paths in the Whoosh index and displayed them as file links in keyword-search results.
+- Stopped collapsing keyword-search hits that share a source path and removed the low 10-result search cap.
+- Stopped collapsing semantic-search hits that share a source path.
+- Updated semantic-search result fields and display text to match keyword-search results.
+- Hid source paths by default and added `--show-source-paths` to display HTTP links served by the query app.
+- Restricted source-file downloads to paths referenced by the current vault index.
+- Updated the app header to show the current chunk count only, removing the full-text index stat.
+
 #### Query App Uses TalkPipe Native Vector DB
 - Updated `vaultSearch` and `vaultChat` to query the `docs` table used by TalkPipe's `makevectordatabase` and `serverag` commands.
 - Updated the web query app to treat `vault_path` as the LanceDB path and read document counts from the `docs` table.
 - Added a new `searchLance` segment and migrated `vaultTextSearch` from Whoosh to LanceDB-backed keyword search.
+- Changed LanceDB keyword search to use only pre-existing FTS indexes; when no FTS index is present, keyword search is disabled without creating or upgrading indexes.
+- Disabled the keyword search UI when the LanceDB `docs` table has no FTS index.
 
 #### File Watcher on Linux
 - **Move-only handler**: Added a second handler that receives all `FileMovedEvent` events without pattern filtering. `PatternMatchingEventHandler` filters moves when `src_path` is outside the watch tree (e.g., `mv` from `/tmp`, drag-and-drop), causing them to be dropped. The new handler bypasses this and correctly indexes moved files.
@@ -25,6 +42,9 @@
 
 #### Dependency Cleanup
 - Removed `docling` and `tika` references from package metadata, container/test scripts, and project documentation to align with the current text extraction pipeline.
+
+#### App Startup Behavior
+- Updated `vault-server` to start only the web interface for search/chat and not launch the file watcher pipeline.
 
 #### Podman Scripts
 - Removed duplicate `Dockerfile`; kept `Containerfile` only

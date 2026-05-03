@@ -481,16 +481,8 @@
                 </div>
                 <div class="vault-stats">
                     <div class="vault-stat">
-                        <span class="vault-stat-label">Full Documents:</span>
-                        <span class="vault-stat-value">{{ full_documents_count|default(0)|int }}</span>
-                    </div>
-                    <div class="vault-stat">
-                        <span class="vault-stat-label">Shingled Chunks:</span>
+                        <span class="vault-stat-label">Chunks:</span>
                         <span class="vault-stat-value">{{ shingled_chunks_count|default(0)|int }}</span>
-                    </div>
-                    <div class="vault-stat">
-                        <span class="vault-stat-label">Full-Text Index:</span>
-                        <span class="vault-stat-value">{{ fulltext_documents_count|default(0)|int }}</span>
                     </div>
                 </div>
             </div>

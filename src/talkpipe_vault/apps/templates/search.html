@@ -27,10 +27,14 @@
     </div>
     {% for result in results %}
     <div class="result-card">
-        <div class="title">{{ result.filename }}</div>
-        <div class="path"><a href="file://{{ result.path }}" target="_blank">{{ result.path }}</a></div>
+        <div class="title">
+            <a href="#" class="result-title-link" data-path="{{ result.lookup_path }}" data-snippet="{{ result.snippet|e }}">{{ result.filename }}</a>
+        </div>
+        {% if show_source_paths %}
+        <div class="path"><a href="/source-file?path={{ result.path|urlencode }}" target="_blank" rel="noopener">{{ result.path }}</a></div>
+        {% endif %}
         <div class="snippet">{{ result.snippet }}</div>
-        <span class="score">Relevance: {{ result.score }}</span>
+        <span class="score">Score: {{ result.score }}</span>
     </div>
     {% endfor %}
     {% else %}
@@ -40,6 +44,16 @@
     </div>
     {% endif %}
 {% endif %}
+
+<div id="document-modal" class="document-modal" style="display: none;">
+    <div class="document-modal-content">
+        <div class="document-modal-header">
+            <h3 id="document-modal-title">Document</h3>
+            <button type="button" id="document-modal-close" aria-label="Close">x</button>
+        </div>
+        <pre id="document-modal-body"></pre>
+    </div>
+</div>
 
 <style>
     .results-header {
@@ -66,6 +80,64 @@
         background: #34a853;
         color: white;
         border-color: #34a853;
+    }
+    .result-title-link {
+        color: #1a0dab;
+        cursor: pointer;
+        text-decoration: none;
+    }
+    .result-title-link:hover {
+        text-decoration: underline;
+    }
+    .document-modal {
+        align-items: center;
+        background: rgba(0, 0, 0, 0.55);
+        bottom: 0;
+        display: flex;
+        justify-content: center;
+        left: 0;
+        position: fixed;
+        right: 0;
+        top: 0;
+        z-index: 9999;
+    }
+    .document-modal-content {
+        background: #fff;
+        border-radius: 8px;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+        display: flex;
+        flex-direction: column;
+        max-height: 80vh;
+        max-width: 920px;
+        width: 92%;
+    }
+    .document-modal-header {
+        align-items: center;
+        border-bottom: 1px solid #ddd;
+        display: flex;
+        justify-content: space-between;
+        padding: 12px 16px;
+    }
+    #document-modal-title {
+        font-size: 1rem;
+        margin: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    #document-modal-close {
+        background: transparent;
+        border: none;
+        cursor: pointer;
+        font-size: 1.15rem;
+        padding: 4px 8px;
+    }
+    #document-modal-body {
+        margin: 0;
+        overflow: auto;
+        padding: 16px;
+        white-space: pre-wrap;
+        word-break: break-word;
     }
     .search-loading {
         display: flex;
@@ -100,6 +172,10 @@ document.addEventListener('DOMContentLoaded', function() {
     const btn = document.getElementById('search-btn');
     const loading = document.getElementById('loading-overlay');
     const copyBtn = document.getElementById('copy-results-btn');
+    const modal = document.getElementById('document-modal');
+    const modalTitle = document.getElementById('document-modal-title');
+    const modalBody = document.getElementById('document-modal-body');
+    const modalClose = document.getElementById('document-modal-close');
 
     form.addEventListener('submit', function(e) {
         if (!input.value.trim()) {
@@ -120,12 +196,14 @@ document.addEventListener('DOMContentLoaded', function() {
 
             resultCards.forEach(function(card, index) {
                 const title = card.querySelector('.title').textContent;
-                const path = card.querySelector('.path a').textContent;
+                const pathLink = card.querySelector('.path a');
                 const snippet = card.querySelector('.snippet').textContent;
                 const score = card.querySelector('.score').textContent;
 
                 text += (index + 1) + '. ' + title + '\n';
-                text += '   Path: ' + path + '\n';
+                if (pathLink) {
+                    text += '   Path: ' + pathLink.textContent + '\n';
+                }
                 text += '   ' + score + '\n';
                 text += '   ' + snippet + '\n\n';
             });
@@ -138,6 +216,47 @@ document.addEventListener('DOMContentLoaded', function() {
                     copyBtn.classList.remove('copied');
                 }, 2000);
             });
+        });
+    }
+
+    document.querySelectorAll('.result-title-link').forEach(function(link) {
+        link.addEventListener('click', async function(e) {
+            e.preventDefault();
+            const path = link.getAttribute('data-path');
+            const snippet = link.getAttribute('data-snippet') || '';
+            if (!path) {
+                return;
+            }
+
+            modal.style.display = 'flex';
+            modalTitle.textContent = path;
+            modalBody.textContent = 'Loading full text...';
+
+            try {
+                const response = await fetch('/chunk-content?path=' + encodeURIComponent(path) + '&snippet=' + encodeURIComponent(snippet));
+                const payload = await response.json();
+                if (!response.ok) {
+                    modalBody.textContent = payload.error || 'Failed to load document content.';
+                    return;
+                }
+                modalBody.textContent = payload.content || '(No content)';
+            } catch (err) {
+                modalBody.textContent = 'Failed to load document content.';
+            }
+        });
+    });
+
+    if (modalClose) {
+        modalClose.addEventListener('click', function() {
+            modal.style.display = 'none';
+        });
+    }
+
+    if (modal) {
+        modal.addEventListener('click', function(e) {
+            if (e.target === modal) {
+                modal.style.display = 'none';
+            }
         });
     }
 });
