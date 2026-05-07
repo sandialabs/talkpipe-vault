@@ -16,6 +16,9 @@
     </form>
     {% if keyword_search_enabled %}
     <p class="search-hint">Uses the existing Whoosh index. Supports AND, OR, NOT, and "exact phrase".</p>
+    <form method="post" action="/keyword-search/create-index" id="create-index-form">
+        <button type="submit" id="create-index-btn">Rebuild Full-Text Index</button>
+    </form>
     {% else %}
     <div class="search-disabled">
         <strong>Keyword search is disabled.</strong>
@@ -29,48 +32,13 @@
 
 <div id="loading-overlay" class="search-loading" style="display: none;">
     <div class="spinner"></div>
-    <span>Searching...</span>
+    <span>Refreshing vault connections and searching exact matches...</span>
 </div>
 
-{% if error %}
-<div class="error">
-    <p><strong>Error:</strong> {{ error }}</p>
-</div>
-{% elif results is not none %}
-    {% if results %}
-    <div class="results-header">
-        <p style="color: #666;">Found {{ results|length }} result(s) for "{{ query }}"</p>
-        <button type="button" id="copy-results-btn" class="copy-results-btn">&#128203; Copy All Results</button>
-    </div>
-    {% for result in results %}
-    <div class="result-card">
-        <div class="title">
-            <a href="#" class="result-title-link" data-path="{{ result.lookup_path }}" data-snippet="{{ result.snippet|e }}">{{ result.filename }}</a>
-        </div>
-        {% if show_source_paths %}
-        <div class="path"><a href="/source-file?path={{ result.path|urlencode }}" target="_blank" rel="noopener">{{ result.path }}</a></div>
-        {% endif %}
-        <div class="snippet">{{ result.snippet }}</div>
-        <span class="score">Score: {{ result.score }}</span>
-    </div>
-    {% endfor %}
-    {% else %}
-    <div class="no-results">
-        <p>No results found for "{{ query }}"</p>
-        <p>Try different keywords or a broader search term.</p>
-    </div>
-    {% endif %}
-{% endif %}
-
-<div id="document-modal" class="document-modal" style="display: none;">
-    <div class="document-modal-content">
-        <div class="document-modal-header">
-            <h3 id="document-modal-title">Document</h3>
-            <button type="button" id="document-modal-close" aria-label="Close">x</button>
-        </div>
-        <pre id="document-modal-body"></pre>
-    </div>
-</div>
+{% set results_note = "Keyword matches are ranked by the Whoosh full-text index." %}
+{% set score_help = "Whoosh relevance score for the keyword query." %}
+{% set no_results_hint = "Keyword search works best with exact terms, quoted phrases, or boolean operators." %}
+{% include "_search_results.html" %}
 
 <style>
     .search-hint {
@@ -88,12 +56,6 @@
         margin-top: 16px;
         padding: 12px 16px;
         text-align: center;
-    }
-    .results-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-bottom: 15px;
     }
     .create-status, .create-error {
         border-radius: 8px;
@@ -128,207 +90,7 @@
     #create-index-btn:hover {
         background: #1558b0;
     }
-    .copy-results-btn {
-        background: #f1f3f4;
-        border: 1px solid #ddd;
-        border-radius: 6px;
-        padding: 8px 14px;
-        cursor: pointer;
-        font-size: 0.85rem;
-        color: #666;
-        transition: background 0.2s, color 0.2s;
-    }
-    .copy-results-btn:hover {
-        background: #e2e4e6;
-        color: #333;
-    }
-    .copy-results-btn.copied {
-        background: #34a853;
-        color: white;
-        border-color: #34a853;
-    }
-    .result-title-link {
-        color: #1a0dab;
-        cursor: pointer;
-        text-decoration: none;
-    }
-    .result-title-link:hover {
-        text-decoration: underline;
-    }
-    .document-modal {
-        align-items: center;
-        background: rgba(0, 0, 0, 0.55);
-        bottom: 0;
-        display: flex;
-        justify-content: center;
-        left: 0;
-        position: fixed;
-        right: 0;
-        top: 0;
-        z-index: 9999;
-    }
-    .document-modal-content {
-        background: #fff;
-        border-radius: 8px;
-        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
-        display: flex;
-        flex-direction: column;
-        max-height: 80vh;
-        max-width: 920px;
-        width: 92%;
-    }
-    .document-modal-header {
-        align-items: center;
-        border-bottom: 1px solid #ddd;
-        display: flex;
-        justify-content: space-between;
-        padding: 12px 16px;
-    }
-    #document-modal-title {
-        font-size: 1rem;
-        margin: 0;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-    }
-    #document-modal-close {
-        background: transparent;
-        border: none;
-        cursor: pointer;
-        font-size: 1.15rem;
-        padding: 4px 8px;
-    }
-    #document-modal-body {
-        margin: 0;
-        overflow: auto;
-        padding: 16px;
-        white-space: pre-wrap;
-        word-break: break-word;
-    }
-    .search-loading {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        gap: 12px;
-        padding: 40px;
-        color: #666;
-        font-size: 1.1rem;
-    }
-    .search-loading .spinner {
-        width: 24px;
-        height: 24px;
-        border: 3px solid #ddd;
-        border-top-color: #667eea;
-        border-radius: 50%;
-        animation: spin 0.8s linear infinite;
-    }
-    @keyframes spin {
-        to { transform: rotate(360deg); }
-    }
-    #search-btn:disabled {
-        opacity: 0.6;
-        cursor: not-allowed;
-    }
 </style>
 
-<script>
-document.addEventListener('DOMContentLoaded', function() {
-    const form = document.getElementById('search-form');
-    const input = document.getElementById('search-input');
-    const btn = document.getElementById('search-btn');
-    const loading = document.getElementById('loading-overlay');
-    const copyBtn = document.getElementById('copy-results-btn');
-    const modal = document.getElementById('document-modal');
-    const modalTitle = document.getElementById('document-modal-title');
-    const modalBody = document.getElementById('document-modal-body');
-    const modalClose = document.getElementById('document-modal-close');
-
-    form.addEventListener('submit', function(e) {
-        if (btn.disabled) {
-            e.preventDefault();
-            return;
-        }
-        if (!input.value.trim()) {
-            e.preventDefault();
-            return;
-        }
-        // Show loading state
-        btn.disabled = true;
-        btn.textContent = 'Searching...';
-        loading.style.display = 'flex';
-    });
-
-    // Copy all results to clipboard
-    if (copyBtn) {
-        copyBtn.addEventListener('click', function() {
-            const resultCards = document.querySelectorAll('.result-card');
-            let text = '';
-
-            resultCards.forEach(function(card, index) {
-                const title = card.querySelector('.title').textContent;
-                const pathLink = card.querySelector('.path a');
-                const snippet = card.querySelector('.snippet').textContent;
-                const score = card.querySelector('.score').textContent;
-
-                text += (index + 1) + '. ' + title + '\n';
-                if (pathLink) {
-                    text += '   Path: ' + pathLink.textContent + '\n';
-                }
-                text += '   ' + score + '\n';
-                text += '   ' + snippet + '\n\n';
-            });
-
-            navigator.clipboard.writeText(text.trim()).then(function() {
-                copyBtn.innerHTML = '&#10003; Copied';
-                copyBtn.classList.add('copied');
-                setTimeout(function() {
-                    copyBtn.innerHTML = '&#128203; Copy All Results';
-                    copyBtn.classList.remove('copied');
-                }, 2000);
-            });
-        });
-    }
-
-    document.querySelectorAll('.result-title-link').forEach(function(link) {
-        link.addEventListener('click', async function(e) {
-            e.preventDefault();
-            const path = link.getAttribute('data-path');
-            const snippet = link.getAttribute('data-snippet') || '';
-            if (!path) {
-                return;
-            }
-
-            modal.style.display = 'flex';
-            modalTitle.textContent = path;
-            modalBody.textContent = 'Loading full text...';
-
-            try {
-                const response = await fetch('/chunk-content?path=' + encodeURIComponent(path) + '&snippet=' + encodeURIComponent(snippet));
-                const payload = await response.json();
-                if (!response.ok) {
-                    modalBody.textContent = payload.error || 'Failed to load document content.';
-                    return;
-                }
-                modalBody.textContent = payload.content || '(No content)';
-            } catch (err) {
-                modalBody.textContent = 'Failed to load document content.';
-            }
-        });
-    });
-
-    if (modalClose) {
-        modalClose.addEventListener('click', function() {
-            modal.style.display = 'none';
-        });
-    }
-
-    if (modal) {
-        modal.addEventListener('click', function(e) {
-            if (e.target === modal) {
-                modal.style.display = 'none';
-            }
-        });
-    }
-});
-</script>
+{% include "_search_interactions.html" %}
 {% endblock %}

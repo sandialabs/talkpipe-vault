@@ -58,6 +58,18 @@ def test_keyword_search_page_is_disabled_without_whoosh():
     assert "Create Full-Text Index" in response.text
 
 
+def test_keyword_search_page_can_rebuild_existing_whoosh_index():
+    """Keyword search UI should expose index rebuild when Whoosh is available."""
+    query._state.keyword_search_enabled = True
+    client = TestClient(query.app)
+
+    response = client.get("/keyword-search")
+
+    assert response.status_code == 200
+    assert "Rebuild Full-Text Index" in response.text
+    assert 'action="/keyword-search/create-index"' in response.text
+
+
 def test_header_shows_chunk_count_without_full_text_index(monkeypatch):
     """Header should show the docs-table chunk count and no full-text stat."""
     rows = [
@@ -81,6 +93,38 @@ def test_header_shows_chunk_count_without_full_text_index(monkeypatch):
     assert "Shingled Chunks:" not in response.text
 
 
+def test_header_uses_existing_svg_logo_and_refresh_control():
+    """Header should use packaged assets and expose a manual refresh action."""
+    client = TestClient(query.app)
+
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert 'src="/static/favicon.svg"' in response.text
+    assert 'action="/refresh"' in response.text
+    assert 'name="return_to" value="/"' in response.text
+
+
+def test_refresh_redirects_back_to_current_page(monkeypatch):
+    """Refresh should return to the page where the user triggered it."""
+    called: dict[str, object] = {}
+    monkeypatch.setattr(
+        query,
+        "_refresh_pipelines",
+        lambda force=False: called.setdefault("force", force),
+    )
+    monkeypatch.setattr(query, "_update_document_counts", lambda vault_path: None)
+    client = TestClient(query.app)
+
+    response = client.post(
+        "/refresh", data={"return_to": "/keyword-search"}, follow_redirects=False
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/keyword-search"
+    assert called["force"] is True
+
+
 def test_keyword_search_post_does_not_run_without_whoosh(monkeypatch):
     """Keyword search POST should not call the pipeline without a Whoosh index."""
     monkeypatch.setattr(query, "_refresh_pipelines", lambda: None)
@@ -91,9 +135,8 @@ def test_keyword_search_post_does_not_run_without_whoosh(monkeypatch):
     response = client.post("/keyword-search", data={"query": "FastAPI"})
 
     assert response.status_code == 200
-    assert (
-        "Keyword search is disabled because this vault has no Whoosh index."
-        in (response.text)
+    assert "Keyword search is disabled because this vault has no Whoosh index." in (
+        response.text
     )
 
 
@@ -139,7 +182,10 @@ def test_create_whoosh_index_route_triggers_builder(monkeypatch, capsys):
     response = client.post("/keyword-search/create-index", follow_redirects=False)
 
     assert response.status_code == 303
-    assert response.headers["location"] == "/keyword-search?created=Whoosh%20index%20created."
+    assert (
+        response.headers["location"]
+        == "/keyword-search?created=Whoosh%20index%20created."
+    )
     assert called["kwargs"] == {
         "index_path": "/tmp/test-vault/fulltext_vault",
         "field_list": "content:content,path:path,filename:filename,doc_id:doc_id",
@@ -372,7 +418,34 @@ def test_semantic_search_results_hide_source_path_by_default(monkeypatch):
     assert 'href="/source-file?path=' not in response.text
 
 
-def test_vault_text_search_default_limit_returns_all_whoosh_results(tmp_path, monkeypatch):
+def test_chat_response_includes_source_citations(monkeypatch):
+    """Ask responses should include display-ready source chunks for trust."""
+    query._state.chat_pipeline = lambda _message: "Answer from the vault."
+    query._state.search_pipeline = lambda _message: [
+        {
+            "_distance": 0.2,
+            "_doc_id": "row-uuid",
+            "source": "/notes/source.txt",
+            "title": "source.txt",
+            "content": "Relevant source chunk",
+        }
+    ]
+    monkeypatch.setattr(query, "_refresh_pipelines", lambda: None)
+    monkeypatch.setattr(query, "_update_document_counts", lambda vault_path: None)
+    client = TestClient(query.app)
+
+    response = client.post("/chat", data={"message": "What matters?"})
+
+    assert response.status_code == 200
+    assert "Answer from the vault." in response.text
+    assert 'id="server-citations"' in response.text
+    assert "source.txt" in response.text
+    assert "Relevant source chunk" in response.text
+
+
+def test_vault_text_search_default_limit_returns_all_whoosh_results(
+    tmp_path, monkeypatch
+):
     """VaultTextSearch should not impose a low UI-facing result cap."""
     captured: dict[str, object] = {}
 

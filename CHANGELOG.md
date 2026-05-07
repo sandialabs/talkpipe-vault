@@ -27,6 +27,8 @@
 - Restricted source-file downloads to paths referenced by the current vault index.
 - Updated the app header to show the current chunk count only, removing the full-text index stat.
 - Refined the query app UI with a polished header, status badge, navigation, cards, and form styling.
+- Added a header refresh action, Ask answer source citations, reusable search result UI, snippet highlighting, per-result copy buttons, and more helpful empty states.
+- Switched the query app header logo to the packaged SVG asset and exposed full-text index rebuild from the keyword-search page.
 - Fixed `VaultTextSearch` so missing Whoosh indexes return empty results instead of raising.
 - Fixed keyword-search result clicks when Whoosh returns flat hits without a `doc_id` or has stale row ids.
 

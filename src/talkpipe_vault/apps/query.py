@@ -46,6 +46,7 @@ configure_logger("root:ERROR")
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 STATIC_DIR = Path(__file__).parent / "static"
 SNIPPET_MAX_LENGTH = 300
+CHAT_CITATION_LIMIT = 5
 
 
 @dataclass
@@ -381,6 +382,15 @@ def _process_semantic_results(raw_results: Any) -> list[dict[str, Any]]:
     return results
 
 
+def _chat_citations(state: AppState, message: str) -> list[dict[str, Any]]:
+    """Return display-ready source chunks for an Ask response."""
+    if not state.search_pipeline:
+        return []
+
+    raw_results = state.search_pipeline(message)
+    return _process_semantic_results(raw_results)[:CHAT_CITATION_LIMIT]
+
+
 def _process_keyword_results(raw_results: list[Any]) -> list[dict[str, Any]]:
     """
     Process raw keyword search results into display-ready format.
@@ -468,7 +478,9 @@ def _load_docs_rows(vault_path: str) -> list[dict[str, Any]]:
             last_error = exc
             continue
 
-    raise RuntimeError("Could not read LanceDB docs table at expected paths.") from last_error
+    raise RuntimeError(
+        "Could not read LanceDB docs table at expected paths."
+    ) from last_error
 
 
 def _normalize_snippet_prefix(snippet: str) -> str:
@@ -541,13 +553,18 @@ async def home(request: Request, state: AppState = Depends(get_state)) -> HTMLRe
 
 @app.post("/refresh", response_class=HTMLResponse)
 async def refresh(
-    request: Request, state: AppState = Depends(get_state)
+    request: Request,
+    return_to: Annotated[str, Form()] = "/",
+    state: AppState = Depends(get_state),
 ) -> HTMLResponse:
     """Refresh pipelines and document counts, then redirect to home."""
     _refresh_pipelines(force=True)
     _update_document_counts(state.vault_path)
 
-    return RedirectResponse(url="/", status_code=303)
+    if not return_to.startswith("/") or return_to.startswith("//"):
+        return_to = "/"
+
+    return RedirectResponse(url=return_to, status_code=303)
 
 
 @app.get("/search", response_class=HTMLResponse)
@@ -650,9 +667,7 @@ async def keyword_search_results(
     _update_document_counts(state.vault_path)
 
     if query.strip() and not state.keyword_search_enabled:
-        error = (
-            "Keyword search is disabled because this vault has no Whoosh index."
-        )
+        error = "Keyword search is disabled because this vault has no Whoosh index."
     elif query.strip() and state.keyword_search_pipeline:
         try:
             # Perform search with refreshed pipeline
@@ -789,6 +804,7 @@ async def chat_page(
             request,
             state,
             messages=[],
+            citations=[],
         ),
     )
 
@@ -808,6 +824,7 @@ async def chat_response(
     Returns HTML page with the question and AI-generated answer.
     """
     messages: list[dict[str, str]] = []
+    citations: list[dict[str, Any]] = []
     error: str | None = None
 
     if message.strip() and state.chat_pipeline:
@@ -818,6 +835,7 @@ async def chat_response(
             _refresh_pipelines()
             # Update document counts to reflect latest state
             _update_document_counts(state.vault_path)
+            citations = _chat_citations(state, message)
             # Perform chat with refreshed pipeline
             response = state.chat_pipeline(message)
             messages.append({"role": "assistant", "content": response})
@@ -830,6 +848,7 @@ async def chat_response(
             request,
             state,
             messages=messages,
+            citations=citations,
             error=error,
         ),
     )

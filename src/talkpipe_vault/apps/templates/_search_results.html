@@ -1,0 +1,50 @@
+{% if error %}
+<div class="error" role="alert">
+    <p><strong>Error:</strong> {{ error }}</p>
+</div>
+{% elif results is not none %}
+    {% if results %}
+    <div class="results-header">
+        <div>
+            <p class="results-count">Found {{ results|length }} result(s) for "{{ query }}"</p>
+            <p class="results-note">{{ results_note }}</p>
+        </div>
+        <button type="button" id="copy-results-btn" class="copy-results-btn">&#128203; Copy All Results</button>
+    </div>
+    <div id="search-results" data-query="{{ query|e }}">
+    {% for result in results %}
+    <article class="result-card">
+        <div class="result-card-header">
+            <button type="button" class="result-title-link" data-path="{{ result.lookup_path }}" data-snippet="{{ result.snippet|e }}">{{ result.filename }}</button>
+            <button type="button" class="copy-snippet-btn" data-snippet="{{ result.snippet|e }}">Copy Snippet</button>
+        </div>
+        {% if show_source_paths %}
+        <div class="path"><a href="/source-file?path={{ result.path|urlencode }}" target="_blank" rel="noopener">{{ result.path }}</a></div>
+        {% endif %}
+        <div class="snippet">{{ result.snippet }}</div>
+        <span class="score" title="{{ score_help }}">Score: {{ result.score }}</span>
+    </article>
+    {% endfor %}
+    </div>
+    {% else %}
+    <div class="no-results">
+        <h3>No results found for "{{ query }}"</h3>
+        <p>{{ no_results_hint }}</p>
+        <div class="empty-suggestions">
+            <span>Try a shorter query.</span>
+            <span>Use a broader phrase.</span>
+            <span>Refresh the vault if files were just indexed.</span>
+        </div>
+    </div>
+    {% endif %}
+{% endif %}
+
+<div id="document-modal" class="document-modal" role="dialog" aria-modal="true" aria-labelledby="document-modal-title" style="display: none;">
+    <div class="document-modal-content">
+        <div class="document-modal-header">
+            <h3 id="document-modal-title">Document</h3>
+            <button type="button" id="document-modal-close" aria-label="Close">&times;</button>
+        </div>
+        <pre id="document-modal-body" tabindex="0"></pre>
+    </div>
+</div>

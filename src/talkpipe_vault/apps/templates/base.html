@@ -154,6 +154,28 @@
             box-shadow: 0 8px 20px rgba(15, 23, 42, 0.14);
         }
 
+        header nav form {
+            margin: 0;
+        }
+
+        header nav button {
+            background: rgba(255, 255, 255, 0.12);
+            border: none;
+            border-radius: 999px;
+            color: white;
+            cursor: pointer;
+            font-size: 0.9rem;
+            font-weight: 650;
+            padding: 9px 15px;
+            transition: all 0.2s;
+            white-space: nowrap;
+        }
+
+        header nav button:hover {
+            background: rgba(255,255,255,0.16);
+            transform: translateY(-1px);
+        }
+
         .vault-info {
             font-size: 0.85rem;
             color: rgba(255,255,255,0.8);
@@ -451,6 +473,17 @@
             font-size: 0.95rem;
         }
 
+        .mode-card .example {
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 10px;
+            color: #475569;
+            display: block;
+            font-size: 0.85rem;
+            margin-top: 14px;
+            padding: 10px 12px;
+        }
+
         .empty-chat {
             text-align: center;
             color: #999;
@@ -584,6 +617,12 @@
             border-top: 1px solid #ddd;
             margin: 16px 0;
         }
+
+        mark {
+            background: #fef08a;
+            border-radius: 3px;
+            padding: 0 2px;
+        }
     </style>
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
@@ -593,7 +632,7 @@
         <div class="container">
             <div>
                 <div class="header-brand">
-                    <img src="/static/logo.jpg" alt="Talkpipe Vault" class="header-logo">
+                    <img src="/static/favicon.svg" alt="Talkpipe Vault" class="header-logo">
                     <div>
                         <h1>Talkpipe Vault</h1>
                         <p class="header-subtitle">Search, read, and ask questions across your indexed documents.</p>
@@ -611,6 +650,10 @@
                 <a href="/search" {% if request.url.path == '/search' %}class="active"{% endif %}>Semantic Search</a>
                 <a href="/keyword-search" {% if request.url.path == '/keyword-search' %}class="active"{% endif %}>Keyword Search</a>
                 <a href="/chat" {% if request.url.path == '/chat' %}class="active"{% endif %}>Ask</a>
+                <form method="post" action="/refresh">
+                    <input type="hidden" name="return_to" value="{{ request.url.path }}">
+                    <button type="submit" title="Refresh vault connections and counts">Refresh</button>
+                </form>
             </nav>
         </div>
     </header>

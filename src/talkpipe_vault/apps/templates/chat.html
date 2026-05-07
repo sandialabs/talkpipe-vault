@@ -16,19 +16,23 @@
 {% if error %}
 <div id="server-error" data-content="{{ error | e }}" style="display:none;"></div>
 {% endif %}
+{% if citations %}
+<script id="server-citations" type="application/json">{{ citations | tojson }}</script>
+{% endif %}
 
 <div class="ask-container">
     <div class="ask-header">
-        <div class="icon">&#128269;</div>
+        <div class="icon">&#128172;</div>
         <h2>Ask a Question</h2>
-        <p class="subtitle">Each question is answered independently using your vault's documents.</p>
+        <p class="subtitle">Each question is answered independently using your vault's documents, with source chunks shown below the answer.</p>
     </div>
 
     <div class="question-box">
         <form id="ask-form">
-            <textarea name="message" id="question-input" placeholder="Enter your question here..." rows="3" autofocus></textarea>
+            <textarea name="message" id="question-input" placeholder="Ask a focused question, like: What did I write about deployment?" rows="3" autofocus></textarea>
             <button type="submit" id="ask-btn">Ask</button>
         </form>
+        <p class="ask-hint">Press Enter to ask, or Shift+Enter for a new line.</p>
     </div>
 
     <div class="answer-section" id="answer-section" style="display: none;">
@@ -37,6 +41,10 @@
             <button type="button" id="copy-btn" class="copy-btn" title="Copy to clipboard">&#128203; Copy</button>
         </div>
         <div class="answer-content markdown-content" id="answer-content"></div>
+        <div class="sources-section" id="sources-section" style="display: none;">
+            <h3>Source Chunks</h3>
+            <div id="sources-list"></div>
+        </div>
     </div>
 
     <div class="loading-section" id="loading-section" style="display: none;">
@@ -47,9 +55,10 @@
 
 <style>
     .ask-container {
-        background: white;
-        border-radius: 12px;
-        box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        background: rgba(255, 255, 255, 0.96);
+        border: 1px solid var(--panel-border);
+        border-radius: var(--radius);
+        box-shadow: var(--shadow-sm);
         padding: 40px;
     }
     .ask-header {
@@ -78,19 +87,22 @@
         gap: 15px;
     }
     .question-box textarea {
+        background: #f8fafc;
         width: 100%;
         padding: 15px 20px;
         font-size: 1rem;
-        border: 2px solid #ddd;
+        border: 1px solid #dbe3ef;
         border-radius: 12px;
         outline: none;
-        transition: border-color 0.2s;
+        transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
         resize: vertical;
         font-family: inherit;
         line-height: 1.5;
     }
     .question-box textarea:focus {
-        border-color: #667eea;
+        background: white;
+        border-color: var(--primary);
+        box-shadow: 0 0 0 4px rgba(91, 110, 225, 0.14);
     }
     .question-box button {
         align-self: flex-end;
@@ -112,6 +124,11 @@
         cursor: not-allowed;
         transform: none;
         box-shadow: none;
+    }
+    .ask-hint {
+        color: #64748b;
+        font-size: 0.88rem;
+        text-align: right;
     }
     .answer-section {
         border-top: 1px solid #eee;
@@ -160,6 +177,40 @@
         background: #fce8e6;
         color: #d93025;
     }
+    .sources-section {
+        border-top: 1px solid #e2e8f0;
+        margin-top: 22px;
+        padding-top: 18px;
+    }
+    .sources-section h3 {
+        color: #4338ca;
+        font-size: 0.9rem;
+        letter-spacing: 0.5px;
+        margin-bottom: 12px;
+        text-transform: uppercase;
+    }
+    .source-card {
+        background: #f8fafc;
+        border: 1px solid #e2e8f0;
+        border-radius: 12px;
+        margin-bottom: 10px;
+        padding: 14px 16px;
+    }
+    .source-card-title {
+        color: #1e293b;
+        font-weight: 700;
+        margin-bottom: 6px;
+    }
+    .source-card-snippet {
+        color: #475569;
+        font-size: 0.92rem;
+    }
+    .source-card-score {
+        color: #64748b;
+        display: inline-block;
+        font-size: 0.78rem;
+        margin-top: 8px;
+    }
     .loading-section {
         display: flex;
         align-items: center;
@@ -190,6 +241,8 @@ document.addEventListener('DOMContentLoaded', function() {
     const answerContent = document.getElementById('answer-content');
     const loadingSection = document.getElementById('loading-section');
     const copyBtn = document.getElementById('copy-btn');
+    const sourcesSection = document.getElementById('sources-section');
+    const sourcesList = document.getElementById('sources-list');
 
     let currentAnswer = '';
 
@@ -254,7 +307,51 @@ document.addEventListener('DOMContentLoaded', function() {
         loadingSection.style.display = 'none';
     }
 
-    function showAnswer(content, isError = false) {
+    function renderSources(citations) {
+        sourcesList.innerHTML = '';
+        if (!citations || !citations.length) {
+            sourcesSection.style.display = 'none';
+            return;
+        }
+
+        citations.forEach(function(citation, index) {
+            const card = document.createElement('div');
+            card.className = 'source-card';
+
+            const title = document.createElement('div');
+            title.className = 'source-card-title';
+            title.textContent = (index + 1) + '. ' + citation.filename;
+
+            const snippet = document.createElement('div');
+            snippet.className = 'source-card-snippet';
+            snippet.textContent = citation.snippet;
+
+            const score = document.createElement('span');
+            score.className = 'source-card-score';
+            score.textContent = 'Score: ' + citation.score;
+
+            card.appendChild(title);
+            card.appendChild(snippet);
+            card.appendChild(score);
+            sourcesList.appendChild(card);
+        });
+
+        sourcesSection.style.display = 'block';
+    }
+
+    function getServerCitations(doc) {
+        const citationsScript = doc.getElementById('server-citations');
+        if (!citationsScript) {
+            return [];
+        }
+        try {
+            return JSON.parse(citationsScript.textContent || '[]');
+        } catch (err) {
+            return [];
+        }
+    }
+
+    function showAnswer(content, isError = false, citations = []) {
         currentAnswer = content;
         answerContent.classList.toggle('error', isError);
 
@@ -264,6 +361,7 @@ document.addEventListener('DOMContentLoaded', function() {
             answerContent.textContent = content;
         }
 
+        renderSources(isError ? [] : citations);
         answerSection.style.display = 'block';
     }
 
@@ -308,13 +406,14 @@ document.addEventListener('DOMContentLoaded', function() {
             // Look for server response in hidden elements
             const serverResponse = doc.getElementById('server-response');
             const serverError = doc.getElementById('server-error');
+            const serverCitations = getServerCitations(doc);
 
             hideLoading();
 
             if (serverError) {
                 showAnswer('Error: ' + serverError.getAttribute('data-content'), true);
             } else if (serverResponse) {
-                showAnswer(serverResponse.getAttribute('data-content'));
+                showAnswer(serverResponse.getAttribute('data-content'), false, serverCitations);
             } else {
                 console.warn('No server-response or server-error found in HTML');
                 showAnswer('No response from server.', true);
