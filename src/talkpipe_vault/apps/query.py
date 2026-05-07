@@ -394,14 +394,25 @@ def _process_keyword_results(raw_results: list[Any]) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
 
     for result in raw_results:
-        doc_id = _get_field(result, "doc_id", "Unknown")
+        doc_id = _get_field(result, "doc_id", "")
         score = _get_field(result, "score", 0)
-        document = _get_field(result, "document", {})
+        document = _get_field(result, "document", None)
+        if document is None:
+            document = result
 
-        content = _get_field(document, "content", "")
-        path = _get_field(document, "path", doc_id)
+        content = _get_field(document, "content", "") or _get_field(
+            result, "content", ""
+        )
+        path = (
+            _get_field(document, "path", "")
+            or _get_field(result, "path", "")
+            or doc_id
+            or "Unknown"
+        )
         title = _get_field(document, "title", "")
-        filename = _get_field(document, "filename", "")
+        filename = _get_field(document, "filename", "") or _get_field(
+            result, "filename", ""
+        )
 
         results.append(
             {
@@ -498,17 +509,22 @@ def _get_chunk_text_for_path_and_snippet(
     """Return full text for a selected chunk identified by path/id and snippet."""
     rows = _load_docs_rows(vault_path)
     snippet_prefix = _normalize_snippet_prefix(snippet)
+    content_by_snippet: list[str] = []
     for row in rows:
         doc = _extract_document_record(row)
-        if path not in _document_lookup_keys(row, doc):
-            continue
         content = str(doc.get("content", "")).strip()
         if not content:
             continue
         candidate_prefix = " ".join(content.split())
+        if snippet_prefix and snippet_prefix in candidate_prefix:
+            content_by_snippet.append(content)
+        if path not in _document_lookup_keys(row, doc):
+            continue
         if snippet_prefix and snippet_prefix not in candidate_prefix:
             continue
         return content
+    if snippet_prefix and content_by_snippet:
+        return content_by_snippet[0]
     return ""
 
 
@@ -675,7 +691,7 @@ async def create_keyword_index(
 
         pipeline = indexWhoosh(
             index_path=whoosh_index_path,
-            field_list="content:content,path:path,filename:filename",
+            field_list="content:content,path:path,filename:filename,doc_id:doc_id",
             overwrite=True,
             commit_seconds=0,
         )

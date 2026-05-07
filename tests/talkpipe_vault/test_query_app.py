@@ -142,7 +142,7 @@ def test_create_whoosh_index_route_triggers_builder(monkeypatch, capsys):
     assert response.headers["location"] == "/keyword-search?created=Whoosh%20index%20created."
     assert called["kwargs"] == {
         "index_path": "/tmp/test-vault/fulltext_vault",
-        "field_list": "content:content,path:path,filename:filename",
+        "field_list": "content:content,path:path,filename:filename,doc_id:doc_id",
         "overwrite": True,
         "commit_seconds": 0,
     }
@@ -272,6 +272,30 @@ def test_process_keyword_results_keeps_multiple_hits_for_same_source_path():
     assert {result["path"] for result in results} == {"/original/source.pdf"}
 
 
+def test_process_keyword_results_uses_source_path_for_flat_whoosh_hits():
+    """Flat Whoosh hits should remain clickable when doc_id is absent."""
+    raw_results = [
+        {
+            "score": 1.0,
+            "content": "flat indexed chunk",
+            "path": "/original/source.pdf",
+            "filename": "source.pdf",
+        }
+    ]
+
+    results = query._process_keyword_results(raw_results)
+
+    assert results == [
+        {
+            "path": "/original/source.pdf",
+            "lookup_path": "/original/source.pdf",
+            "filename": "source.pdf",
+            "snippet": "flat indexed chunk",
+            "score": "1.0000",
+        }
+    ]
+
+
 def test_process_semantic_results_keeps_multiple_hits_for_same_source_path():
     """Semantic search should show every matching chunk from a source file."""
     raw_results = [
@@ -398,6 +422,62 @@ def test_chunk_content_route_finds_lancedb_row_by_id_and_middle_snippet(monkeypa
 
     assert response.status_code == 200
     assert response.json() == {"path": "row-uuid", "content": full_text}
+
+
+def test_chunk_content_route_finds_lancedb_row_by_source_path(monkeypatch):
+    """Chunk content route should resolve flat Whoosh results sent by source path."""
+    query._state.vault_path = "/tmp/test-vault"
+    full_text = "Introductory text. The matching passage appears in the middle."
+    monkeypatch.setattr(
+        query,
+        "_load_docs_rows",
+        lambda _vault_path: [
+            {
+                "id": "row-uuid",
+                "document": {
+                    "content": full_text,
+                    "source": "/notes/source.txt",
+                },
+            }
+        ],
+    )
+    client = TestClient(query.app)
+
+    response = client.get(
+        "/chunk-content",
+        params={"path": "/notes/source.txt", "snippet": "matching passage appears"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"path": "/notes/source.txt", "content": full_text}
+
+
+def test_chunk_content_route_falls_back_to_snippet_for_stale_whoosh_id(monkeypatch):
+    """Chunk content route should tolerate stale Whoosh ids when snippet matches."""
+    query._state.vault_path = "/tmp/test-vault"
+    full_text = "Introductory text. The matching passage appears in the middle."
+    monkeypatch.setattr(
+        query,
+        "_load_docs_rows",
+        lambda _vault_path: [
+            {
+                "id": "current-row-uuid",
+                "document": {
+                    "content": full_text,
+                    "source": "/notes/source.txt",
+                },
+            }
+        ],
+    )
+    client = TestClient(query.app)
+
+    response = client.get(
+        "/chunk-content",
+        params={"path": "stale-whoosh-uuid", "snippet": "matching passage appears"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"path": "stale-whoosh-uuid", "content": full_text}
 
 
 def test_source_file_route_is_disabled_by_default(tmp_path):
