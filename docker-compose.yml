@@ -1,0 +1,70 @@
+version: "3.8"
+
+services:
+  vault:
+    build:
+      context: .
+      dockerfile: Containerfile
+    image: ${IMAGE_NAME:-talkpipe-vault}
+    container_name: talkpipe-vault
+    ports:
+      - "${VAULT_PORT:-8002}:8002"
+    volumes:
+      - talkpipe_vault_data:/app/data
+    environment:
+      - VAULT_HOST=0.0.0.0
+      - VAULT_PORT=8002
+      - VAULT_PATH=/app/data/vault
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import talkpipe_vault; print('OK')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    extra_hosts:
+      - "host.containers.internal:host-gateway"
+    networks:
+      - talkpipe-vault-network
+
+  vault-dev:
+    build:
+      context: .
+      dockerfile: Containerfile
+    image: ${IMAGE_NAME:-talkpipe-vault}:dev
+    container_name: talkpipe-vault-dev
+    ports:
+      - "${VAULT_PORT:-8002}:8002"
+    volumes:
+      - .:/workspace:Z
+      - talkpipe_vault_dev_data:/app/data
+      - talkpipe_vault_dev_cache:/home/vault/.cache
+    environment:
+      - VAULT_HOST=0.0.0.0
+      - VAULT_PORT=8002
+      - VAULT_PATH=/app/data/vault
+      - PYTHONUNBUFFERED=1
+    working_dir: /workspace
+    entrypoint: ["/bin/bash", "-lc"]
+    command: >
+      python3 -m pip install --user -e '.[dev]' &&
+      vault-server "$${VAULT_PATH}" --host "$${VAULT_HOST}" --port "$${VAULT_PORT}"
+    extra_hosts:
+      - "host.containers.internal:host-gateway"
+    networks:
+      - talkpipe-vault-network
+    profiles:
+      - dev
+
+volumes:
+  talkpipe_vault_data:
+    driver: local
+  talkpipe_vault_dev_data:
+    driver: local
+  talkpipe_vault_dev_cache:
+    driver: local
+
+networks:
+  talkpipe-vault-network:
+    driver: bridge

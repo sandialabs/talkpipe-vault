@@ -67,10 +67,10 @@ Documentation = "https://github.com/sandialabs/talkpipe-vault#readme"
 "Bug Tracker" = "https://github.com/sandialabs/talkpipe-vault/issues"
 
 [project.scripts]
-vault-monitor = "vault.document_monitor.cli:main"
-vault-watch-into-vectordb = "talkpipe_vault.pipelines.cli:watch_vectordb_main"
-vault-list-into-vectordb = "talkpipe_vault.pipelines.cli:list_vectordb_main"
-vault-query = "talkpipe_vault.apps.query:main"
+# vault-monitor = "vault.document_monitor.cli:main"
+# vault-watch-into-vectordb = "talkpipe_vault.pipelines.cli:watch_vectordb_main"
+# vault-list-into-vectordb = "talkpipe_vault.pipelines.cli:list_vectordb_main"
+# vault-query = "talkpipe_vault.apps.query:main"
 vault-server = "talkpipe_vault.apps.vault_server:main"
 
 [tool.setuptools.packages.find]

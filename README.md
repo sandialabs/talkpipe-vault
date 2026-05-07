@@ -4,7 +4,7 @@
 
 # TalkPipe Vault
 
-> AI-powered personal information assistant that watches your documents and makes them searchable
+> AI-powered personal information assistant for building and searching document vaults
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
@@ -16,28 +16,34 @@
 
 ## What is TalkPipe Vault?
 
-**TalkPipe Vault** is a set of practical tools and reusable components for turning folders of files into a searchable “vault” you can explore with semantic search, keyword search, and retrieval‑augmented Q&A. It is a production‑oriented example built on the **[TalkPipe](https://github.com/sandialabs/talkpipe)** framework, demonstrating how to assemble document processing, vector search, and RAG with clean, composable pipelines.
+**TalkPipe Vault** is a set of practical tools and reusable components for turning folders of files into a searchable "vault" you can explore with semantic search, keyword search, and retrieval-augmented Q&A. It is a production-oriented example built on the **[TalkPipe](https://github.com/sandialabs/talkpipe)** framework, demonstrating how to assemble document processing, vector search, and RAG with clean, composable pipelines.
 
 What you get:
-- **CLI applications for indexing**: `vault-watch-into-vectordb` (watch a directory and index changes) and `vault-list-into-vectordb` (bulk index from a path or glob).
-- **A web application for discovery**: `vault-query` starts a FastAPI UI for semantic search, keyword search, and single‑turn Q&A over your vault.
-- **Reusable building blocks**: TalkPipe sources, segments, and end‑to‑end pipelines that you can compose to build your own file/document management workflows.
+- **A web application for discovery**: `vault-server` starts a FastAPI UI for semantic search, keyword search, and single-turn Q&A over an existing vault.
+- **Command-line indexing through TalkPipe**: use TalkPipe's `makevectordatabase` command to create the LanceDB `docs` table consumed by the web application.
+- **Reusable building blocks**: TalkPipe sources, segments, and end-to-end pipelines that you can compose to build your own file/document management workflows.
 
 How it works (at a glance):
-- Watches directories or enumerates files, converts documents to text, and stores full‑document and shingled‑chunk embeddings in LanceDB.
-- Builds a Whoosh full‑text index for precise keyword queries alongside semantic search.
+- Converts documents to text and stores embeddings in LanceDB for semantic search and RAG.
+- Can build a Whoosh full-text index for precise keyword queries alongside semantic search.
 - Supports local models (Ollama) and cloud providers (OpenAI) via simple configuration.
 
-Together, these applications and components provide both ready‑to‑use capabilities and a clear blueprint for creating custom pipelines with TalkPipe.
+Together, these applications and components provide both ready-to-use capabilities and a clear blueprint for creating custom pipelines with TalkPipe.
+
+### Current Status
+
+The stable runtime path is: build a vault with TalkPipe's `makevectordatabase`, then serve it with `vault-server` either locally or in a container.
+
+Directory monitoring is still under development. The watcher sources and helper functions are present in `talkpipe_vault.watchdog` and `talkpipe_vault.pipelines.building_and_watching`, but they are not started by the default container and should be treated as experimental until the indexing and serving paths are fully unified.
 
 ### Key Features
 
-- **Automatic Document Monitoring**: Watches folders and automatically processes new or modified documents
+- **Web Search and Q&A**: Search an existing vault from a browser
+- **Experimental Directory Monitoring**: Watcher components exist, but the monitoring workflow is still being hardened
 - **Semantic Search**: Find documents by meaning, not just keywords
 - **Multiple AI Backends**: Works with OpenAI or local Ollama models (privacy-friendly, no cloud required)
 - **Format Support**: Handles diverse document formats through the extraction pipeline
 - **Vector Database**: Uses [LanceDB](https://lancedb.com/) for efficient similarity search
-- **Intelligent Chunking**: Breaks documents into overlapping chunks for better search accuracy
 
 ### Web Interface
 
@@ -51,10 +57,10 @@ TalkPipe Vault includes a web application for searching and querying your docume
 **Launch the web interface:**
 
 ```bash
-vault-query ~/my-vault --host 127.0.0.1 --port 8000
+vault-server ~/my-vault --host 127.0.0.1 --port 8002
 ```
 
-Then open http://127.0.0.1:8000 in your browser.
+Then open http://127.0.0.1:8002 in your browser.
 
 ## Quick Start
 
@@ -72,112 +78,154 @@ pip install -e .[dev]
 
 ### Basic Usage
 
-**Watch a folder and build a searchable database:**
+**Build a vault from existing files:**
 
 ```bash
-# Watch a directory and index matching files
-vault-watch-into-vectordb "/path/to/documents" \
-    --vault-path ~/my-vault \
+makevectordatabase "/path/to/documents/**/*.txt" \
+    --path ~/my-vault \
+    --overwrite
+```
+
+`vault-server` expects a LanceDB directory containing TalkPipe's `docs` table. The `makevectordatabase` command above creates that layout.
+
+**Run the web interface from the command line:**
+
+```bash
+vault-server ~/my-vault --host 127.0.0.1 --port 8002
+```
+
+Then open http://127.0.0.1:8002 in your browser.
+
+**Run the web interface with Python directly:**
+
+```bash
+python -m talkpipe_vault.apps.query ~/my-vault --host 127.0.0.1 --port 8002
+```
+
+Use this form when you need options exposed by the app module, such as `--show-source-paths`.
+
+### Experimental Directory Monitoring
+
+Directory monitoring is not the recommended production path yet. The default container does not start a watcher, and the installed package currently exposes only `vault-server` as a console script.
+
+For local experiments, you can call the watcher helper directly:
+
+```bash
+python -c "from talkpipe_vault.pipelines.cli import watch_vectordb_main; watch_vectordb_main()" \
+    /path/to/documents \
+    --vault-path ~/watched-vault \
     --patterns "*.txt" "*.md" \
-    --ignore-patterns "*/node_modules/*" \
     --polling \
     --overwrite
 ```
 
-**Index an existing collection:**
-
-```bash
-vault-list-into-vectordb "/path/to/documents/**/*.txt" \
-    --vault-path ~/my-vault \
-    --overwrite
-```
-
-The indexing commands above populate a vault at `~/my-vault` with:
-- `vector_vault/full_documents`: Embeddings for full documents (broad search)
-- `vector_vault/shingled_chunks`: Embeddings for shingled text windows (precise retrieval)
-- `fulltext_vault`: Whoosh full‑text index for keyword search
-
-When using TalkPipe's native `makevectordatabase` command, pass that LanceDB path directly
-to `vault-query` (it expects the `docs` table in the directory you provide).
+The watcher pipeline writes the in-development vault layout under `~/watched-vault/vector_vault` and `~/watched-vault/fulltext_vault`. Expect behavior and storage details to change while this workflow is under development.
 
 ---
 
-## Podman Deployment
+## Container Deployment
 
-TalkPipe Vault can run in a Podman container with no local Python installation. The container watches a directory, indexes documents, and serves the web interface.
+TalkPipe Vault can run in a Podman or Docker-compatible container with no local Python installation. The default container serves the web interface for an existing vault; it does not start a live file watcher.
 
 ### Prerequisites
 
 - [Podman](https://podman.io/) installed
-- For local AI models: [Ollama](https://ollama.ai/) running on the host (container uses `--network host` to reach it)
+- For local AI models: [Ollama](https://ollama.ai/) running on the host
 
-### Quick Start
-
-```bash
-# Build the image (auto-builds on first run if missing)
-./podman-build.sh
-
-# Run the container
-./podman-run.sh
-```
-
-The web interface is at **http://localhost:8002**. Add documents to `~/Desktop/watch`; they are indexed automatically. The vault database is stored in `~/Desktop/vault`.
-
-**Note:** The container expects the vault volume at `/app/data/vault` and the watch volume at `/app/data/watch`.
-
-### Configuration
-
-Paths and image name are set in `podman-config.sh` or via environment variables:
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `IMAGE_NAME` | `talkpipe-vault` | Container image name |
-| `DESKTOP_DIR` | `~/Desktop` | Base directory for vault and watch folders |
-| `VAULT_DIR` | `$DESKTOP_DIR/vault` | Where the vector DB and full-text index are stored |
-| `WATCH_DIR` | `$DESKTOP_DIR/watch` | Directory to monitor for new/modified documents |
-
-Example: use custom paths without editing the config:
+### Build the Image
 
 ```bash
-export VAULT_DIR=~/my-vault
-export WATCH_DIR=~/my-docs
-./podman-run.sh
+podman build -t talkpipe-vault -f Containerfile .
 ```
 
-### Scripts
+### Build a Vault in the Container
 
-| Script | Purpose |
-|--------|---------|
-| `podman-build.sh` | Build the container image |
-| `podman-run.sh` | Run the container (builds image if missing) |
-| `podman-shell.sh` | Open a shell in a running container for debugging |
+Mount your document directory and a host data directory, then run TalkPipe's `makevectordatabase` inside the image:
+
+```bash
+mkdir -p ~/Desktop/talkpipe-vault-data/vault
+
+podman run --rm \
+    --userns=keep-id \
+    --add-host=host.containers.internal:host-gateway \
+    -v /path/to/documents:/documents:Z \
+    -v ~/Desktop/talkpipe-vault-data:/app/data:Z \
+    -e OLLAMA_BASE_URL=http://host.containers.internal:11434 \
+    talkpipe-vault \
+    makevectordatabase "/documents/**/*.txt" \
+        --path /app/data/vault \
+        --overwrite
+```
+
+If you already built the vault locally at `~/Desktop/talkpipe-vault-data/vault`, skip this step and run the server container directly.
+
+### Run the Web Server Container
+
+```bash
+podman run --rm -p 8002:8002 \
+    --name talkpipe-vault \
+    --userns=keep-id \
+    --add-host=host.containers.internal:host-gateway \
+    -v ~/Desktop/talkpipe-vault-data:/app/data:Z \
+    talkpipe-vault
+```
+
+The web interface is at **http://localhost:8002**. The vault database is stored under `~/Desktop/talkpipe-vault-data/vault` on the host and mounted at `/app/data/vault` in the container.
+
+### Run With Compose
+
+You can also build and run the web server from the repository with Compose-compatible tooling. The production service uses a named volume at `/app/data`; use direct `podman run` with a bind mount when you want to point the container at a specific host vault directory.
+
+```bash
+# Production web service
+docker-compose up vault
+
+# Development container
+docker-compose --profile dev up vault-dev
+```
+
+### Experimental Monitoring in a Container
+
+Directory monitoring remains experimental. If you want to test it in a container, override the default command and mount both the watched directory and the output directory:
+
+```bash
+podman run --rm \
+    --userns=keep-id \
+    --add-host=host.containers.internal:host-gateway \
+    -v /path/to/documents:/documents:Z \
+    -v ~/Desktop/talkpipe-vault-data:/app/data:Z \
+    -e OLLAMA_BASE_URL=http://host.containers.internal:11434 \
+    talkpipe-vault \
+    python -c "from talkpipe_vault.pipelines.cli import watch_vectordb_main; watch_vectordb_main()" \
+        /documents \
+        --vault-path /app/data/watched-vault \
+        --patterns "*.txt" "*.md" \
+        --polling
+```
+
+This is for development testing, not unattended production monitoring.
 
 ### Debugging
 
-Connect to a running container:
+Connect to a running container with standard Podman commands:
 
 ```bash
-./podman-shell.sh
-```
-
-This opens an interactive shell with test helpers loaded. Run `test-all` to check network and Ollama. Non-interactive options:
-
-```bash
-./podman-shell.sh --test          # Run all tests
-./podman-shell.sh --test-network  # Test network connectivity
-./podman-shell.sh --test-ollama   # Test Ollama connectivity
+podman ps
+podman exec -it talkpipe-vault /bin/bash
 ```
 
 ### Ollama Access
 
-The container uses `--network host`, so it can reach `localhost:11434` on the host where Ollama runs. If Ollama is elsewhere, set `OLLAMA_BASE_URL` when running (ensure `${VAULT_DIR}` and `${WATCH_DIR}` exist):
+The container maps `host.containers.internal` to the host gateway. If Ollama is running on the host, point TalkPipe at that host name when needed:
 
 ```bash
 podman run -it --rm \
+    --name talkpipe-vault \
     --userns=keep-id \
-    --network host \
-    -v "${VAULT_DIR}:/app/data/vault:Z" \
-    -v "${WATCH_DIR}:/app/data/watch:Z" \
+    -p 8002:8002 \
+    --add-host=host.containers.internal:host-gateway \
+    -v ~/Desktop/talkpipe-vault-data:/app/data:Z \
+    -e VAULT_PATH=/app/data/vault \
     -e OLLAMA_BASE_URL=http://host.containers.internal:11434 \
     talkpipe-vault
 ```
@@ -186,15 +234,15 @@ podman run -it --rm \
 
 **Permission errors on vault directory**
 
-Use `--userns=keep-id` (already set in `podman-run.sh`) so the container runs as your user. If problems persist:
+Use `--userns=keep-id` so the container runs as your user. If problems persist:
 
 ```bash
-chmod -R u+rwX ~/Desktop/vault
+chmod -R u+rwX ~/Desktop/talkpipe-vault-data/vault
 ```
 
 **Ollama not reachable**
 
-Ensure Ollama is running on the host. With `--network host`, the container shares the host network; `localhost:11434` in the container is the host’s Ollama.
+Ensure Ollama is running on the host and use `http://host.containers.internal:11434` from inside the container.
 
 ---
 
@@ -216,110 +264,79 @@ TalkPipe Vault is built on [TalkPipe](https://github.com/sandialabs/talkpipe), a
 
 ### Processing Pipeline
 
-The document processing pipeline consists of several stages:
+The stable web application reads a LanceDB directory containing TalkPipe's `docs` table. Create that database with TalkPipe's `makevectordatabase` command:
 
-```
-File Event → Document Parsing → Filtering → Full-Doc Embedding →
-Text Chunking → Shingle Generation → Chunk Embedding → Vector Storage
+```bash
+makevectordatabase "/path/to/documents/**/*.txt" --path ~/my-vault --overwrite
 ```
 
-1. **File Watcher**: Monitors directories for file system events (create, modify, delete)
-2. **Document Parsing**: Converts various formats to text
-3. **Filtering**: Removes empty or deleted documents
-4. **Full Document Embedding**: Stores complete documents in `full_documents` table
-5. **Text Chunking**: Splits documents into ~500 character chunks
-6. **Shingle Generation**: Creates overlapping 3-chunk windows for context preservation
-7. **Chunk Embedding**: Stores shingled chunks in `shingled_chunks` table
+The in-development monitoring pipeline uses a separate internal flow:
+
+```text
+File event -> document parsing -> filtering -> full-document embedding ->
+text chunking -> shingle generation -> chunk embedding -> vector storage
+```
+
+That watcher flow stores data under `vector_vault/full_documents`, `vector_vault/shingled_chunks`, and `fulltext_vault`. It is useful for development and integration work, but the recommended user-facing workflow is still `makevectordatabase` plus `vault-server`.
 
 ### Command-Line Tools
 
-TalkPipe Vault provides several CLI commands:
+TalkPipe Vault currently installs `vault-server` as its package console script. Indexing is handled by TalkPipe's `makevectordatabase` command, which is installed with the TalkPipe dependency.
 
-#### `vault-watch-into-vectordb`
+#### `makevectordatabase`
 
-Monitors a directory and automatically processes documents as they're created or modified.
-
-```bash
-vault-watch-into-vectordb [SOURCE_PATH] [OPTIONS]
-```
-
-**Options:**
-- `--vault-path TEXT`: Base path for vault storage. Vector DB at `vault_path/vector_vault`, full‑text index at `vault_path/fulltext_vault` (required)
-- `--patterns PATTERN [PATTERN ...]`: Glob patterns to include (e.g., `"*.txt" "*.md"`)
-- `--ignore-patterns PATTERN [PATTERN ...]`: Glob patterns to exclude
-- `--include-directories`: Include directory events (default: ignore directories)
-- `--case-sensitive`: Case‑sensitive pattern matching
-- `--max-events INT`: Maximum number of events to process
-- `--polling`: Use polling observer (fallback when native events unavailable)
-- `--include-common`: Include common temp/hidden files (default: ignore)
-- `--overwrite`: Overwrite existing tables and indexes
-- `--delete-after-reading`: Delete source files after successful indexing
-- `--debounce-seconds FLOAT`: Wait for file stability before processing (default: 1.0; 0 to disable)
-
-**Example:**
+Builds the LanceDB `docs` table used by `vault-server`.
 
 ```bash
-vault-watch-into-vectordb ~/Documents \
-    --vault-path ~/vault-db \
-    --patterns "*.txt" "*.md" \
-    --ignore-patterns "*/node_modules/*" \
-    --polling \
+makevectordatabase "/path/to/documents/**/*.txt" \
+    --path ~/my-vault \
     --overwrite
 ```
 
-#### `vault-list-into-vectordb`
-
-Processes an existing collection of files matching a path or glob pattern.
-
-```bash
-vault-list-into-vectordb [SOURCE_PATTERN] [OPTIONS]
-```
-
-**Options:**
-- `--vault-path TEXT`: Base path for vault storage (required)
-- `--overwrite`: Overwrite existing tables and indexes
-- `--delete-after-reading`: Delete source files after successful indexing
-
-**Example:**
-
-```bash
-vault-list-into-vectordb "~/Documents/**/*.pdf" \
-    --vault-path ~/vault-db \
-    --overwrite
-```
-
-#### `vault-query`
+#### `vault-server`
 
 Launches the web interface for searching and querying your vault.
 
 ```bash
-vault-query [VAULT_PATH] [OPTIONS]
-```
-
-**Options:**
-- `VAULT_PATH`: LanceDB directory path containing TalkPipe's `docs` table (required)
-- `--host TEXT`: Host to bind to (default: `127.0.0.1`)
-- `--port INT`: Port to listen on (default: `8000`)
-
-**Example:**
-
-```bash
-vault-query ~/my-vault --host 0.0.0.0 --port 8080
+vault-server ~/my-vault --host 0.0.0.0 --port 8002
 ```
 
 The web interface provides three modes:
 - **Semantic Search**: Vector similarity search to find documents by meaning
-- **Keyword Search**: Full-text search with Whoosh query syntax (AND, OR, NOT, phrases)
+- **Keyword Search**: Full-text search when a Whoosh index is available
 - **Ask**: Single-turn Q&A that retrieves relevant context and generates AI responses
+
+#### Python Module Entry Point
+
+The app module can also be run directly:
+
+```bash
+python -m talkpipe_vault.apps.query ~/my-vault --host 0.0.0.0 --port 8002
+```
+
+Use this form for app-module options such as `--show-source-paths`.
+
+#### Experimental Watcher Helpers
+
+The old `vault-watch-into-vectordb` and `vault-list-into-vectordb` console scripts are not currently installed by `pyproject.toml`. Their helper functions still exist for development testing:
+
+```bash
+python -c "from talkpipe_vault.pipelines.cli import list_vectordb_main; list_vectordb_main()" \
+    "/path/to/documents/**/*.txt" \
+    --vault-path ~/watched-vault \
+    --overwrite
+```
+
+These helpers exercise the directory-monitoring and custom vault-building code that is still under development.
 
 ### Custom TalkPipe Components
 
 TalkPipe Vault registers custom sources and segments with TalkPipe:
 
 **Sources:**
-- `fileWatcher`: File system event monitoring
-- `watchIntoVectorDB`: Combined watching and vector database creation
-- `listIntoVectorDB`: Batch processing from glob patterns
+- `fileWatcher`: File system event monitoring; experimental
+- `watchIntoVectorDB`: Combined watching and vector database creation; experimental
+- `listIntoVectorDB`: Batch processing from glob patterns for the in-development custom vault layout
 
 **Segments:**
 - `buildVectorDBFromPaths`: Complete document processing pipeline
@@ -384,7 +401,7 @@ pipeline = Pipeline.from_config({
     "source": {
         "type": "watchIntoVectorDB",
         "source_path": "/path/to/watch",
-        "vectordb_path": "~/my-vault",
+        "vault_path": "~/my-vault",
         "embedding_model": "mxbai-embed-large:latest",
         "embedding_source": "ollama",
         "polling": True
@@ -395,15 +412,15 @@ pipeline = Pipeline.from_config({
 list(pipeline())
 ```
 
-This composability is what makes TalkPipe powerful—you can build sophisticated AI applications by connecting well-tested components like Lego blocks.
+This composability is what makes TalkPipe powerful: you can build sophisticated AI applications by connecting well-tested components.
 
 ### Vault Storage Structure
 
 The vault at `vault_path` contains:
 
-- `vector_vault/full_documents`: Embeddings for templated full‑document content (unique id is document‑based)
+- `vector_vault/full_documents`: Embeddings for templated full-document content (unique id is document-based)
 - `vector_vault/shingled_chunks`: Embeddings for overlapping chunk windows with composite ids like `first-last-source`
-- `fulltext_vault`: Whoosh full‑text index over full document content
+- `fulltext_vault`: Whoosh full-text index over full document content
 
 These are produced by the pipelines in [src/talkpipe_vault/pipelines/building_and_watching.py](src/talkpipe_vault/pipelines/building_and_watching.py).
 
@@ -599,10 +616,8 @@ talkpipe-vault/
 ├── tests/                                  # Test suite
 ├── pyproject.toml                          # Package configuration
 ├── Containerfile                           # Container image
-├── podman-build.sh                         # Build container image
-├── podman-run.sh                           # Run container
-├── podman-shell.sh                         # Debug shell in running container
-└── podman-config.sh                        # Shared config for podman scripts
+├── docker-compose.yml                      # Compose services for container runs
+└── .env.example                            # Example container environment
 ```
 
 ## Requirements

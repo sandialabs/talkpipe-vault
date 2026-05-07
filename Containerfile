@@ -6,8 +6,6 @@ RUN dnf install -y --setopt=install_weak_deps=False \
     python3-pip \
     git \
     curl \
-    iputils \
-    bind-utils \
     && python3 --version \
     && dnf clean all
 
@@ -17,8 +15,8 @@ RUN useradd -m -u 1000 -s /bin/bash vault
 # Set working directory
 WORKDIR /app
 
-# Create vault and watch directories
-RUN mkdir -p /app/data/vault /app/data/watch && chown -R vault:vault /app/data
+# Create application data directory
+RUN mkdir -p /app/data/vault && chown -R vault:vault /app/data
 
 # Define volumes
 VOLUME ["/app/data"]
@@ -32,24 +30,19 @@ COPY src/ ./src/
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir .
 
-# Copy entrypoint script
-COPY entrypoint.sh /app/entrypoint.sh
-RUN chmod +x /app/entrypoint.sh
-
-# Copy test script for podman-shell.sh debugging
-COPY talkpipe_tests.sh /app/talkpipe_tests.sh
-
 # Switch to non-root user
 USER vault
 
 # Default environment variables
 ENV VAULT_PATH=/app/data/vault
-ENV VAULT_WATCH_DIR=/app/data/watch
 ENV VAULT_HOST=0.0.0.0
 ENV VAULT_PORT=8002
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PATH=/home/vault/.local/bin:$PATH
 
 # Expose port
 EXPOSE 8002
 
-# Run entrypoint
-ENTRYPOINT ["/app/entrypoint.sh"]
+# Run the web application
+CMD ["vault-server", "/app/data/vault", "--host", "0.0.0.0", "--port", "8002"]

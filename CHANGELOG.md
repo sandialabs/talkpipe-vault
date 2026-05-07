@@ -51,20 +51,16 @@
 #### App Startup Behavior
 - Updated `vault-server` to start only the web interface for search/chat and not launch the file watcher pipeline.
 
-#### Podman Scripts
+#### Container Tooling
 - Removed duplicate `Dockerfile`; kept `Containerfile` only
-- Simplified `podman-build.sh` (removed Containerfile/Dockerfile branching)
-- `podman-run.sh` delegates to `podman-build.sh` when image is missing
-- Added `podman-config.sh` for shared IMAGE_NAME, VAULT_DIR, WATCH_DIR, DESKTOP_DIR
-- Simplified `podman-shell.sh` flag handling with `case` statement
-- Baked `talkpipe_tests.sh` into container image for faster shell connects
-- Refactored `entrypoint.sh` with `check_writable()` and `cleanup_lock_files()` helpers
+- Removed Podman wrapper shell scripts in favor of direct `podman`/Compose commands
+- Added `docker-compose.yml` with production and development-profile services
 
 #### Container Simplification
-- Moved internal container data directories to `/app/data/vault` and `/app/data/watch`
+- Removed live file watching from default container startup; containers now start the web-only `vault-server`
+- Moved internal container data to `/app/data/vault`
 - Updated `Containerfile` to define a single volume at `/app/data`
-- Simplified `entrypoint.sh`: removed complex permission repair logic in favor of simple writability check
-- Updated `podman-run.sh` to mount a single data directory to `/app/data`
+- Removed the shell entrypoint; `Containerfile` now starts `vault-server` directly
 
 #### `building_and_watching` Simplifications
 - Removed unused `extract_property` import
