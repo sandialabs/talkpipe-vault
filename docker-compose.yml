@@ -14,7 +14,10 @@ services:
     environment:
       - VAULT_HOST=0.0.0.0
       - VAULT_PORT=8002
+      # LanceDB path (same semantics as makevectordatabase --path).
+      # Whoosh index is created under VAULT_PATH/fulltext_vault.
       - VAULT_PATH=/app/data/vault
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://deeplearn:11434}
       - PYTHONUNBUFFERED=1
     restart: unless-stopped
     healthcheck:
@@ -43,7 +46,10 @@ services:
     environment:
       - VAULT_HOST=0.0.0.0
       - VAULT_PORT=8002
+      # LanceDB path (same semantics as makevectordatabase --path).
+      # Whoosh index is created under VAULT_PATH/fulltext_vault.
       - VAULT_PATH=/app/data/vault
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://deeplearn:11434}
       - PYTHONUNBUFFERED=1
     working_dir: /workspace
     entrypoint: ["/bin/bash", "-lc"]

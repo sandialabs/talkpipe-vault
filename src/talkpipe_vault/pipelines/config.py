@@ -161,10 +161,7 @@ def get_vault_paths(vault_path: str) -> tuple[str, str]:
     Returns:
         tuple[str, str]: (vectordb_path, whoosh_index_path)
     """
-    return (
-        os.path.join(vault_path, VECTOR_VAULT_SUBDIR),
-        os.path.join(vault_path, FULLTEXT_VAULT_SUBDIR),
-    )
+    return (get_vector_db_path(vault_path), get_whoosh_index_path(vault_path))
 
 
 def get_vector_db_path(vault_path: str) -> str:
@@ -172,6 +169,31 @@ def get_vector_db_path(vault_path: str) -> str:
     Return the LanceDB path expected by makevectordatabase/serverag.
     """
     return vault_path
+
+
+def get_whoosh_index_path(vault_path: str) -> str:
+    """
+    Return the Whoosh index path under the configured vault path.
+    """
+    return os.path.join(vault_path, FULLTEXT_VAULT_SUBDIR)
+
+
+def ensure_supported_vault_layout(vault_path: str) -> None:
+    """
+    Enforce direct LanceDB layout and reject legacy nested vector_vault layout.
+
+    Expects LanceDB files/tables directly under ``vault_path`` and Whoosh index under
+    ``vault_path/fulltext_vault``.
+    """
+    legacy_vector_path = os.path.join(vault_path, VECTOR_VAULT_SUBDIR)
+    if os.path.isdir(legacy_vector_path):
+        raise ValueError(
+            "Unsupported legacy vault layout detected at "
+            f"{legacy_vector_path}. Expected LanceDB tables directly under "
+            f"{vault_path} (same as makevectordatabase output). "
+            "Migrate by moving LanceDB contents from vector_vault/ into the "
+            "vault root path, then retry."
+        )
 
 
 def get_chat_model() -> str:

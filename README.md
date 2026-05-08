@@ -16,6 +16,8 @@
 
 ## What is TalkPipe Vault?
 
+NOTE: TalkPipe Vault is still under development (in alpha) and not all features are intended for broad use.
+
 **TalkPipe Vault** is a set of practical tools and reusable components for turning folders of files into a searchable "vault" you can explore with semantic search, keyword search, and retrieval-augmented Q&A. It is a production-oriented example built on the **[TalkPipe](https://github.com/sandialabs/talkpipe)** framework, demonstrating how to assemble document processing, vector search, and RAG with clean, composable pipelines.
 
 What you get:
@@ -119,7 +121,7 @@ python -c "from talkpipe_vault.pipelines.cli import watch_vectordb_main; watch_v
     --overwrite
 ```
 
-The watcher pipeline writes the in-development vault layout under `~/watched-vault/vector_vault` and `~/watched-vault/fulltext_vault`. Expect behavior and storage details to change while this workflow is under development.
+The watcher pipeline writes LanceDB content directly under `~/watched-vault` and Whoosh data under `~/watched-vault/fulltext_vault`.
 
 ---
 
@@ -130,7 +132,7 @@ TalkPipe Vault can run in a Podman or Docker-compatible container with no local 
 ### Prerequisites
 
 - [Podman](https://podman.io/) installed
-- For local AI models: [Ollama](https://ollama.ai/) running on the host
+- For local AI models: [Ollama](https://ollama.ai/) reachable from the container. The examples use `http://deeplearn:11434`; change `OLLAMA_BASE_URL` if your Ollama server is elsewhere.
 
 ### Build the Image
 
@@ -150,7 +152,7 @@ podman run --rm \
     --add-host=host.containers.internal:host-gateway \
     -v /path/to/documents:/documents:Z \
     -v ~/Desktop/talkpipe-vault-data:/app/data:Z \
-    -e OLLAMA_BASE_URL=http://host.containers.internal:11434 \
+    -e OLLAMA_BASE_URL=http://deeplearn:11434 \
     talkpipe-vault \
     makevectordatabase "/documents/**/*.txt" \
         --path /app/data/vault \
@@ -194,7 +196,7 @@ podman run --rm \
     --add-host=host.containers.internal:host-gateway \
     -v /path/to/documents:/documents:Z \
     -v ~/Desktop/talkpipe-vault-data:/app/data:Z \
-    -e OLLAMA_BASE_URL=http://host.containers.internal:11434 \
+    -e OLLAMA_BASE_URL=http://deeplearn:11434 \
     talkpipe-vault \
     python -c "from talkpipe_vault.pipelines.cli import watch_vectordb_main; watch_vectordb_main()" \
         /documents \
@@ -216,7 +218,7 @@ podman exec -it talkpipe-vault /bin/bash
 
 ### Ollama Access
 
-The container maps `host.containers.internal` to the host gateway. If Ollama is running on the host, point TalkPipe at that host name when needed:
+Set `OLLAMA_BASE_URL` to the URL that is reachable from inside the container. If Ollama runs on `deeplearn`, use:
 
 ```bash
 podman run -it --rm \
@@ -225,10 +227,13 @@ podman run -it --rm \
     -p 8002:8002 \
     --add-host=host.containers.internal:host-gateway \
     -v ~/Desktop/talkpipe-vault-data:/app/data:Z \
+    # VAULT_PATH points to the LanceDB directory directly.
     -e VAULT_PATH=/app/data/vault \
-    -e OLLAMA_BASE_URL=http://host.containers.internal:11434 \
+    -e OLLAMA_BASE_URL=http://deeplearn:11434 \
     talkpipe-vault
 ```
+
+If Ollama runs on the same host as Podman, use `http://host.containers.internal:11434` instead.
 
 ### Troubleshooting
 
@@ -242,7 +247,7 @@ chmod -R u+rwX ~/Desktop/talkpipe-vault-data/vault
 
 **Ollama not reachable**
 
-Ensure Ollama is running on the host and use `http://host.containers.internal:11434` from inside the container.
+Ensure the hostname is reachable from inside the container and that Ollama is listening on a non-loopback interface on that machine. For a remote server such as `deeplearn`, `OLLAMA_BASE_URL` should be `http://deeplearn:11434`.
 
 ---
 
@@ -277,7 +282,7 @@ File event -> document parsing -> filtering -> full-document embedding ->
 text chunking -> shingle generation -> chunk embedding -> vector storage
 ```
 
-That watcher flow stores data under `vector_vault/full_documents`, `vector_vault/shingled_chunks`, and `fulltext_vault`. It is useful for development and integration work, but the recommended user-facing workflow is still `makevectordatabase` plus `vault-server`.
+That watcher flow stores LanceDB tables directly at `vault_path` (`full_documents`, `shingled_chunks`) and writes Whoosh data under `fulltext_vault`. It is useful for development and integration work, but the recommended user-facing workflow is still `makevectordatabase` plus `vault-server`.
 
 ### Command-Line Tools
 
@@ -418,8 +423,8 @@ This composability is what makes TalkPipe powerful: you can build sophisticated 
 
 The vault at `vault_path` contains:
 
-- `vector_vault/full_documents`: Embeddings for templated full-document content (unique id is document-based)
-- `vector_vault/shingled_chunks`: Embeddings for overlapping chunk windows with composite ids like `first-last-source`
+- `full_documents`: Embeddings for templated full-document content (unique id is document-based)
+- `shingled_chunks`: Embeddings for overlapping chunk windows with composite ids like `first-last-source`
 - `fulltext_vault`: Whoosh full-text index over full document content
 
 These are produced by the pipelines in [src/talkpipe_vault/pipelines/building_and_watching.py](src/talkpipe_vault/pipelines/building_and_watching.py).

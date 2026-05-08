@@ -22,7 +22,7 @@ def watch_vectordb_main() -> None:
     )
     parser.add_argument(
         "--vault-path", required=True,
-        help="Base path for vault storage. Vector DB at vault_path/vector_vault, full-text index at vault_path/fulltext_vault"
+        help="Path to LanceDB directory (same semantics as makevectordatabase). Full-text index at vault_path/fulltext_vault"
     )
     parser.add_argument(
         "--patterns", nargs="+", default=None, help="Glob patterns to match"
@@ -96,7 +96,7 @@ def list_vectordb_main() -> None:
     )
     parser.add_argument(
         "--vault-path", required=True,
-        help="Base path for vault storage. Vector DB at vault_path/vector_vault, full-text index at vault_path/fulltext_vault"
+        help="Path to LanceDB directory (same semantics as makevectordatabase). Full-text index at vault_path/fulltext_vault"
     )
     parser.add_argument(
         "--overwrite", action="store_true", default=False,

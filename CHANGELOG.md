@@ -6,13 +6,23 @@
 
 #### Podman Deployment
 - Added README section for Podman deployment: prerequisites, quick start, configuration, scripts, debugging, Ollama access, troubleshooting
+- Updated container examples and Compose environment to support a remote Ollama
+  server at `deeplearn`.
 
 #### TalkPipe 0.12 Compatibility Notes
 - Updated README and `vault-query` CLI help to clarify that query mode expects a LanceDB path containing TalkPipe's `docs` table (for example, output from `makevectordatabase`).
 
 ### Bug Fixes
 
+#### Vault Path Semantics
+- Standardized `vault_path` semantics across app and pipelines to match TalkPipe `makevectordatabase`: LanceDB is read/written directly at `vault_path`.
+- Added strict legacy-layout validation that fails fast when `vault_path/vector_vault` exists, with migration guidance to move LanceDB contents to `vault_path`.
+- Removed query-app fallback probing of `vault_path/vector_vault`; reads now use only the canonical LanceDB path.
+- Kept Whoosh full-text index path at `vault_path/fulltext_vault`.
+
 #### Query App Whoosh Full-Text Flow
+- Fixed query app template rendering with newer Starlette versions by passing
+  `TemplateResponse` arguments by keyword.
 - Switched `vaultTextSearch` to TalkPipe's `searchWhoosh` segment instead of LanceDB FTS.
 - Updated keyword-search enablement to detect a Whoosh index at `fulltext_vault`.
 - Added a keyword-search UI action to create a Whoosh index from existing LanceDB `docs` records using TalkPipe's `indexWhoosh` segment.

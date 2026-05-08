@@ -31,7 +31,8 @@ from talkpipe.util.config import configure_logger
 
 from talkpipe_vault.pipelines.config import (
     DEFAULT_VECTOR_TABLE_NAME,
-    get_vault_paths,
+    ensure_supported_vault_layout,
+    get_whoosh_index_path,
     get_vector_db_path,
 )
 from talkpipe_vault.pipelines.searching_and_prompting import (
@@ -97,7 +98,7 @@ def _keyword_search_enabled(vault_path: str) -> bool:
     if not vault_path:
         return False
 
-    _, whoosh_index_path = get_vault_paths(vault_path)
+    whoosh_index_path = get_whoosh_index_path(vault_path)
 
     try:
         with WhooshFullTextIndex(whoosh_index_path):
@@ -112,45 +113,22 @@ def _iter_lancedb_docs_for_whoosh(vault_path: str) -> list[dict[str, str]]:
 
     Expects rows where `document` is either JSON text or a dict containing content/path/title.
     """
-    candidate_paths = []
     vectordb_path = get_vector_db_path(vault_path)
-    candidate_paths.append(vectordb_path)
-    vector_subdir_path, _ = get_vault_paths(vault_path)
-    if vector_subdir_path not in candidate_paths:
-        candidate_paths.append(vector_subdir_path)
-
-    candidate_tables = [DEFAULT_VECTOR_TABLE_NAME]
-
-    last_error = None
+    ensure_supported_vault_layout(vault_path)
     rows: list[dict[str, Any]] = []
-    selected_table: str | None = None
-    for candidate_path in candidate_paths:
-        for candidate_table in candidate_tables:
-            try:
-                doc_store = LanceDBDocumentStore(
-                    path=candidate_path,
-                    table_name=candidate_table,
-                )
-                table, _ = doc_store._get_table()
-                if hasattr(table, "to_arrow"):
-                    rows = table.to_arrow().to_pylist()
-                elif hasattr(table, "to_pandas"):
-                    rows = table.to_pandas().to_dict(orient="records")
-                else:
-                    raise RuntimeError(
-                        "Unsupported LanceDB table reader: expected to_arrow() or to_pandas()."
-                    )
-                selected_table = candidate_table
-                break
-            except Exception as exc:
-                last_error = exc
-                continue
-        if selected_table is not None:
-            break
+    doc_store = LanceDBDocumentStore(
+        path=vectordb_path,
+        table_name=DEFAULT_VECTOR_TABLE_NAME,
+    )
+    table, _ = doc_store._get_table()
+    if hasattr(table, "to_arrow"):
+        rows = table.to_arrow().to_pylist()
+    elif hasattr(table, "to_pandas"):
+        rows = table.to_pandas().to_dict(orient="records")
     else:
         raise RuntimeError(
-            "Could not read LanceDB docs table at expected paths."
-        ) from last_error
+            "Unsupported LanceDB table reader: expected to_arrow() or to_pandas()."
+        )
 
     documents: list[dict[str, str]] = []
     for row in rows:
@@ -217,6 +195,7 @@ def init_pipelines(vault_path: str) -> None:
     Args:
         vault_path: Path to LanceDB created by makevectordatabase.
     """
+    ensure_supported_vault_layout(vault_path)
     _state.vault_path = vault_path
     _refresh_pipelines()
 
@@ -270,6 +249,7 @@ def _refresh_pipelines(force: bool = False) -> None:
 
 def _update_document_counts(vault_path: str) -> None:
     """Update document counts from vault storage locations."""
+    ensure_supported_vault_layout(vault_path)
     vectordb_path = get_vector_db_path(vault_path)
 
     # Get counts from LanceDB tables
@@ -452,35 +432,20 @@ def _extract_document_record(row: dict[str, Any]) -> dict[str, Any]:
 
 def _load_docs_rows(vault_path: str) -> list[dict[str, Any]]:
     """Load rows from the TalkPipe docs table from common vault locations."""
-    candidate_paths = []
+    ensure_supported_vault_layout(vault_path)
     vectordb_path = get_vector_db_path(vault_path)
-    candidate_paths.append(vectordb_path)
-    vector_subdir_path, _ = get_vault_paths(vault_path)
-    if vector_subdir_path not in candidate_paths:
-        candidate_paths.append(vector_subdir_path)
-
-    last_error = None
-    for candidate_path in candidate_paths:
-        try:
-            doc_store = LanceDBDocumentStore(
-                path=candidate_path,
-                table_name=DEFAULT_VECTOR_TABLE_NAME,
-            )
-            table, _ = doc_store._get_table()
-            if hasattr(table, "to_arrow"):
-                return table.to_arrow().to_pylist()
-            if hasattr(table, "to_pandas"):
-                return table.to_pandas().to_dict(orient="records")
-            raise RuntimeError(
-                "Unsupported LanceDB table reader: expected to_arrow() or to_pandas()."
-            )
-        except Exception as exc:
-            last_error = exc
-            continue
-
+    doc_store = LanceDBDocumentStore(
+        path=vectordb_path,
+        table_name=DEFAULT_VECTOR_TABLE_NAME,
+    )
+    table, _ = doc_store._get_table()
+    if hasattr(table, "to_arrow"):
+        return table.to_arrow().to_pylist()
+    if hasattr(table, "to_pandas"):
+        return table.to_pandas().to_dict(orient="records")
     raise RuntimeError(
-        "Could not read LanceDB docs table at expected paths."
-    ) from last_error
+        "Unsupported LanceDB table reader: expected to_arrow() or to_pandas()."
+    )
 
 
 def _normalize_snippet_prefix(snippet: str) -> str:
@@ -546,8 +511,9 @@ async def home(request: Request, state: AppState = Depends(get_state)) -> HTMLRe
     # Refresh document counts on home page load
     _update_document_counts(state.vault_path)
     return templates.TemplateResponse(
-        "home.html",
-        _template_context(request, state),
+        request=request,
+        name="home.html",
+        context=_template_context(request, state),
     )
 
 
@@ -573,8 +539,9 @@ async def search_page(
 ) -> HTMLResponse:
     """Render the semantic search interface page."""
     return templates.TemplateResponse(
-        "search.html",
-        _template_context(
+        request=request,
+        name="search.html",
+        context=_template_context(
             request,
             state,
             query="",
@@ -613,8 +580,9 @@ async def search_results(
             error = str(e)
 
     return templates.TemplateResponse(
-        "search.html",
-        _template_context(
+        request=request,
+        name="search.html",
+        context=_template_context(
             request,
             state,
             query=query,
@@ -633,8 +601,9 @@ async def keyword_search_page(
 ) -> HTMLResponse:
     """Render the keyword search interface page."""
     return templates.TemplateResponse(
-        "keyword_search.html",
-        _template_context(
+        request=request,
+        name="keyword_search.html",
+        context=_template_context(
             request,
             state,
             query="",
@@ -677,8 +646,9 @@ async def keyword_search_results(
             error = str(e)
 
     return templates.TemplateResponse(
-        "keyword_search.html",
-        _template_context(
+        request=request,
+        name="keyword_search.html",
+        context=_template_context(
             request,
             state,
             query=query,
@@ -702,7 +672,7 @@ async def create_keyword_index(
     try:
         documents = _iter_lancedb_docs_for_whoosh(state.vault_path)
         _print_whoosh_index_documents(documents)
-        _, whoosh_index_path = get_vault_paths(state.vault_path)
+        whoosh_index_path = get_whoosh_index_path(state.vault_path)
 
         pipeline = indexWhoosh(
             index_path=whoosh_index_path,
@@ -799,8 +769,9 @@ async def chat_page(
 ) -> HTMLResponse:
     """Render the Ask interface page."""
     return templates.TemplateResponse(
-        "chat.html",
-        _template_context(
+        request=request,
+        name="chat.html",
+        context=_template_context(
             request,
             state,
             messages=[],
@@ -843,8 +814,9 @@ async def chat_response(
             error = str(e)
 
     return templates.TemplateResponse(
-        "chat.html",
-        _template_context(
+        request=request,
+        name="chat.html",
+        context=_template_context(
             request,
             state,
             messages=messages,

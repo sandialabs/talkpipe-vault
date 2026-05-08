@@ -18,9 +18,11 @@ from talkpipe.search.whoosh import indexWhoosh
 from talkpipe_vault.watchdog import file_watcher
 
 from .config import (
+    ensure_supported_vault_layout,
     get_document_template,
     get_shingle_template,
     get_vault_paths,
+    get_vector_db_path,
     resolve_embedding_config,
 )
 
@@ -38,7 +40,7 @@ def build_vector_db_from_paths(
     items: Any,
     vault_path: Annotated[
         str,
-        "Base path for vault storage. Vector DB stored at vault_path/vector_vault, full-text index at vault_path/fulltext_vault",
+        "Path to LanceDB directory (makevectordatabase-style). Whoosh full-text index stored at vault_path/fulltext_vault",
     ],
     overwrite: Annotated[
         bool, "If true, overwrite existing tables and indexes"
@@ -77,7 +79,7 @@ def build_vector_db_from_paths(
     for keyword-based retrieval.
 
     Storage locations derived from vault_path:
-        - vault_path/vector_vault: LanceDB vector database
+        - vault_path: LanceDB vector database
         - vault_path/fulltext_vault: Whoosh full-text search index
 
     Yields dicts with the following structure:
@@ -89,9 +91,11 @@ def build_vector_db_from_paths(
     embedding_model, embedding_source = resolve_embedding_config(
         embedding_model, embedding_source
     )
+    ensure_supported_vault_layout(vault_path)
     document_template = get_document_template()
     shingle_template = get_shingle_template()
-    vectordb_path, whoosh_index_path = get_vault_paths(vault_path)
+    vectordb_path = get_vector_db_path(vault_path)
+    _, whoosh_index_path = get_vault_paths(vault_path)
 
     base_pipeline = (
         FilterExpression(expression="'event' not in item or item['event'] != 'deleted'")
@@ -171,7 +175,7 @@ def watch_into_vector_db(
     source_path: Annotated[str, "Path to watch"],
     vault_path: Annotated[
         str,
-        "Base path for vault storage. Vector DB stored at vault_path/vector_vault, full-text index at vault_path/fulltext_vault",
+        "Path to LanceDB directory (makevectordatabase-style). Whoosh full-text index stored at vault_path/fulltext_vault",
     ],
     patterns: Annotated[list[str] | None, "List of glob patterns to match"] = None,
     ignore_patterns: Annotated[
@@ -263,7 +267,7 @@ def list_into_vector_db(
     ],
     vault_path: Annotated[
         str,
-        "Base path for vault storage. Vector DB stored at vault_path/vector_vault, full-text index at vault_path/fulltext_vault",
+        "Path to LanceDB directory (makevectordatabase-style). Whoosh full-text index stored at vault_path/fulltext_vault",
     ],
     overwrite: Annotated[
         bool, "If true, overwrite existing tables and indexes"

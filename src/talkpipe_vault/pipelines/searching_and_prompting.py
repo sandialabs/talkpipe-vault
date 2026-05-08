@@ -21,12 +21,13 @@ from .config import (
     DEFAULT_VECTOR_TABLE_NAME,
     RAG_PREFIX_PROMPTS,
     RAG_PROMPT_DIRECTIVE,
+    ensure_supported_vault_layout,
     get_chat_model,
     get_chat_source,
     get_embedding_model,
     get_embedding_source,
     get_retrieval_template,
-    get_vault_paths,
+    get_whoosh_index_path,
     get_vector_db_path,
 )
 
@@ -169,7 +170,8 @@ class VaultSearch(AbstractFieldSegment):
         
         # Get retrieval template from TalkPipe config or default
         retrieval_template = get_retrieval_template()
-        
+        ensure_supported_vault_layout(vault_path)
+
         self.vault_path = vault_path
         vectordb_path = get_vector_db_path(vault_path)
         self.pipeline = (ToDict(field_list="_:query") |  \
@@ -217,7 +219,8 @@ class VaultChat(AbstractFieldSegment):
         
         # Get retrieval template from TalkPipe config or default
         retrieval_template = get_retrieval_template()
-        
+        ensure_supported_vault_layout(vault_path)
+
         self.vault_path = vault_path
         vectordb_path = get_vector_db_path(vault_path)
         self.pipeline = (ToDict(field_list="_:query") | \
@@ -265,8 +268,9 @@ class VaultTextSearch(AbstractFieldSegment):
         multi_emit: Annotated[bool, "Whether this class potentially emits multiple results per item."
                                     "Should be set by the subclass constructor call or the field_segment decorator, not by the user."] = True):
         super().__init__(field=field, set_as=set_as, multi_emit=multi_emit)
+        ensure_supported_vault_layout(vault_path)
         self.vault_path = vault_path
-        _, whoosh_index_path = get_vault_paths(vault_path)
+        whoosh_index_path = get_whoosh_index_path(vault_path)
         self.pipeline = searchWhoosh(
             index_path=whoosh_index_path,
             limit=limit,

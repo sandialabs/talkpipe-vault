@@ -72,7 +72,7 @@ class TestBuildVectorDbFromPaths:
         from talkpipe.search.lancedb import LanceDBDocumentStore
 
         with tempfile.TemporaryDirectory() as vault_path:
-            vectordb_path = os.path.join(vault_path, "vector_vault")
+            vectordb_path = vault_path
 
             segment = build_vector_db_from_paths(
                 vault_path=vault_path,
@@ -124,6 +124,18 @@ class TestBuildVectorDbFromPaths:
             assert len(results) > 0
             # Verify result has expected attributes
             assert hasattr(results[0], 'doc_id') or hasattr(results[0], 'document')
+
+    def test_build_vector_db_rejects_legacy_nested_vector_layout(self):
+        """Legacy vector_vault layout should fail with a migration error."""
+        with tempfile.TemporaryDirectory() as vault_path:
+            Path(vault_path, "vector_vault").mkdir(parents=True, exist_ok=True)
+            segment = build_vector_db_from_paths(
+                vault_path=vault_path,
+                overwrite=True,
+            )
+
+            with pytest.raises(ValueError, match="Unsupported legacy vault layout"):
+                list(segment([{"path": PDF_FILE, "event": "created"}]))
 
 
 class TestWatchIntoVectorDb:
@@ -281,7 +293,7 @@ class TestListIntoVectorDb:
                 test_file = Path(source_dir) / "test_doc.txt"
                 test_file.write_text("This is test content for verifying table creation.")
 
-                vectordb_path = os.path.join(vault_path, "vector_vault")
+                vectordb_path = vault_path
 
                 # Run the pipeline
                 source = list_into_vector_db(

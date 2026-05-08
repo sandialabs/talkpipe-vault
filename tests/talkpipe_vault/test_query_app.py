@@ -105,6 +105,14 @@ def test_header_uses_existing_svg_logo_and_refresh_control():
     assert 'name="return_to" value="/"' in response.text
 
 
+def test_init_pipelines_rejects_legacy_nested_vector_layout(tmp_path):
+    """Legacy vector_vault layout should fail fast during query init."""
+    (tmp_path / "vector_vault").mkdir(parents=True, exist_ok=True)
+
+    with pytest.raises(ValueError, match="Unsupported legacy vault layout"):
+        query.init_pipelines(str(tmp_path))
+
+
 def test_refresh_redirects_back_to_current_page(monkeypatch):
     """Refresh should return to the page where the user triggered it."""
     called: dict[str, object] = {}
@@ -157,11 +165,8 @@ def test_create_whoosh_index_route_triggers_builder(monkeypatch, capsys):
     )
     monkeypatch.setattr(
         query,
-        "get_vault_paths",
-        lambda _vault_path: (
-            "/tmp/test-vault/vector_vault",
-            "/tmp/test-vault/fulltext_vault",
-        ),
+        "get_whoosh_index_path",
+        lambda _vault_path: "/tmp/test-vault/fulltext_vault",
     )
     called: dict[str, object] = {}
 
@@ -220,7 +225,7 @@ def test_iter_lancedb_docs_for_whoosh_preserves_source_path(monkeypatch):
         "LanceDBDocumentStore",
         lambda **_: _FakeDocStore(rows),
     )
-    monkeypatch.setattr(query, "get_vault_paths", lambda vault_path: (vault_path, ""))
+    monkeypatch.setattr(query, "ensure_supported_vault_layout", lambda _vault_path: None)
 
     documents = query._iter_lancedb_docs_for_whoosh("/tmp/test-vault")
 
@@ -460,8 +465,8 @@ def test_vault_text_search_default_limit_returns_all_whoosh_results(
     monkeypatch.setattr(searching_and_prompting, "searchWhoosh", _fake_search_whoosh)
     monkeypatch.setattr(
         searching_and_prompting,
-        "get_vault_paths",
-        lambda vault_path: (str(tmp_path), str(tmp_path / "fulltext_vault")),
+        "get_whoosh_index_path",
+        lambda _vault_path: str(tmp_path / "fulltext_vault"),
     )
 
     VaultTextSearch(vault_path=str(tmp_path))
