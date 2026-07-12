@@ -4,13 +4,22 @@ import pytest
 from fastapi.testclient import TestClient
 
 from talkpipe_vault.apps import query, user_settings
-from tests.conftest import is_ollama_available
 
 
 @pytest.fixture(autouse=True)
 def isolated_app(tmp_path, monkeypatch):
     """Isolate app state and persisted settings for each test."""
     monkeypatch.setenv(user_settings.VAULT_HOME_ENV, str(tmp_path / "vault-home"))
+    with query._index_job_lock:
+        query._index_job.running = False
+        query._index_job.source = ""
+        query._index_job.vault_path = ""
+        query._index_job.total_files = 0
+        query._index_job.files_done = 0
+        query._index_job.current_file = ""
+        query._index_job.chunks = 0
+        query._index_job.message = ""
+        query._index_job.error = None
     query._state.vault_path = ""
     query._state.search_pipeline = None
     query._state.chat_pipeline = None
@@ -337,11 +346,20 @@ class TestDocumentIndexing:
     def test_resolve_source_pattern_keeps_globs(self):
         assert query._resolve_source_pattern("/x/**/*.md") == "/x/**/*.md"
 
-    @pytest.mark.skipif(
-        not is_ollama_available(),
-        reason="Requires a reachable Ollama server for embeddings",
-    )
+    def _wait_for_index_job(self, client, timeout_seconds=120):
+        """Poll the status endpoint until the background job finishes."""
+        import time
+
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            status = client.get("/api/index-status").json()
+            if not status["running"]:
+                return status
+            time.sleep(0.1)
+        raise AssertionError("indexing job did not finish in time")
+
     def test_index_then_search_end_to_end(self, client, tmp_path):
+        """Index and search with the default in-process model2vec embeddings."""
         docs = tmp_path / "docs"
         docs.mkdir()
         (docs / "note.txt").write_text(
@@ -357,8 +375,63 @@ class TestDocumentIndexing:
         )
 
         assert response.status_code == 303
-        assert "Indexed" in response.headers["location"].replace("+", " ")
+        assert "Indexing+started" in response.headers["location"]
+
+        status = self._wait_for_index_job(client)
+        assert status["error"] is None
+        assert "Indexed" in status["message"]
+        assert status["total_files"] == 1
+        assert status["chunks"] >= 1
 
         search = client.post("/search", data={"query": "container orchestration"})
         assert search.status_code == 200
         assert "note.txt" in search.text
+
+    def test_index_status_idle_by_default(self, client):
+        status = client.get("/api/index-status").json()
+
+        assert status["running"] is False
+
+    def test_index_job_reports_progress_and_rejects_concurrent_runs(
+        self, client, tmp_path, monkeypatch
+    ):
+        import threading
+
+        release = threading.Event()
+        started = threading.Event()
+
+        def fake_index(vault_path, source_pattern, **kwargs):
+            progress = kwargs["progress"]
+            progress(3, 1, "/somewhere/a.txt")
+            started.set()
+            release.wait(timeout=30)
+            return 3
+
+        monkeypatch.setattr(query, "index_documents_into_vault", fake_index)
+        monkeypatch.setattr(query, "_refresh_pipelines", lambda force=False: None)
+        monkeypatch.setattr(query, "_update_document_counts", lambda vault_path: None)
+
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        (docs / "a.txt").write_text("hello")
+        client.post("/vaults/open", data={"new_vault_path": str(tmp_path / "v")})
+
+        first = client.post("/documents/index", data={"source_path": str(docs)})
+        assert first.status_code == 303
+        assert started.wait(timeout=10)
+
+        running = client.get("/api/index-status").json()
+        assert running["running"] is True
+        assert running["chunks"] == 3
+        assert running["files_done"] == 1
+        assert running["current_file"] == "a.txt"
+        assert running["total_files"] == 1
+
+        second = client.post("/documents/index", data={"source_path": str(docs)})
+        assert second.status_code == 303
+        assert "already+in+progress" in second.headers["location"]
+
+        release.set()
+        status = self._wait_for_index_job(client)
+        assert status["error"] is None
+        assert "Indexed 3 chunk(s)" in status["message"]

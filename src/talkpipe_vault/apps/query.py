@@ -15,6 +15,7 @@ import glob as globlib
 import json
 import os
 import shutil
+import threading
 import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
@@ -764,12 +765,15 @@ def index_documents_into_vault(
     embedding_model: str,
     embedding_source: str,
     overwrite: bool = False,
+    progress: Callable[[int, int, str], None] | None = None,
 ) -> int:
     """Index documents matching a glob into the vault's docs table.
 
     Uses TalkPipe's document pipeline (the same one behind the
     makevectordatabase CLI) so the resulting table matches what the
     search/chat pipelines expect. Returns the number of indexed chunks.
+    The optional progress callback receives (chunks_done, files_done,
+    current_source_path) as chunks flow through the pipeline.
     """
     ensure_supported_vault_layout(vault_path)
     pipeline = ProcessDocumentsSegment() | MakeVectorDatabaseSegment(
@@ -780,13 +784,148 @@ def index_documents_into_vault(
         table_name=DEFAULT_VECTOR_TABLE_NAME,
         doc_id_field=None,
         overwrite=overwrite,
-        batch_size=100,
+        batch_size=25,
         fail_on_error=False,
     )
     chunk_count = 0
-    for _ in pipeline.transform([source_pattern]):
+    seen_sources: set[str] = set()
+    for item in pipeline.transform([source_pattern]):
         chunk_count += 1
+        if progress is not None:
+            source = str(_get_field(item, "source", "") or "")
+            if source:
+                seen_sources.add(source)
+            progress(chunk_count, len(seen_sources), source)
     return chunk_count
+
+
+@dataclass
+class IndexJob:
+    """Progress of the (single) background document-indexing job."""
+
+    running: bool = False
+    source: str = ""
+    vault_path: str = ""
+    total_files: int = 0
+    files_done: int = 0
+    current_file: str = ""
+    chunks: int = 0
+    message: str = ""
+    error: str | None = None
+
+
+_index_job = IndexJob()
+_index_job_lock = threading.Lock()
+
+
+def _index_job_snapshot() -> dict[str, Any]:
+    with _index_job_lock:
+        return {
+            "running": _index_job.running,
+            "source": _index_job.source,
+            "vault_path": _index_job.vault_path,
+            "total_files": _index_job.total_files,
+            "files_done": _index_job.files_done,
+            "current_file": _index_job.current_file,
+            "chunks": _index_job.chunks,
+            "message": _index_job.message,
+            "error": _index_job.error,
+        }
+
+
+def _run_index_job(
+    vault_path: str,
+    source: str,
+    pattern: str,
+    embedding_model: str,
+    embedding_source: str,
+    overwrite: bool,
+) -> None:
+    """Thread target: run one indexing job, publishing progress as it goes."""
+
+    def report(chunks: int, files_done: int, current: str) -> None:
+        with _index_job_lock:
+            _index_job.chunks = chunks
+            _index_job.files_done = files_done
+            _index_job.current_file = Path(current).name if current else ""
+
+    try:
+        chunk_count = index_documents_into_vault(
+            vault_path=vault_path,
+            source_pattern=pattern,
+            embedding_model=embedding_model,
+            embedding_source=embedding_source,
+            overwrite=overwrite,
+            progress=report,
+        )
+        _refresh_pipelines(force=True)
+        _update_document_counts(vault_path)
+        with _index_job_lock:
+            if chunk_count == 0:
+                _index_job.error = (
+                    "The matched files contained no readable document "
+                    "content; nothing was indexed."
+                )
+            else:
+                _index_job.message = (
+                    f"Indexed {chunk_count} chunk(s) from "
+                    f"{_index_job.files_done} file(s) using "
+                    f"{embedding_source}/{embedding_model}."
+                )
+    except Exception as exc:
+        with _index_job_lock:
+            _index_job.error = str(exc)
+    finally:
+        with _index_job_lock:
+            _index_job.running = False
+            _index_job.current_file = ""
+
+
+def start_index_job(
+    vault_path: str,
+    source: str,
+    pattern: str,
+    embedding_model: str,
+    embedding_source: str,
+    overwrite: bool,
+) -> bool:
+    """Start the background indexing job; False if one is already running."""
+    total_files = sum(
+        1 for p in globlib.iglob(pattern, recursive=True) if os.path.isfile(p)
+    )
+    with _index_job_lock:
+        if _index_job.running:
+            return False
+        _index_job.running = True
+        _index_job.source = source
+        _index_job.vault_path = vault_path
+        _index_job.total_files = total_files
+        _index_job.files_done = 0
+        _index_job.current_file = ""
+        _index_job.chunks = 0
+        _index_job.message = ""
+        _index_job.error = None
+
+    thread = threading.Thread(
+        target=_run_index_job,
+        args=(
+            vault_path,
+            source,
+            pattern,
+            embedding_model,
+            embedding_source,
+            overwrite,
+        ),
+        daemon=True,
+    )
+    thread.start()
+    return True
+
+
+@app.get("/api/index-status")
+async def index_status() -> JSONResponse:
+    """Report the state of the background document-indexing job."""
+    return JSONResponse(content=_index_job_snapshot())
 
 
 @app.post("/documents/index", response_class=HTMLResponse)
@@ -821,33 +960,24 @@ async def index_documents(
         )
 
     models = _effective_models(state)
-    try:
-        chunk_count = index_documents_into_vault(
-            vault_path=state.vault_path,
-            source_pattern=pattern,
-            embedding_model=models["embedding_model"],
-            embedding_source=models["embedding_source"],
-            overwrite=overwrite,
-        )
-    except Exception as exc:
-        return _redirect_with_message("/documents", error=str(exc))
-
-    _refresh_pipelines(force=True)
-    _update_document_counts(state.vault_path)
-
-    if chunk_count == 0:
+    started = start_index_job(
+        vault_path=state.vault_path,
+        source=source_path.strip(),
+        pattern=pattern,
+        embedding_model=models["embedding_model"],
+        embedding_source=models["embedding_source"],
+        overwrite=overwrite,
+    )
+    if not started:
         return _redirect_with_message(
             "/documents",
-            error=(
-                "The matched files contained no readable document content; "
-                "nothing was indexed."
-            ),
+            error="An indexing run is already in progress; wait for it to finish.",
         )
     return _redirect_with_message(
         "/documents",
         message=(
-            f"Indexed {chunk_count} chunk(s) using "
-            f"{models['embedding_source']}/{models['embedding_model']}."
+            "Indexing started in the background — progress is shown below. "
+            f"Embedding with {models['embedding_source']}/{models['embedding_model']}."
         ),
     )
 

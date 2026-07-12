@@ -25,18 +25,120 @@
     </label>
 </div>
 
-<div id="loading-overlay" class="search-loading" style="display: none;">
-    <div class="spinner"></div>
-    <span>Reading, chunking, and embedding documents. Large folders can take a while...</span>
+<div class="search-box" id="index-progress" style="display: none;" aria-live="polite">
+    <div class="progress-header">
+        <div class="spinner"></div>
+        <h3 id="progress-title">Indexing documents&hellip;</h3>
+    </div>
+    <div class="progress-track">
+        <div class="progress-fill" id="progress-fill" style="width: 0%;"></div>
+    </div>
+    <p class="progress-text" id="progress-text"></p>
 </div>
+
+<style>
+    .progress-header {
+        align-items: center;
+        display: flex;
+        gap: 12px;
+        margin-bottom: 14px;
+    }
+    .progress-header h3 {
+        margin-bottom: 0;
+    }
+    .progress-track {
+        background: var(--field-bg);
+        border: 1px solid var(--field-border);
+        border-radius: 999px;
+        height: 12px;
+        overflow: hidden;
+    }
+    .progress-fill {
+        background: var(--grad);
+        border-radius: 999px;
+        height: 100%;
+        min-width: 6px;
+        transition: width 0.4s ease;
+    }
+    .progress-fill.indeterminate {
+        animation: progress-slide 1.2s ease-in-out infinite;
+        width: 30% !important;
+    }
+    @keyframes progress-slide {
+        0% { margin-left: 0; }
+        50% { margin-left: 70%; }
+        100% { margin-left: 0; }
+    }
+    .progress-text {
+        color: var(--muted);
+        font-size: 0.9rem;
+        margin-top: 10px;
+    }
+    .progress-text code {
+        font-size: 0.85em;
+    }
+</style>
 
 {% include "_dir_picker.html" %}
 <script>
     attachDirPicker('source-browse-btn', 'source-path-input', { allowNewFolder: false });
     requireValue('source-path-input', 'index-btn');
-    document.getElementById('index-form').addEventListener('submit', function () {
-        document.getElementById('loading-overlay').style.display = 'flex';
-        document.getElementById('index-btn').disabled = true;
-    });
+
+    (function () {
+        const panel = document.getElementById('index-progress');
+        const fill = document.getElementById('progress-fill');
+        const text = document.getElementById('progress-text');
+        const indexBtn = document.getElementById('index-btn');
+        let sawRunningJob = false;
+
+        function render(status) {
+            panel.style.display = 'block';
+            indexBtn.disabled = true;
+            if (status.total_files > 0) {
+                const done = Math.min(status.files_done, status.total_files);
+                const pct = Math.round((done / status.total_files) * 100);
+                fill.classList.remove('indeterminate');
+                fill.style.width = pct + '%';
+                let detail = 'File ' + Math.min(done + 1, status.total_files) + ' of ' +
+                    status.total_files;
+                if (status.current_file) {
+                    detail += ' — ' + status.current_file;
+                }
+                detail += ' · ' + status.chunks + ' chunk(s) embedded';
+                text.textContent = detail;
+            } else {
+                fill.classList.add('indeterminate');
+                text.textContent = status.chunks + ' chunk(s) embedded';
+            }
+        }
+
+        async function poll() {
+            let status;
+            try {
+                status = await (await fetch('/api/index-status')).json();
+            } catch (err) {
+                setTimeout(poll, 2000);
+                return;
+            }
+            if (status.running) {
+                sawRunningJob = true;
+                render(status);
+                setTimeout(poll, 800);
+            } else if (sawRunningJob) {
+                // The job we were watching finished: reload with its outcome.
+                const params = new URLSearchParams();
+                if (status.error) {
+                    params.set('error', status.error);
+                } else if (status.message) {
+                    params.set('message', status.message);
+                }
+                window.location = '/documents' + (params.toString() ? '?' + params : '');
+            } else {
+                panel.style.display = 'none';
+            }
+        }
+
+        poll();
+    })();
 </script>
 {% endblock %}

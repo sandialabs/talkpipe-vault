@@ -66,7 +66,7 @@ State lives in the module-level `_state: AppState` singleton; pipelines are rebu
 2. Web-interface Settings page (`$TALKPIPE_VAULT_HOME/settings.json`)
 3. TalkPipe configuration (`~/.talkpipe.toml` or `TALKPIPE_*` env vars; also accepts
    `default_embedding_model_name`/`default_model_name` style keys)
-4. Defaults in `pipelines/config.py`: ollama/embeddinggemma (embeddings),
+4. Defaults in `pipelines/config.py`: model2vec/minishlab/potion-retrieval-32M (embeddings, in-process),
    ollama/mistral-small (chat)
 
 Ollama server URL comes from `TALKPIPE_OLLAMA_SERVER_URL` (or `OLLAMA_SERVER_URL` in

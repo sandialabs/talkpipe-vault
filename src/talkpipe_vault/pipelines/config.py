@@ -39,8 +39,8 @@ Configuration can be set via:
    export TALKPIPE_EMBEDDING_SOURCE="openai"
 
 3. Default values (if not configured):
-   EMBEDDING_MODEL="embeddinggemma"
-   EMBEDDING_SOURCE="ollama"
+   EMBEDDING_MODEL="minishlab/potion-retrieval-32M"
+   EMBEDDING_SOURCE="model2vec"
    CHAT_MODEL="mistral-small"
    CHAT_SOURCE="ollama"
    DOCUMENT_TEMPLATE="title: {title} | text: {content}"
@@ -53,10 +53,11 @@ import os
 from talkpipe.util.config import get_config
 from talkpipe.util.data_manipulation import dict_to_text
 
-# Default values (used if not specified in TalkPipe config)
-EMBEDDING_MODEL = "embeddinggemma"
-EMBEDDING_SOURCE = "ollama"
-# CHAT_MODEL="gpt-oss:latest"
+# Default values (used if not specified in TalkPipe config).
+# model2vec runs in-process (no server or API key); the model is downloaded
+# from Hugging Face on first use and cached locally.
+EMBEDDING_MODEL = "minishlab/potion-retrieval-32M"
+EMBEDDING_SOURCE = "model2vec"
 CHAT_MODEL = "mistral-small"
 CHAT_SOURCE = "ollama"
 

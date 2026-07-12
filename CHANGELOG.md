@@ -26,6 +26,8 @@
 
 ### Web Interface Refresh
 
+- Indexing now runs in the background with live progress in the browser: the Add Documents page shows a progress bar with the file count, the file currently being embedded, and the running chunk total (polling a new `/api/index-status` endpoint), then reports the final outcome. Only one indexing run can be active at a time; starting another while one is in progress shows a clear message, and returning to the page while a run is active resumes the progress display.
+- Embeddings now default to model2vec (`minishlab/potion-retrieval-32M`), which runs fully in-process — no Ollama server or API key needed to index and search. The model is downloaded from Hugging Face on first use and cached. Chat answers still default to `ollama`/`mistral-small`, and all of it remains configurable on the Settings page. Vaults indexed with the previous `ollama`/`embeddinggemma` default must be re-indexed (Add Documents with Overwrite) or the embedding settings switched back before searching them.
 - Choosing a vault or a documents folder no longer requires typing a path: a Browse button opens a folder-picker dialog that navigates the server's directories (backed by a new `/api/directories` endpoint), with a jump-to-home shortcut and, on the Vaults page, an optional new-folder name for creating a vault in the chosen location. Paths can still be typed or pasted directly.
 - Submit buttons (Open or Create, Index Documents, Search, Keyword Search, Ask) stay disabled until their input has a value, so an accidental empty submission is no longer possible.
 

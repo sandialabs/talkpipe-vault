@@ -43,7 +43,7 @@ Directory monitoring is still under development. The watcher sources and helper 
 - **Web Search and Q&A**: Search an existing vault from a browser
 - **Experimental Directory Monitoring**: Watcher components exist, but the monitoring workflow is still being hardened
 - **Semantic Search**: Find documents by meaning, not just keywords
-- **Multiple AI Backends**: Works with OpenAI or local Ollama models (privacy-friendly, no cloud required)
+- **Multiple AI Backends**: Embeddings run fully in-process by default (model2vec, no server or API key); OpenAI and local Ollama models are supported for embeddings and chat
 - **Format Support**: Handles diverse document formats through the extraction pipeline
 - **Vector Database**: Uses [LanceDB](https://lancedb.com/) for efficient similarity search
 
@@ -93,15 +93,15 @@ pip install -e .[dev]
 vault-server
 ```
 
-Open http://127.0.0.1:8002, create a vault on the **Vaults** page, index a folder of documents on the **Add Documents** page, and start searching. Pick your embedding and chat models on the **Settings** page (defaults: Ollama with `embeddinggemma` for embeddings and `mistral-small` for chat).
+Open http://127.0.0.1:8002, create a vault on the **Vaults** page, index a folder of documents on the **Add Documents** page, and start searching. Pick your embedding and chat models on the **Settings** page (defaults: `model2vec` embeddings that run fully in-process with no server or API key, and Ollama with `mistral-small` for chat answers).
 
 **Option 2 — build the vault from the command line:**
 
 ```bash
 makevectordatabase "/path/to/documents/**/*.txt" \
     --path ~/my-vault \
-    --embedding_source ollama \
-    --embedding_model embeddinggemma \
+    --embedding_source model2vec \
+    --embedding_model minishlab/potion-retrieval-32M \
     --overwrite
 
 vault-server ~/my-vault --host 127.0.0.1 --port 8002
@@ -176,8 +176,8 @@ podman run --rm \
     talkpipe-vault \
     makevectordatabase "/documents/**/*.txt" \
         --path /app/data/vault \
-        --embedding_source ollama \
-        --embedding_model embeddinggemma \
+        --embedding_source model2vec \
+        --embedding_model minishlab/potion-retrieval-32M \
         --overwrite
 ```
 
@@ -273,7 +273,7 @@ TalkPipe Vault is built on [TalkPipe](https://github.com/sandialabs/talkpipe), a
 - **Full-Text Search**: Whoosh for keyword-based search
 - **File Monitoring**: Watchdog for filesystem events
 - **Web Framework**: FastAPI with Jinja2 templates
-- **AI/Embeddings**: OpenAI API or Ollama (local inference)
+- **AI/Embeddings**: model2vec (in-process, default), Ollama (local inference), or OpenAI API
 
 ### Processing Pipeline
 
@@ -281,7 +281,7 @@ The stable web application reads a LanceDB directory containing TalkPipe's `docs
 
 ```bash
 makevectordatabase "/path/to/documents/**/*.txt" --path ~/my-vault \
-    --embedding_source ollama --embedding_model embeddinggemma --overwrite
+    --embedding_source model2vec --embedding_model minishlab/potion-retrieval-32M --overwrite
 ```
 
 The in-development monitoring pipeline uses a separate internal flow:
@@ -304,8 +304,8 @@ Builds the LanceDB `docs` table used by `vault-server`. Embedding configuration 
 ```bash
 makevectordatabase "/path/to/documents/**/*.txt" \
     --path ~/my-vault \
-    --embedding_source ollama \
-    --embedding_model embeddinggemma \
+    --embedding_source model2vec \
+    --embedding_model minishlab/potion-retrieval-32M \
     --overwrite
 ```
 
@@ -520,7 +520,7 @@ export TALKPIPE_CHAT_SOURCE="openai"
 **Method 3: Default Values**
 
 If not configured via TalkPipe, defaults from `config.py` are used:
-- **Embeddings:** `EMBEDDING_MODEL="embeddinggemma"`, `EMBEDDING_SOURCE="ollama"`
+- **Embeddings:** `EMBEDDING_MODEL="minishlab/potion-retrieval-32M"`, `EMBEDDING_SOURCE="model2vec"`
 - **Chat:** `CHAT_MODEL="mistral-small"`, `CHAT_SOURCE="ollama"`
 
 #### Supported Configuration Keys
@@ -529,8 +529,8 @@ The following keys are recognized (checked in order):
 
 | Key | Alternative Keys | Description | Default |
 |-----|------------------|-------------|---------|
-| `embedding_model` | `EMBEDDING_MODEL`, `default_embedding_model_name` | Model name for generating embeddings | `embeddinggemma` |
-| `embedding_source` | `EMBEDDING_SOURCE`, `default_embedding_model_source` | Provider for embedding model (`ollama`, `openai`, etc.) | `ollama` |
+| `embedding_model` | `EMBEDDING_MODEL`, `default_embedding_model_name` | Model name for generating embeddings | `minishlab/potion-retrieval-32M` |
+| `embedding_source` | `EMBEDDING_SOURCE`, `default_embedding_model_source` | Provider for embedding model (`model2vec`, `ollama`, `openai`) | `model2vec` |
 | `chat_model` | `CHAT_MODEL`, `default_model_name` | Model name for chat/completion | `mistral-small` |
 | `chat_source` | `CHAT_SOURCE`, `default_model_source` | Provider for chat model (`ollama`, `openai`, etc.) | `ollama` |
 | `document_template` | `DOCUMENT_TEMPLATE` | Template for formatting full documents before embedding. Placeholders: `{title}`, `{content}` | `"title: {title} \| text: {content}"` |
@@ -543,6 +543,13 @@ Keys can be specified:
 - As `TALKPIPE_*` environment variables (uppercase)
 
 #### Provider-Specific Configuration
+
+**model2vec (default for embeddings):**
+- Set `embedding_source="model2vec"` (embeddings only — chat needs a generative provider)
+- Runs fully in-process: no server, no API key. The model (default
+  `minishlab/potion-retrieval-32M`) is downloaded from Hugging Face on first use and
+  cached locally; use TalkPipe's `talkpipe_precache_model2vec` command to prefetch it
+  for offline machines.
 
 **OpenAI:**
 - Set `embedding_source="openai"` and/or `chat_source="openai"`
@@ -645,8 +652,8 @@ talkpipe-vault/
 ## Requirements
 
 - **Python**: 3.11.4 or higher
-- **Ollama** (optional): For local embedding models
-- **OpenAI API Key** (optional): For cloud-based embeddings
+- **Ollama** (optional): For chat answers with local models (embeddings work out of the box via model2vec)
+- **OpenAI API Key** (optional): For cloud-based embeddings or chat
 
 ## Contributing
 
