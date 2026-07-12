@@ -49,6 +49,10 @@ def reset_app_state(tmp_path, monkeypatch):
     query._state.embedding_source = None
     query._state.chat_model = None
     query._state.chat_source = None
+    query._state.chunk_size = None
+    query._state.shingle_size = None
+    query._state.shingle_overlap = None
+    query._state.rag_result_limit = None
     yield
 
 

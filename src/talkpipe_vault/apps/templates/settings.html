@@ -47,6 +47,27 @@
             <input type="text" name="chat_model" id="chat-model"
                    value="{{ models.chat_model }}">
         </fieldset>
+        <fieldset>
+            <legend>Chunking &mdash; indexing and Ask retrieval</legend>
+            <label for="chunk-size">Chunk Size</label>
+            <input type="number" name="chunk_size" id="chunk-size" min="1"
+                   value="{{ models.chunk_size }}">
+            <p class="field-hint">
+                Text is split into chunks of roughly this size before shingles are built.
+            </p>
+            <label for="shingle-size">Shingle Size</label>
+            <input type="number" name="shingle_size" id="shingle-size" min="1"
+                   value="{{ models.shingle_size }}">
+            <label for="shingle-overlap">Shingle Overlap</label>
+            <input type="number" name="shingle_overlap" id="shingle-overlap" min="0"
+                   value="{{ models.shingle_overlap }}">
+            <label for="rag-result-limit">Ask Result Count</label>
+            <input type="number" name="rag_result_limit" id="rag-result-limit" min="1"
+                   value="{{ models.rag_result_limit }}">
+            <p class="field-hint">
+                Controls how many search results are used to evaluate an Ask request and shown as source chunks.
+            </p>
+        </fieldset>
         <button type="submit">Save Settings</button>
     </form>
 </div>

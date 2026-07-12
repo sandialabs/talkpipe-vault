@@ -65,6 +65,10 @@ TEMPLATES_DIR = Path(__file__).parent / "templates"
 STATIC_DIR = Path(__file__).parent / "static"
 SNIPPET_MAX_LENGTH = 300
 CHAT_CITATION_LIMIT = 5
+DEFAULT_CHUNK_SIZE = 300
+DEFAULT_SHINGLE_SIZE = 3
+DEFAULT_SHINGLE_OVERLAP = 1
+DEFAULT_RAG_RESULT_LIMIT = CHAT_CITATION_LIMIT
 
 
 @dataclass
@@ -86,6 +90,10 @@ class AppState:
     embedding_source: str | None = None
     chat_model: str | None = None
     chat_source: str | None = None
+    chunk_size: int | None = None
+    shingle_size: int | None = None
+    shingle_overlap: int | None = None
+    rag_result_limit: int | None = None
 
 
 # Application state singleton
@@ -116,13 +124,17 @@ def _template_context(
     return context
 
 
-def _effective_models(state: AppState) -> dict[str, str]:
-    """Resolve the model configuration in effect (overrides, config, defaults)."""
+def _effective_models(state: AppState) -> dict[str, Any]:
+    """Resolve the app configuration in effect (overrides, config, defaults)."""
     return {
         "embedding_model": state.embedding_model or get_embedding_model(),
         "embedding_source": state.embedding_source or get_embedding_source(),
         "chat_model": state.chat_model or get_chat_model(),
         "chat_source": state.chat_source or get_chat_source(),
+        "chunk_size": state.chunk_size or DEFAULT_CHUNK_SIZE,
+        "shingle_size": state.shingle_size or DEFAULT_SHINGLE_SIZE,
+        "shingle_overlap": state.shingle_overlap or DEFAULT_SHINGLE_OVERLAP,
+        "rag_result_limit": state.rag_result_limit or DEFAULT_RAG_RESULT_LIMIT,
     }
 
 
@@ -133,6 +145,24 @@ def load_saved_model_overrides() -> None:
     _state.embedding_source = overrides.get("embedding_source")
     _state.chat_model = overrides.get("chat_model")
     _state.chat_source = overrides.get("chat_source")
+    _state.chunk_size = overrides.get("chunk_size")
+    _state.shingle_size = overrides.get("shingle_size")
+    _state.shingle_overlap = overrides.get("shingle_overlap")
+    _state.rag_result_limit = overrides.get("rag_result_limit")
+
+
+def _parse_int_setting(value: str, label: str, minimum: int) -> int | None:
+    """Parse an integer setting from form data, allowing blank values."""
+    text = value.strip()
+    if not text:
+        return None
+    try:
+        number = int(text)
+    except ValueError as exc:
+        raise ValueError(f"{label} must be a whole number.") from exc
+    if number < minimum:
+        raise ValueError(f"{label} must be at least {minimum}.")
+    return number
 
 
 def _redirect_with_message(url: str, **params: str) -> RedirectResponse:
@@ -316,6 +346,7 @@ def _refresh_pipelines(force: bool = False) -> None:
         embedding_source=_state.embedding_source,
         chat_model=_state.chat_model,
         chat_source=_state.chat_source,
+        limit=_effective_models(_state)["rag_result_limit"],
     ).as_function(single_in=True, single_out=True)
     _state.keyword_search_enabled = _keyword_search_enabled(vault_path)
     if _state.keyword_search_enabled:
@@ -448,7 +479,9 @@ def _chat_citations(state: AppState, message: str) -> list[dict[str, Any]]:
         return []
 
     raw_results = state.search_pipeline(message)
-    return _process_semantic_results(raw_results)[:CHAT_CITATION_LIMIT]
+    return _process_semantic_results(raw_results)[
+        : _effective_models(state)["rag_result_limit"]
+    ]
 
 
 def _process_keyword_results(raw_results: list[Any]) -> list[dict[str, Any]]:
@@ -764,6 +797,9 @@ def index_documents_into_vault(
     source_pattern: str,
     embedding_model: str,
     embedding_source: str,
+    chunk_size: int = DEFAULT_CHUNK_SIZE,
+    shingle_size: int = DEFAULT_SHINGLE_SIZE,
+    shingle_overlap: int = DEFAULT_SHINGLE_OVERLAP,
     overwrite: bool = False,
     progress: Callable[[int, int, str], None] | None = None,
 ) -> int:
@@ -776,7 +812,11 @@ def index_documents_into_vault(
     current_source_path) as chunks flow through the pipeline.
     """
     ensure_supported_vault_layout(vault_path)
-    pipeline = ProcessDocumentsSegment() | MakeVectorDatabaseSegment(
+    pipeline = ProcessDocumentsSegment(
+        chunk_size=chunk_size,
+        shingle_size=shingle_size,
+        overlap=shingle_overlap,
+    ) | MakeVectorDatabaseSegment(
         embedding_field="shingle_text",
         embedding_model=embedding_model,
         embedding_source=embedding_source,
@@ -839,6 +879,9 @@ def _run_index_job(
     pattern: str,
     embedding_model: str,
     embedding_source: str,
+    chunk_size: int,
+    shingle_size: int,
+    shingle_overlap: int,
     overwrite: bool,
 ) -> None:
     """Thread target: run one indexing job, publishing progress as it goes."""
@@ -855,6 +898,9 @@ def _run_index_job(
             source_pattern=pattern,
             embedding_model=embedding_model,
             embedding_source=embedding_source,
+            chunk_size=chunk_size,
+            shingle_size=shingle_size,
+            shingle_overlap=shingle_overlap,
             overwrite=overwrite,
             progress=report,
         )
@@ -887,6 +933,9 @@ def start_index_job(
     pattern: str,
     embedding_model: str,
     embedding_source: str,
+    chunk_size: int,
+    shingle_size: int,
+    shingle_overlap: int,
     overwrite: bool,
 ) -> bool:
     """Start the background indexing job; False if one is already running."""
@@ -914,6 +963,9 @@ def start_index_job(
             pattern,
             embedding_model,
             embedding_source,
+            chunk_size,
+            shingle_size,
+            shingle_overlap,
             overwrite,
         ),
         daemon=True,
@@ -966,6 +1018,9 @@ async def index_documents(
         pattern=pattern,
         embedding_model=models["embedding_model"],
         embedding_source=models["embedding_source"],
+        chunk_size=models["chunk_size"],
+        shingle_size=models["shingle_size"],
+        shingle_overlap=models["shingle_overlap"],
         overwrite=overwrite,
     )
     if not started:
@@ -1011,6 +1066,10 @@ async def save_settings(
     embedding_model: Annotated[str, Form()] = "",
     chat_source: Annotated[str, Form()] = "",
     chat_model: Annotated[str, Form()] = "",
+    chunk_size: Annotated[str, Form()] = "",
+    shingle_size: Annotated[str, Form()] = "",
+    shingle_overlap: Annotated[str, Form()] = "",
+    rag_result_limit: Annotated[str, Form()] = "",
     state: AppState = Depends(get_state),
 ) -> HTMLResponse:
     """Save model configuration chosen in the web interface.
@@ -1024,11 +1083,36 @@ async def save_settings(
         _effective_models(state)["embedding_model"],
     )
 
+    try:
+        chunk_size_value = _parse_int_setting(chunk_size, "Chunk size", 1)
+        shingle_size_value = _parse_int_setting(shingle_size, "Shingle size", 1)
+        shingle_overlap_value = _parse_int_setting(
+            shingle_overlap, "Shingle overlap", 0
+        )
+        rag_result_limit_value = _parse_int_setting(
+            rag_result_limit, "Ask result count", 1
+        )
+    except ValueError as exc:
+        return _redirect_with_message("/settings", error=str(exc))
+
+    if (
+        shingle_size_value is not None
+        and shingle_overlap_value is not None
+        and shingle_overlap_value >= shingle_size_value
+    ):
+        return _redirect_with_message(
+            "/settings", error="Shingle overlap must be smaller than shingle size."
+        )
+
     user_settings.save_model_overrides(
         embedding_source=embedding_source,
         embedding_model=embedding_model,
         chat_source=chat_source,
         chat_model=chat_model,
+        chunk_size=chunk_size_value,
+        shingle_size=shingle_size_value,
+        shingle_overlap=shingle_overlap_value,
+        rag_result_limit=rag_result_limit_value,
     )
     load_saved_model_overrides()
     if _vault_selected(state):

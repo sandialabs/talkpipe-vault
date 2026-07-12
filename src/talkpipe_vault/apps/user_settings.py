@@ -29,6 +29,13 @@ MODEL_SETTING_KEYS = (
     "chat_source",
 )
 
+INTEGER_SETTING_MINIMUMS = {
+    "chunk_size": 1,
+    "shingle_size": 1,
+    "shingle_overlap": 0,
+    "rag_result_limit": 1,
+}
+
 
 def get_vault_home() -> Path:
     """Return the vault application home directory (not necessarily existing)."""
@@ -85,18 +92,26 @@ def remember_vault(vault_path: str) -> None:
 
 
 def get_model_overrides() -> dict:
-    """Return saved model overrides; absent/blank values are omitted."""
+    """Return saved settings overrides; absent/blank values are omitted."""
     settings = load_settings()
     overrides = {}
     for key in MODEL_SETTING_KEYS:
         value = settings.get(key)
         if isinstance(value, str) and value.strip():
             overrides[key] = value.strip()
+    for key, minimum in INTEGER_SETTING_MINIMUMS.items():
+        value = settings.get(key)
+        try:
+            numeric_value = int(value)
+        except (TypeError, ValueError):
+            continue
+        if numeric_value >= minimum:
+            overrides[key] = numeric_value
     return overrides
 
 
-def save_model_overrides(**overrides: str | None) -> None:
-    """Persist model overrides; blank/None values clear the override."""
+def save_model_overrides(**overrides: str | int | None) -> None:
+    """Persist settings overrides; blank/None values clear the override."""
     settings = load_settings()
     for key in MODEL_SETTING_KEYS:
         if key not in overrides:
@@ -104,6 +119,22 @@ def save_model_overrides(**overrides: str | None) -> None:
         value = overrides[key]
         if isinstance(value, str) and value.strip():
             settings[key] = value.strip()
+        else:
+            settings.pop(key, None)
+    for key, minimum in INTEGER_SETTING_MINIMUMS.items():
+        if key not in overrides:
+            continue
+        value = overrides[key]
+        if value is None or (isinstance(value, str) and not value.strip()):
+            settings.pop(key, None)
+            continue
+        try:
+            numeric_value = int(value)
+        except (TypeError, ValueError):
+            settings.pop(key, None)
+            continue
+        if numeric_value >= minimum:
+            settings[key] = numeric_value
         else:
             settings.pop(key, None)
     save_settings(settings)

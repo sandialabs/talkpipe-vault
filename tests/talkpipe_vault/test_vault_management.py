@@ -33,6 +33,10 @@ def isolated_app(tmp_path, monkeypatch):
     query._state.embedding_source = None
     query._state.chat_model = None
     query._state.chat_source = None
+    query._state.chunk_size = None
+    query._state.shingle_size = None
+    query._state.shingle_overlap = None
+    query._state.rag_result_limit = None
     yield
 
 
@@ -252,6 +256,10 @@ class TestModelSettings:
         assert 'name="embedding_model"' in response.text
         assert 'name="chat_source"' in response.text
         assert 'name="chat_model"' in response.text
+        assert 'name="chunk_size"' in response.text
+        assert 'name="shingle_size"' in response.text
+        assert 'name="shingle_overlap"' in response.text
+        assert 'name="rag_result_limit"' in response.text
         # Providers registered with talkpipe appear as options.
         assert 'value="ollama"' in response.text
         assert 'value="openai"' in response.text
@@ -264,6 +272,10 @@ class TestModelSettings:
                 "embedding_model": "text-embedding-3-large",
                 "chat_source": "openai",
                 "chat_model": "gpt-4o",
+                "chunk_size": "400",
+                "shingle_size": "4",
+                "shingle_overlap": "2",
+                "rag_result_limit": "7",
             },
         )
 
@@ -272,12 +284,47 @@ class TestModelSettings:
         assert query._state.embedding_model == "text-embedding-3-large"
         assert query._state.chat_source == "openai"
         assert query._state.chat_model == "gpt-4o"
+        assert query._state.chunk_size == 400
+        assert query._state.shingle_size == 4
+        assert query._state.shingle_overlap == 2
+        assert query._state.rag_result_limit == 7
         overrides = user_settings.get_model_overrides()
         assert overrides["chat_model"] == "gpt-4o"
 
         page = client.get("/settings")
         assert 'value="text-embedding-3-large"' in page.text
         assert 'value="gpt-4o"' in page.text
+        assert 'value="400"' in page.text
+        assert 'value="4"' in page.text
+        assert 'value="2"' in page.text
+        assert 'value="7"' in page.text
+
+    def test_refresh_uses_configured_rag_result_limit(self, monkeypatch, tmp_path):
+        captured = {}
+
+        class _FakeVaultSearch:
+            def __init__(self, **kwargs):
+                pass
+
+            def as_function(self, single_in, single_out):
+                return lambda _value: []
+
+        class _FakeVaultChat:
+            def __init__(self, **kwargs):
+                captured.update(kwargs)
+
+            def as_function(self, single_in, single_out):
+                return lambda _value: "ok"
+
+        monkeypatch.setattr(query, "VaultSearch", _FakeVaultSearch)
+        monkeypatch.setattr(query, "VaultChat", _FakeVaultChat)
+        monkeypatch.setattr(query, "_keyword_search_enabled", lambda _vault_path: False)
+        query._state.vault_path = str(tmp_path)
+        query._state.rag_result_limit = 7
+
+        query._refresh_pipelines(force=True)
+
+        assert captured["limit"] == 7
 
     def test_changing_embedding_model_warns_about_reindexing(self, client):
         response = client.post(
@@ -315,6 +362,48 @@ class TestModelSettings:
 
 class TestDocumentIndexing:
     """Tests for adding documents to a vault from the interface."""
+
+    def test_index_documents_passes_configured_chunking_settings(
+        self, monkeypatch, tmp_path
+    ):
+        captured = {}
+
+        class _FakeProcessDocumentsSegment:
+            def __init__(self, chunk_size=300, shingle_size=3, overlap=1):
+                captured.update(
+                    {
+                        "chunk_size": chunk_size,
+                        "shingle_size": shingle_size,
+                        "overlap": overlap,
+                    }
+                )
+
+            def __or__(self, _rhs):
+                return self
+
+            def transform(self, _patterns):
+                return iter([])
+
+        class _FakeMakeVectorDatabaseSegment:
+            def __init__(self, **kwargs):
+                pass
+
+        monkeypatch.setattr(query, "ProcessDocumentsSegment", _FakeProcessDocumentsSegment)
+        monkeypatch.setattr(
+            query, "MakeVectorDatabaseSegment", _FakeMakeVectorDatabaseSegment
+        )
+
+        query.index_documents_into_vault(
+            vault_path=str(tmp_path),
+            source_pattern="/tmp/*.txt",
+            embedding_model="test-model",
+            embedding_source="test-source",
+            chunk_size=400,
+            shingle_size=4,
+            shingle_overlap=2,
+        )
+
+        assert captured == {"chunk_size": 400, "shingle_size": 4, "overlap": 2}
 
     def test_index_requires_source_path(self, client, tmp_path):
         client.post("/vaults/open", data={"new_vault_path": str(tmp_path / "v")})

@@ -243,6 +243,10 @@ class VaultChat(AbstractFieldSegment):
             str | None,
             "Source/provider for the chat model (e.g., 'ollama', 'openai'). If None, uses TalkPipe config or default.",
         ] = None,
+        limit: Annotated[
+            int | None,
+            "Number of search results to include in the RAG evaluation.",
+        ] = None,
     ):
         super().__init__(field=field, set_as=set_as, multi_emit=multi_emit)
         # Resolve model configuration: use provided value, or TalkPipe config, or default
@@ -274,6 +278,7 @@ class VaultChat(AbstractFieldSegment):
                 embedding_source=embedding_source,
                 completion_model=chat_model,
                 completion_source=chat_source,
+                limit=limit if limit is not None else 10,
                 role_map=RAG_PREFIX_PROMPTS,
                 prompt_directive=RAG_PROMPT_DIRECTIVE,
                 diagPrintOutput="stdout",

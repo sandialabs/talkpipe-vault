@@ -17,6 +17,7 @@
 #### Model Configuration from the Web Interface
 - Added a Settings page to configure the provider (source) and model for both embeddings and chat. Choices persist across restarts, take precedence over TalkPipe configuration, and apply to the search/chat pipelines immediately.
 - Changing the embedding model warns that existing vaults must be re-indexed so stored and query vectors match.
+- Added settings for chunk size, shingle size, shingle overlap, and Ask RAG result count; these persist across restarts and feed both document indexing and Ask retrieval.
 
 ### TalkPipe 0.12.4 Compatibility
 
