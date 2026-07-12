@@ -5,13 +5,12 @@ from pathlib import Path
 import pytest
 from talkpipe import compile
 
-from tests.conftest import build_docs_vault
-
 from talkpipe_vault.pipelines.searching_and_prompting import (
     VaultChat,
     VaultSearch,
     VaultTextSearch,
 )
+from tests.conftest import build_docs_vault
 
 # Get the path to sample documents
 SAMPLE_DOCS_DIR = Path(__file__).parent.parent.parent / "sampledocs"

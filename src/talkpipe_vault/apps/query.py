@@ -47,8 +47,8 @@ from talkpipe_vault.pipelines.config import (
     get_chat_source,
     get_embedding_model,
     get_embedding_source,
-    get_whoosh_index_path,
     get_vector_db_path,
+    get_whoosh_index_path,
 )
 from talkpipe_vault.pipelines.searching_and_prompting import (
     VaultChat,

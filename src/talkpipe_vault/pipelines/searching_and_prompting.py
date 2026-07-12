@@ -27,8 +27,8 @@ from .config import (
     get_embedding_model,
     get_embedding_source,
     get_retrieval_template,
-    get_whoosh_index_path,
     get_vector_db_path,
+    get_whoosh_index_path,
 )
 
 
@@ -154,35 +154,52 @@ class VaultSearch(AbstractFieldSegment):
 
     Emits search results from the vector database containing matching document chunks.
     """
+
     def __init__(
         self,
         vault_path: Annotated[str, "Path to LanceDB created by makevectordatabase"],
         field: Annotated[str, "The field to extract. If none, use full item."] = None,
         set_as: Annotated[str, "The field to set/append the result as."] = None,
-        multi_emit: Annotated[bool, "Whether this class potentially emits multiple results per item."
-                                    "Should be set by the subclass constructor call or the field_segment decorator, not by the user."] = False,
-        embedding_model: Annotated[str | None, "Model name for generating embeddings. If None, uses TalkPipe config or default."] = None,
-        embedding_source: Annotated[str | None, "Source/provider for the embedding model (e.g., 'ollama', 'openai'). If None, uses TalkPipe config or default."] = None):
+        multi_emit: Annotated[
+            bool,
+            "Whether this class potentially emits multiple results per item."
+            "Should be set by the subclass constructor call or the field_segment decorator, not by the user.",
+        ] = False,
+        embedding_model: Annotated[
+            str | None,
+            "Model name for generating embeddings. If None, uses TalkPipe config or default.",
+        ] = None,
+        embedding_source: Annotated[
+            str | None,
+            "Source/provider for the embedding model (e.g., 'ollama', 'openai'). If None, uses TalkPipe config or default.",
+        ] = None,
+    ):
         super().__init__(field=field, set_as=set_as, multi_emit=multi_emit)
         # Resolve model configuration: use provided value, or TalkPipe config, or default
-        embedding_model = embedding_model if embedding_model is not None else get_embedding_model()
-        embedding_source = embedding_source if embedding_source is not None else get_embedding_source()
-        
+        embedding_model = (
+            embedding_model if embedding_model is not None else get_embedding_model()
+        )
+        embedding_source = (
+            embedding_source if embedding_source is not None else get_embedding_source()
+        )
+
         # Get retrieval template from TalkPipe config or default
         retrieval_template = get_retrieval_template()
         ensure_supported_vault_layout(vault_path)
 
         self.vault_path = vault_path
         vectordb_path = get_vector_db_path(vault_path)
-        self.pipeline = (ToDict(field_list="_:query") |  \
-            fillTemplate(template=retrieval_template, set_as="templated_query") | \
-            SearchVectorDatabaseSegment(
+        self.pipeline = (
+            ToDict(field_list="_:query")
+            | fillTemplate(template=retrieval_template, set_as="templated_query")
+            | SearchVectorDatabaseSegment(
                 path=vectordb_path,
                 table_name=DEFAULT_VECTOR_TABLE_NAME,
                 query_field="templated_query",
                 embedding_model=embedding_model,
                 embedding_source=embedding_source,
-            )).as_function(single_in=True, single_out=True)
+            )
+        ).as_function(single_in=True, single_out=True)
 
     def process_value(self, value: str) -> Any:
         return self.pipeline(value)
@@ -199,33 +216,55 @@ class VaultChat(AbstractFieldSegment):
 
     Emits AI-generated response strings based on retrieved vault context.
     """
+
     def __init__(
         self,
         vault_path: Annotated[str, "Path to LanceDB created by makevectordatabase"],
         field: Annotated[str, "The field to extract. If none, use full item."] = None,
         set_as: Annotated[str, "The field to set/append the result as."] = None,
-        multi_emit: Annotated[bool, "Whether this class potentially emits multiple results per item."
-                                    "Should be set by the subclass constructor call or the field_segment decorator, not by the user."] = False,
-        embedding_model: Annotated[str | None, "Model name for generating embeddings. If None, uses TalkPipe config or default."] = None,
-        embedding_source: Annotated[str | None, "Source/provider for the embedding model (e.g., 'ollama', 'openai'). If None, uses TalkPipe config or default."] = None,
-        chat_model: Annotated[str | None, "Model name for chat/completion. If None, uses TalkPipe config or default."] = None,
-        chat_source: Annotated[str | None, "Source/provider for the chat model (e.g., 'ollama', 'openai'). If None, uses TalkPipe config or default."] = None):
+        multi_emit: Annotated[
+            bool,
+            "Whether this class potentially emits multiple results per item."
+            "Should be set by the subclass constructor call or the field_segment decorator, not by the user.",
+        ] = False,
+        embedding_model: Annotated[
+            str | None,
+            "Model name for generating embeddings. If None, uses TalkPipe config or default.",
+        ] = None,
+        embedding_source: Annotated[
+            str | None,
+            "Source/provider for the embedding model (e.g., 'ollama', 'openai'). If None, uses TalkPipe config or default.",
+        ] = None,
+        chat_model: Annotated[
+            str | None,
+            "Model name for chat/completion. If None, uses TalkPipe config or default.",
+        ] = None,
+        chat_source: Annotated[
+            str | None,
+            "Source/provider for the chat model (e.g., 'ollama', 'openai'). If None, uses TalkPipe config or default.",
+        ] = None,
+    ):
         super().__init__(field=field, set_as=set_as, multi_emit=multi_emit)
         # Resolve model configuration: use provided value, or TalkPipe config, or default
-        embedding_model = embedding_model if embedding_model is not None else get_embedding_model()
-        embedding_source = embedding_source if embedding_source is not None else get_embedding_source()
+        embedding_model = (
+            embedding_model if embedding_model is not None else get_embedding_model()
+        )
+        embedding_source = (
+            embedding_source if embedding_source is not None else get_embedding_source()
+        )
         chat_model = chat_model if chat_model is not None else get_chat_model()
         chat_source = chat_source if chat_source is not None else get_chat_source()
-        
+
         # Get retrieval template from TalkPipe config or default
         retrieval_template = get_retrieval_template()
         ensure_supported_vault_layout(vault_path)
 
         self.vault_path = vault_path
         vectordb_path = get_vector_db_path(vault_path)
-        self.pipeline = (ToDict(field_list="_:query") | \
-            fillTemplate(template=retrieval_template, set_as="templated_query") | \
-            RAGToText(
+        self.pipeline = (
+            ToDict(field_list="_:query")
+            | fillTemplate(template=retrieval_template, set_as="templated_query")
+            | RAGToText(
                 path=vectordb_path,
                 content_field="query",
                 embedding_prompt="templated_query",
@@ -237,9 +276,10 @@ class VaultChat(AbstractFieldSegment):
                 completion_source=chat_source,
                 role_map=RAG_PREFIX_PROMPTS,
                 prompt_directive=RAG_PROMPT_DIRECTIVE,
-                diagPrintOutput="stdout"
-            ) | \
-            EvalExpression(field="chat_response", expression="item")).as_function(single_in=True, single_out=True)
+                diagPrintOutput="stdout",
+            )
+            | EvalExpression(field="chat_response", expression="item")
+        ).as_function(single_in=True, single_out=True)
 
     def process_value(self, value: str) -> str:
         return self.pipeline(value)
@@ -259,14 +299,19 @@ class VaultTextSearch(AbstractFieldSegment):
         - "score": float - Relevance score
         - "document": dict - Contains "content" field with matched text
     """
+
     def __init__(
         self,
         vault_path: Annotated[str, "Path to LanceDB created by makevectordatabase"],
         limit: Annotated[int | None, "Maximum number of results to return"] = None,
         field: Annotated[str, "The field to extract. If none, use full item."] = None,
         set_as: Annotated[str, "The field to set/append the result as."] = None,
-        multi_emit: Annotated[bool, "Whether this class potentially emits multiple results per item."
-                                    "Should be set by the subclass constructor call or the field_segment decorator, not by the user."] = True):
+        multi_emit: Annotated[
+            bool,
+            "Whether this class potentially emits multiple results per item."
+            "Should be set by the subclass constructor call or the field_segment decorator, not by the user.",
+        ] = True,
+    ):
         super().__init__(field=field, set_as=set_as, multi_emit=multi_emit)
         ensure_supported_vault_layout(vault_path)
         self.vault_path = vault_path
@@ -294,5 +339,3 @@ class VaultTextSearch(AbstractFieldSegment):
         except WhooshIndexError:
             return []
         return results
-
-

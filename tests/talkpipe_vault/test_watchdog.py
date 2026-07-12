@@ -20,7 +20,9 @@ class TestFileWatcher:
             results = []
 
             def run_pipeline():
-                script = f'INPUT FROM fileWatcher[path="{tmpdir}", max_events=1] | toList'
+                script = (
+                    f'INPUT FROM fileWatcher[path="{tmpdir}", max_events=1] | toList'
+                )
                 compiled = compile(script)
                 ans = list(compiled())
                 results.extend(ans)
@@ -59,7 +61,9 @@ class TestFileWatcher:
             results = []
 
             def run_pipeline():
-                script = f'INPUT FROM fileWatcher[path="{tmpdir}", max_events=1] | toList'
+                script = (
+                    f'INPUT FROM fileWatcher[path="{tmpdir}", max_events=1] | toList'
+                )
                 compiled = compile(script)
                 ans = list(compiled())
                 results.extend(ans)
@@ -95,7 +99,9 @@ class TestFileWatcher:
             results = []
 
             def run_pipeline():
-                script = f'INPUT FROM fileWatcher[path="{tmpdir}", max_events=1] | toList'
+                script = (
+                    f'INPUT FROM fileWatcher[path="{tmpdir}", max_events=1] | toList'
+                )
                 compiled = compile(script)
                 ans = list(compiled())
                 results.extend(ans)
@@ -129,7 +135,9 @@ class TestFileWatcher:
             results = []
 
             def run_pipeline():
-                script = f'INPUT FROM fileWatcher[path="{tmpdir}", max_events=1] | toList'
+                script = (
+                    f'INPUT FROM fileWatcher[path="{tmpdir}", max_events=1] | toList'
+                )
                 compiled = compile(script)
                 ans = list(compiled())
                 results.extend(ans)
@@ -157,7 +165,9 @@ class TestFileWatcher:
             def run_pipeline():
                 # Each file creation triggers both 'created' and 'modified' events
                 # So 3 files = 6 events total
-                script = f'INPUT FROM fileWatcher[path="{tmpdir}", max_events=6] | toList'
+                script = (
+                    f'INPUT FROM fileWatcher[path="{tmpdir}", max_events=6] | toList'
+                )
                 compiled = compile(script)
                 ans = list(compiled())
                 results.extend(ans)
@@ -241,7 +251,9 @@ class TestFileWatcher:
             results = []
 
             def run_pipeline():
-                script = f'INPUT FROM fileWatcher[path="{tmpdir}", max_events=1] | toList'
+                script = (
+                    f'INPUT FROM fileWatcher[path="{tmpdir}", max_events=1] | toList'
+                )
                 compiled = compile(script)
                 ans = list(compiled())
                 results.extend(ans)
@@ -273,7 +285,9 @@ class TestFileWatcher:
             results = []
 
             def run_pipeline():
-                script = f'INPUT FROM fileWatcher[path="{tmpdir}", max_events=1] | toList'
+                script = (
+                    f'INPUT FROM fileWatcher[path="{tmpdir}", max_events=1] | toList'
+                )
                 compiled = compile(script)
                 ans = list(compiled())
                 results.extend(ans)
@@ -392,7 +406,9 @@ class TestFileWatcher:
 
             def run_pipeline():
                 # Ignore .tmp and .bak files (only data.txt generates events = 2 events)
-                script = file_watcher(tmpdir, ignore_patterns=["*.tmp", "*.bak"], max_events=2)
+                script = file_watcher(
+                    tmpdir, ignore_patterns=["*.tmp", "*.bak"], max_events=2
+                )
                 ans = list(script())
                 results.extend(ans)
 
@@ -431,7 +447,9 @@ class TestFileWatcher:
 
             def run_pipeline():
                 # Case-sensitive match for .txt only (not .TXT) - only lowercase .txt matches = 2 events
-                script = file_watcher(tmpdir, patterns=["*.txt"], case_sensitive=True, max_events=2)
+                script = file_watcher(
+                    tmpdir, patterns=["*.txt"], case_sensitive=True, max_events=2
+                )
                 ans = list(script())
                 results.extend(ans)
 
@@ -574,7 +592,9 @@ class TestFileWatcher:
 
             def run_pipeline():
                 # Disable common ignore patterns but add custom ones
-                script = file_watcher(tmpdir, ignore_common=False, ignore_patterns=["*.log"], max_events=2)
+                script = file_watcher(
+                    tmpdir, ignore_common=False, ignore_patterns=["*.log"], max_events=2
+                )
                 ans = list(script())
                 results.extend(ans)
 
@@ -701,4 +721,3 @@ class TestFileWatcher:
             assert ".watchdog_ready" not in results[0]["path"]
             # Should be the new file we created
             assert "new_file.txt" in results[0]["path"]
-

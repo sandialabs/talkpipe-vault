@@ -6,8 +6,8 @@ import pytest
 
 from talkpipe_vault.pipelines.config import (
     FULLTEXT_VAULT_SUBDIR,
-    ensure_supported_vault_layout,
     VECTOR_VAULT_SUBDIR,
+    ensure_supported_vault_layout,
     get_vault_paths,
     get_vector_db_path,
     resolve_embedding_config,

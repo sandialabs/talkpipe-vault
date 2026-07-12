@@ -1,6 +1,7 @@
 """
 CLI entry point for running the web interface.
 """
+
 import argparse
 import sys
 from pathlib import Path
@@ -11,6 +12,7 @@ from talkpipe_vault.apps.query import run_app
 from talkpipe_vault.pipelines.config import ensure_supported_vault_layout
 
 configure_logger("root:ERROR")
+
 
 def main() -> None:
     """CLI entry point for running the web interface only."""
@@ -30,13 +32,10 @@ def main() -> None:
     parser.add_argument(
         "--host",
         default="127.0.0.1",
-        help="Host to bind web interface to (default: 127.0.0.1)"
+        help="Host to bind web interface to (default: 127.0.0.1)",
     )
     parser.add_argument(
-        "--port",
-        type=int,
-        default=8002,
-        help="Port to listen on (default: 8002)"
+        "--port", type=int, default=8002, help="Port to listen on (default: 8002)"
     )
     parser.add_argument(
         "--show-source-paths",

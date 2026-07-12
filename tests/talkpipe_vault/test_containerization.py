@@ -2,7 +2,6 @@
 
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -20,4 +19,3 @@ def test_containerization_does_not_use_shell_scripts() -> None:
     shell_scripts = sorted(path.name for path in REPO_ROOT.glob("*.sh"))
 
     assert shell_scripts == []
-

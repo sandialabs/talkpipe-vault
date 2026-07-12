@@ -232,7 +232,9 @@ def test_iter_lancedb_docs_for_whoosh_preserves_source_path(monkeypatch):
         "LanceDBDocumentStore",
         lambda **_: _FakeDocStore(rows),
     )
-    monkeypatch.setattr(query, "ensure_supported_vault_layout", lambda _vault_path: None)
+    monkeypatch.setattr(
+        query, "ensure_supported_vault_layout", lambda _vault_path: None
+    )
 
     documents = query._iter_lancedb_docs_for_whoosh("/tmp/test-vault")
 

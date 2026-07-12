@@ -12,17 +12,17 @@ from watchdog.utils.patterns import match_any_paths
 
 # Common patterns for temp files, hidden files, editor backups, etc.
 COMMON_IGNORE_PATTERNS = [
-    ".*",        # Hidden files/directories (start with .)
-    "*~",        # Backup files (end with ~)
-    "#*#",       # Emacs auto-save files
-    ".#*",       # Emacs lock files
-    "*.swp",     # Vim swap files
-    "*.swo",     # Vim swap files
-    "*.tmp",     # Temp files
-    "*.temp",    # Temp files
-    "~$*",       # Microsoft Office temp files
-    "*.bak",     # Backup files
-    "*.pyc",     # Python compiled files
+    ".*",  # Hidden files/directories (start with .)
+    "*~",  # Backup files (end with ~)
+    "#*#",  # Emacs auto-save files
+    ".#*",  # Emacs lock files
+    "*.swp",  # Vim swap files
+    "*.swo",  # Vim swap files
+    "*.tmp",  # Temp files
+    "*.temp",  # Temp files
+    "~$*",  # Microsoft Office temp files
+    "*.bak",  # Backup files
+    "*.pyc",  # Python compiled files
     "__pycache__",  # Python cache directory
 ]
 
@@ -30,11 +30,17 @@ COMMON_IGNORE_PATTERNS = [
 @register_source("fileWatcher")
 @source()
 def file_watcher(
-    path: Annotated[str, "Path to watch (can include glob pattern like '/path/to/dir/*.txt')"],
+    path: Annotated[
+        str, "Path to watch (can include glob pattern like '/path/to/dir/*.txt')"
+    ],
     patterns: Annotated[list[str] | None, "List of glob patterns to match"] = None,
-    ignore_patterns: Annotated[list[str] | None, "List of glob patterns to ignore"] = None,
+    ignore_patterns: Annotated[
+        list[str] | None, "List of glob patterns to ignore"
+    ] = None,
     ignore_directories: Annotated[bool, "Whether to ignore directory events"] = True,
-    case_sensitive: Annotated[bool, "Whether pattern matching is case-sensitive"] = False,
+    case_sensitive: Annotated[
+        bool, "Whether pattern matching is case-sensitive"
+    ] = False,
     max_events: Annotated[int | None, "Maximum number of events to process"] = None,
     polling: Annotated[bool, "Use polling-based observer"] = False,
     ignore_common: Annotated[bool, "Ignore common temp/hidden files"] = True,
@@ -62,15 +68,15 @@ def file_watcher(
     extracted_patterns = []
 
     # Check if path contains glob characters
-    if any(char in path for char in ['*', '?', '[', ']']):
+    if any(char in path for char in ["*", "?", "[", "]"]):
         path_obj = Path(path)
         # Find the first parent that doesn't contain glob characters
         for parent in [path_obj] + list(path_obj.parents):
             parent_str = str(parent)
-            if not any(char in parent_str for char in ['*', '?', '[', ']']):
+            if not any(char in parent_str for char in ["*", "?", "[", "]"]):
                 watch_path = parent_str
                 # Extract the pattern portion
-                pattern = path[len(parent_str):].lstrip(os.sep)
+                pattern = path[len(parent_str) :].lstrip(os.sep)
                 if pattern:
                     extracted_patterns.append(pattern)
                 break
@@ -119,7 +125,15 @@ def file_watcher(
     # PatternMatchingEventHandler can filter out moves when src_path is outside
     # the watch tree (e.g., mv from /tmp, drag-and-drop from file manager).
     class MoveOnlyHandler(FileSystemEventHandler):
-        def __init__(self, queue, watch_path, ignore_dirs, patterns, ignore_patterns, case_sensitive):
+        def __init__(
+            self,
+            queue,
+            watch_path,
+            ignore_dirs,
+            patterns,
+            ignore_patterns,
+            case_sensitive,
+        ):
             self.queue = queue
             self.watch_path = os.path.normpath(watch_path)
             self.ignore_dirs = ignore_dirs
@@ -133,7 +147,9 @@ def file_watcher(
             if self.ignore_dirs and getattr(event, "is_directory", False):
                 return
             dest = os.path.normpath(event.dest_path)
-            if not (dest.startswith(self.watch_path + os.sep) or dest == self.watch_path):
+            if not (
+                dest.startswith(self.watch_path + os.sep) or dest == self.watch_path
+            ):
                 return
             if not match_any_paths(
                 [event.dest_path],

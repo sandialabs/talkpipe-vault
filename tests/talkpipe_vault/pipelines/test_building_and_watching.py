@@ -27,10 +27,7 @@ class TestBuildVectorDbFromPaths:
 
     def test_segment_is_registered(self):
         """Test that the segment is properly registered with TalkPipe."""
-        script = compile(
-            "| buildVectorDBFromPaths["
-            "vault_path='/tmp/test_vault']"
-        )
+        script = compile("| buildVectorDBFromPaths[" "vault_path='/tmp/test_vault']")
         assert script is not None
 
     def test_segment_callable(self):
@@ -123,7 +120,7 @@ class TestBuildVectorDbFromPaths:
             results = idx.text_search("Heading", limit=10)
             assert len(results) > 0
             # Verify result has expected attributes
-            assert hasattr(results[0], 'doc_id') or hasattr(results[0], 'document')
+            assert hasattr(results[0], "doc_id") or hasattr(results[0], "document")
 
     def test_build_vector_db_rejects_legacy_nested_vector_layout(self):
         """Legacy vector_vault layout should fail with a migration error."""
@@ -230,7 +227,9 @@ class TestWatchIntoVectorDb:
                 # Debug: print what we got
                 print(f"\n=== DEBUG: Got {len(results)} results ===")
                 for i, r in enumerate(results):
-                    print(f"  [{i}] source={r.get('source', 'NO SOURCE')} keys={list(r.keys())}")
+                    print(
+                        f"  [{i}] source={r.get('source', 'NO SOURCE')} keys={list(r.keys())}"
+                    )
 
                 # Verify .txt files were processed, .md was not
                 sources = [r.get("source", "") for r in results]
@@ -262,10 +261,14 @@ class TestListIntoVectorDb:
             with tempfile.TemporaryDirectory() as vault_path:
                 # Create test files
                 test_file1 = Path(source_dir) / "document1.txt"
-                test_file1.write_text("This is the first test document for the vector database.")
+                test_file1.write_text(
+                    "This is the first test document for the vector database."
+                )
 
                 test_file2 = Path(source_dir) / "document2.txt"
-                test_file2.write_text("This is the second test document for the vector database.")
+                test_file2.write_text(
+                    "This is the second test document for the vector database."
+                )
 
                 # Run the pipeline
                 source = list_into_vector_db(
@@ -291,7 +294,9 @@ class TestListIntoVectorDb:
             with tempfile.TemporaryDirectory() as vault_path:
                 # Create a test file
                 test_file = Path(source_dir) / "test_doc.txt"
-                test_file.write_text("This is test content for verifying table creation.")
+                test_file.write_text(
+                    "This is test content for verifying table creation."
+                )
 
                 vectordb_path = vault_path
 
@@ -304,11 +309,15 @@ class TestListIntoVectorDb:
                 list(source())
 
                 # Verify full_documents table was created
-                db = LanceDBDocumentStore(path=vectordb_path, table_name="full_documents")
+                db = LanceDBDocumentStore(
+                    path=vectordb_path, table_name="full_documents"
+                )
                 assert db.count() >= 1
 
                 # Verify shingled_chunks table was created
-                db = LanceDBDocumentStore(path=vectordb_path, table_name="shingled_chunks")
+                db = LanceDBDocumentStore(
+                    path=vectordb_path, table_name="shingled_chunks"
+                )
                 assert db.count() >= 1
 
     def test_list_with_subdirectories(self):
