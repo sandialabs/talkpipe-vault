@@ -155,38 +155,27 @@ def test_keyword_search_post_does_not_run_without_whoosh(monkeypatch):
     )
 
 
-def test_create_whoosh_index_route_triggers_builder(monkeypatch, capsys):
-    """Create-index endpoint should build index and redirect with success message."""
-    query._state.vault_path = "/tmp/test-vault"
+def test_create_whoosh_index_route_builds_searchable_index(
+    monkeypatch, capsys, tmp_path
+):
+    """Create-index endpoint should build a real, searchable Whoosh index.
+
+    The index is built for real (not mocked) because talkpipe reserves the
+    doc_id schema field; a mocked builder previously hid an incompatibility.
+    """
+    query._state.vault_path = str(tmp_path)
     monkeypatch.setattr(
         query,
         "_iter_lancedb_docs_for_whoosh",
         lambda _vault_path: [
             {
-                "doc_id": "1",
-                "content": "abc",
+                "doc_id": "row-1",
+                "content": "abc def",
                 "path": "a.txt",
                 "filename": "a.txt",
             }
         ],
     )
-    monkeypatch.setattr(
-        query,
-        "get_whoosh_index_path",
-        lambda _vault_path: "/tmp/test-vault/fulltext_vault",
-    )
-    called: dict[str, object] = {}
-
-    def _fake_index_whoosh(**kwargs):
-        called["kwargs"] = kwargs
-
-        def _runner(items):
-            called["items"] = list(items)
-            return []
-
-        return _runner
-
-    monkeypatch.setattr(query, "indexWhoosh", _fake_index_whoosh)
     monkeypatch.setattr(query, "_refresh_pipelines", lambda force=False: None)
     monkeypatch.setattr(query, "_update_document_counts", lambda vault_path: None)
 
@@ -194,24 +183,45 @@ def test_create_whoosh_index_route_triggers_builder(monkeypatch, capsys):
     response = client.post("/keyword-search/create-index", follow_redirects=False)
 
     assert response.status_code == 303
-    assert (
-        response.headers["location"]
-        == "/keyword-search?created=Whoosh%20index%20created."
-    )
-    assert called["kwargs"] == {
-        "index_path": "/tmp/test-vault/fulltext_vault",
-        "field_list": "content:content,path:path,filename:filename,doc_id:doc_id",
-        "overwrite": True,
-        "commit_seconds": 0,
-    }
-    assert called["items"] == [
-        {"doc_id": "1", "content": "abc", "path": "a.txt", "filename": "a.txt"}
-    ]
+    assert "created=Full-text+index+created" in response.headers["location"]
+
+    # The index exists, keeps the stable doc_id, and is searchable.
+    from talkpipe.search.whoosh import WhooshFullTextIndex
+
+    with WhooshFullTextIndex(query.get_whoosh_index_path(str(tmp_path))) as ix:
+        hits = ix.text_search("abc")
+        assert [hit.doc_id for hit in hits] == ["row-1"]
+        assert hits[0].document["path"] == "a.txt"
+
     output = capsys.readouterr().out
     assert "Indexing 1 document(s) into the Whoosh full-text index." in output
-    assert "doc_id: 1" in output
-    assert "path: a.txt" in output
-    assert "content:\nabc" in output
+    assert "doc_id: row-1" in output
+
+
+def test_create_whoosh_index_route_replaces_existing_index(monkeypatch, tmp_path):
+    """Rebuilding the index should replace prior contents, not append."""
+    query._state.vault_path = str(tmp_path)
+    documents = [
+        {"doc_id": "old", "content": "stale text", "path": "old.txt", "filename": ""}
+    ]
+    monkeypatch.setattr(
+        query, "_iter_lancedb_docs_for_whoosh", lambda _vault_path: documents
+    )
+    monkeypatch.setattr(query, "_refresh_pipelines", lambda force=False: None)
+    monkeypatch.setattr(query, "_update_document_counts", lambda vault_path: None)
+    client = TestClient(query.app)
+    client.post("/keyword-search/create-index", follow_redirects=False)
+
+    documents[:] = [
+        {"doc_id": "new", "content": "fresh text", "path": "new.txt", "filename": ""}
+    ]
+    client.post("/keyword-search/create-index", follow_redirects=False)
+
+    from talkpipe.search.whoosh import WhooshFullTextIndex
+
+    with WhooshFullTextIndex(query.get_whoosh_index_path(str(tmp_path))) as ix:
+        assert ix.text_search("stale") == []
+        assert [hit.doc_id for hit in ix.text_search("fresh")] == ["new"]
 
 
 def test_iter_lancedb_docs_for_whoosh_preserves_source_path(monkeypatch):

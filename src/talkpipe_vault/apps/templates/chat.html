@@ -108,7 +108,7 @@
         align-self: flex-end;
         padding: 12px 35px;
         font-size: 1rem;
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        background: var(--grad);
         color: white;
         border: none;
         border-radius: 25px;
@@ -117,7 +117,7 @@
     }
     .question-box button:hover {
         transform: translateY(-2px);
-        box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+        box-shadow: 0 4px 15px rgba(79, 70, 229, 0.35);
     }
     .question-box button:disabled {
         opacity: 0.6;
@@ -144,7 +144,7 @@
     .answer-header .label {
         font-size: 0.9rem;
         font-weight: 600;
-        color: #667eea;
+        color: var(--primary);
         text-transform: uppercase;
         letter-spacing: 0.5px;
     }
@@ -163,9 +163,9 @@
         color: #333;
     }
     .copy-btn.copied {
-        background: #34a853;
+        background: var(--success);
         color: white;
-        border-color: #34a853;
+        border-color: var(--success);
     }
     .answer-content {
         background: #f8f9fa;
@@ -183,7 +183,7 @@
         padding-top: 18px;
     }
     .sources-section h3 {
-        color: #4338ca;
+        color: var(--primary-dark);
         font-size: 0.9rem;
         letter-spacing: 0.5px;
         margin-bottom: 12px;
@@ -223,7 +223,7 @@
         width: 24px;
         height: 24px;
         border: 3px solid #ddd;
-        border-top-color: #667eea;
+        border-top-color: var(--primary);
         border-radius: 50%;
         animation: spin 0.8s linear infinite;
     }

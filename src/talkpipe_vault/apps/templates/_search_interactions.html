@@ -24,8 +24,8 @@
     }
     .copy-results-btn,
     .copy-snippet-btn {
-        background: #f1f3f4;
-        border: 1px solid #ddd;
+        background: var(--field-bg);
+        border: 1px solid var(--field-border);
         border-radius: 999px;
         color: #666;
         cursor: pointer;
@@ -45,14 +45,14 @@
     }
     .copy-results-btn.copied,
     .copy-snippet-btn.copied {
-        background: #34a853;
-        border-color: #34a853;
+        background: var(--success);
+        border-color: var(--success);
         color: white;
     }
     .result-title-link {
         background: transparent;
         border: 0;
-        color: #1a0dab;
+        color: var(--primary-dark);
         cursor: pointer;
         font: inherit;
         font-weight: 700;
@@ -127,7 +127,7 @@
         animation: spin 0.8s linear infinite;
         border: 3px solid #ddd;
         border-radius: 50%;
-        border-top-color: #667eea;
+        border-top-color: var(--primary);
         height: 24px;
         width: 24px;
     }

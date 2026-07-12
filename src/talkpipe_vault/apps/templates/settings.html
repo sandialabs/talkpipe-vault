@@ -3,13 +3,6 @@
 {% block title %}Settings - Talkpipe Vault{% endblock %}
 
 {% block content %}
-{% if message %}
-<div class="flash-status">{{ message }}</div>
-{% endif %}
-{% if error %}
-<div class="flash-error">{{ error }}</div>
-{% endif %}
-
 <div class="search-box">
     <h2>Model Settings</h2>
     <p class="panel-hint">
@@ -21,7 +14,7 @@
     </p>
     <form method="post" action="/settings" class="settings-form">
         <fieldset>
-            <legend>Embeddings (semantic search &amp; indexing)</legend>
+            <legend>Embeddings &mdash; semantic search &amp; indexing</legend>
             <label for="embedding-source">Source</label>
             <select name="embedding_source" id="embedding-source">
                 {% for source in embedding_sources %}
@@ -40,7 +33,7 @@
             </p>
         </fieldset>
         <fieldset>
-            <legend>Chat (Ask answers)</legend>
+            <legend>Chat &mdash; Ask answers</legend>
             <label for="chat-source">Source</label>
             <select name="chat_source" id="chat-source">
                 {% for source in chat_sources %}
@@ -57,65 +50,4 @@
         <button type="submit">Save Settings</button>
     </form>
 </div>
-
-<style>
-    .flash-status, .flash-error {
-        border-radius: 8px;
-        font-size: 0.95rem;
-        margin-bottom: 12px;
-        padding: 10px 14px;
-        text-align: center;
-    }
-    .flash-status {
-        background: #e6f4ea;
-        border: 1px solid #34a853;
-        color: #1f5f2e;
-    }
-    .flash-error {
-        background: #fce8e6;
-        border: 1px solid #ea4335;
-        color: #8b1d13;
-    }
-    .panel-hint {
-        color: var(--muted);
-        font-size: 0.92rem;
-        margin: 8px 0 14px;
-    }
-    .search-box h2 {
-        margin-bottom: 6px;
-    }
-    .settings-form {
-        display: block;
-    }
-    .settings-form fieldset {
-        border: 1px solid var(--panel-border);
-        border-radius: 10px;
-        margin-bottom: 16px;
-        padding: 14px 16px;
-    }
-    .settings-form legend {
-        color: var(--muted);
-        font-size: 0.9rem;
-        padding: 0 6px;
-    }
-    .settings-form label {
-        display: block;
-        font-size: 0.92rem;
-        font-weight: 600;
-        margin: 10px 0 4px;
-    }
-    .settings-form select,
-    .settings-form input[type="text"] {
-        border: 1px solid var(--panel-border);
-        border-radius: 8px;
-        font-size: 0.95rem;
-        padding: 8px 10px;
-        width: 100%;
-    }
-    .field-hint {
-        color: var(--muted);
-        font-size: 0.85rem;
-        margin-top: 8px;
-    }
-</style>
 {% endblock %}

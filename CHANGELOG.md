@@ -24,7 +24,18 @@
 - Updated all `makevectordatabase` examples to pass `--embedding_source`/`--embedding_model`, which TalkPipe now requires unless embedding defaults are set in its configuration.
 - Test fixtures that build vaults via `makevectordatabase` now pass the configured embedding model/source explicitly and invoke the CLI via `python -m`, and the test suite's Ollama availability probe honors `TALKPIPE_OLLAMA_SERVER_URL` so the Ollama-dependent tests can run against a remote server.
 
+### Web Interface Refresh
+
+- Redesigned the web interface with a coherent design system: unified indigo/violet palette and typography, refreshed header with vault/chunk pills and navigation, consistent panels, buttons, form fields, flash banners, result cards, and empty states, and improved responsive behavior on small screens. Page templates now share the design system from the base template instead of carrying duplicate inline styles.
+- Success and error notices now appear consistently across all pages, including the home page confirmation after opening a vault (previously dropped silently) and the keyword-search index messages.
+
 ### Bug Fixes
+
+#### Form Submissions
+- Submitting any form with an empty field (Open or Create, Search, Keyword Search, Ask, Index Documents) no longer surfaces a raw `422` JSON validation error; empty submissions now land on a friendly page or redirect with a clear message. Inputs that require a value also declare it client-side.
+
+#### Keyword Index Creation
+- Fixed "Create Full-Text Index" failing with `Schema() got multiple values for keyword argument 'doc_id'`: TalkPipe 0.12.4 reserves the Whoosh `doc_id` schema field, so the index is now built through `WhooshFullTextIndex` directly, keeping LanceDB row ids as stable document ids so results can be resolved back to stored chunks. Rebuilding replaces the previous index contents, and the success notice reports how many documents were indexed. The regression tests build a real index instead of mocking the builder, which is what had hidden this incompatibility.
 
 #### Ollama Server Configuration
 - Replaced `OLLAMA_BASE_URL` with `TALKPIPE_OLLAMA_SERVER_URL` in the README, `.env.example`, and Compose files. TalkPipe reads the Ollama server URL from `TALKPIPE_OLLAMA_SERVER_URL` (or `OLLAMA_SERVER_URL` in `~/.talkpipe.toml`); the previously documented variable had no effect.

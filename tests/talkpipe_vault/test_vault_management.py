@@ -147,6 +147,37 @@ class TestVaultSelection:
         assert response.status_code == 303
         assert "error=" in response.headers["location"]
 
+    def test_empty_form_submissions_never_return_validation_json(self, client):
+        """Empty form posts must land on a friendly page, not a 422 JSON body.
+
+        Some browsers/FastAPI versions treat an empty form value as a missing
+        required field, which used to surface a raw validation error.
+        """
+        cases = [
+            ("/vaults/open", "new_vault_path"),
+            ("/search", "query"),
+            ("/keyword-search", "query"),
+            ("/chat", "message"),
+            ("/documents/index", "source_path"),
+        ]
+        for url, field in cases:
+            for data in ({}, {field: ""}):
+                response = client.post(url, data=data)
+                assert response.status_code == 303 or (
+                    response.status_code == 200
+                    and "text/html" in response.headers["content-type"]
+                ), f"{url} with {data!r} returned {response.status_code}"
+
+    def test_opened_vault_confirmation_shows_on_home_page(self, client, tmp_path):
+        existing = tmp_path / "confirm-vault"
+        existing.mkdir()
+
+        follow = TestClient(query.app)
+        response = follow.post("/vaults/open", data={"new_vault_path": str(existing)})
+
+        assert response.status_code == 200
+        assert f"Opened vault at {existing}" in response.text
+
 
 class TestModelSettings:
     """Tests for configuring models from the interface."""

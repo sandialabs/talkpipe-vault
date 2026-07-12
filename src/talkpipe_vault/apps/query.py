@@ -14,6 +14,7 @@ import argparse
 import glob as globlib
 import json
 import os
+import shutil
 import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
@@ -36,7 +37,7 @@ from talkpipe.pipelines.vector_databases import (
     ProcessDocumentsSegment,
 )
 from talkpipe.search.lancedb import LanceDBDocumentStore
-from talkpipe.search.whoosh import WhooshFullTextIndex, indexWhoosh
+from talkpipe.search.whoosh import WhooshFullTextIndex
 from talkpipe.util.config import configure_logger
 
 from talkpipe_vault.apps import user_settings
@@ -212,6 +213,30 @@ def _iter_lancedb_docs_for_whoosh(vault_path: str) -> list[dict[str, str]]:
         )
 
     return documents
+
+
+WHOOSH_INDEX_FIELDS = ["content", "path", "filename"]
+
+
+def _build_whoosh_index(vault_path: str, documents: list[dict[str, str]]) -> None:
+    """Rebuild the vault's Whoosh full-text index from normalized documents.
+
+    Expects documents as dicts with doc_id, content, path, and filename keys.
+    The existing index is replaced. Documents keep their LanceDB row ids as
+    Whoosh doc_ids so search results can be resolved back to stored chunks.
+    (talkpipe's indexWhoosh segment reserves the doc_id schema field, so the
+    index is built through WhooshFullTextIndex to control ids directly.)
+    """
+    whoosh_index_path = get_whoosh_index_path(vault_path)
+    if os.path.isdir(whoosh_index_path):
+        shutil.rmtree(whoosh_index_path)
+
+    with WhooshFullTextIndex(whoosh_index_path, fields=WHOOSH_INDEX_FIELDS) as ix:
+        for document in documents:
+            ix.add_document(
+                {field: document.get(field, "") for field in WHOOSH_INDEX_FIELDS},
+                doc_id=document.get("doc_id") or None,
+            )
 
 
 def _print_whoosh_index_documents(documents: list[dict[str, str]]) -> None:
@@ -574,7 +599,12 @@ def _require_vault(state: AppState) -> RedirectResponse | None:
 
 
 @app.get("/", response_class=HTMLResponse)
-async def home(request: Request, state: AppState = Depends(get_state)) -> HTMLResponse:
+async def home(
+    request: Request,
+    message: str | None = None,
+    error: str | None = None,
+    state: AppState = Depends(get_state),
+) -> HTMLResponse:
     """Render the home page with navigation to search and chat."""
     redirect = _require_vault(state)
     if redirect:
@@ -584,7 +614,9 @@ async def home(request: Request, state: AppState = Depends(get_state)) -> HTMLRe
     return templates.TemplateResponse(
         request=request,
         name="home.html",
-        context=_template_context(request, state),
+        context=_template_context(
+            request, state, flash_message=message, flash_error=error
+        ),
     )
 
 
@@ -603,15 +635,15 @@ async def vaults_page(
             request,
             state,
             recent_vaults=user_settings.get_recent_vaults(),
-            message=message,
-            error=error,
+            flash_message=message,
+            flash_error=error,
         ),
     )
 
 
 @app.post("/vaults/open", response_class=HTMLResponse)
 async def open_vault(
-    new_vault_path: Annotated[str, Form()],
+    new_vault_path: Annotated[str, Form()] = "",
     state: AppState = Depends(get_state),
 ) -> HTMLResponse:
     """Open an existing vault, or create a new one when the path doesn't exist.
@@ -667,8 +699,8 @@ async def documents_page(
             request,
             state,
             models=_effective_models(state),
-            message=message,
-            error=error,
+            flash_message=message,
+            flash_error=error,
         ),
     )
 
@@ -714,7 +746,7 @@ def index_documents_into_vault(
 
 @app.post("/documents/index", response_class=HTMLResponse)
 async def index_documents(
-    source_path: Annotated[str, Form()],
+    source_path: Annotated[str, Form()] = "",
     overwrite: Annotated[bool, Form()] = False,
     state: AppState = Depends(get_state),
 ) -> HTMLResponse:
@@ -792,8 +824,8 @@ async def settings_page(
             models=_effective_models(state),
             embedding_sources=getEmbeddingSources(),
             chat_sources=getPromptSources(),
-            message=message,
-            error=error,
+            flash_message=message,
+            flash_error=error,
         ),
     )
 
@@ -881,7 +913,7 @@ async def search_page(
 @app.post("/search", response_class=HTMLResponse)
 async def search_results(
     request: Request,
-    query: Annotated[str, Form()],
+    query: Annotated[str, Form()] = "",
     state: AppState = Depends(get_state),
 ) -> HTMLResponse:
     """
@@ -939,8 +971,8 @@ async def keyword_search_page(
             state,
             query="",
             results=None,
-            create_status=created,
-            create_error=error,
+            flash_message=created,
+            flash_error=error,
         ),
     )
 
@@ -948,7 +980,7 @@ async def keyword_search_page(
 @app.post("/keyword-search", response_class=HTMLResponse)
 async def keyword_search_results(
     request: Request,
-    query: Annotated[str, Form()],
+    query: Annotated[str, Form()] = "",
     state: AppState = Depends(get_state),
 ) -> HTMLResponse:
     """
@@ -1003,26 +1035,17 @@ async def create_keyword_index(
     try:
         documents = _iter_lancedb_docs_for_whoosh(state.vault_path)
         _print_whoosh_index_documents(documents)
-        whoosh_index_path = get_whoosh_index_path(state.vault_path)
-
-        pipeline = indexWhoosh(
-            index_path=whoosh_index_path,
-            field_list="content:content,path:path,filename:filename,doc_id:doc_id",
-            overwrite=True,
-            commit_seconds=0,
-        )
-        list(pipeline(documents))
+        _build_whoosh_index(state.vault_path, documents)
         _refresh_pipelines(force=True)
         _update_document_counts(state.vault_path)
     except Exception as exc:
-        return RedirectResponse(
-            url=f"/keyword-search?error=Failed%20to%20create%20index%3A%20{str(exc)}",
-            status_code=303,
+        return _redirect_with_message(
+            "/keyword-search", error=f"Failed to create index: {exc}"
         )
 
-    return RedirectResponse(
-        url="/keyword-search?created=Whoosh%20index%20created.",
-        status_code=303,
+    return _redirect_with_message(
+        "/keyword-search",
+        created=f"Full-text index created with {len(documents)} document(s).",
     )
 
 
@@ -1117,7 +1140,7 @@ async def chat_page(
 @app.post("/chat", response_class=HTMLResponse)
 async def chat_response(
     request: Request,
-    message: Annotated[str, Form()],
+    message: Annotated[str, Form()] = "",
     state: AppState = Depends(get_state),
 ) -> HTMLResponse:
     """
