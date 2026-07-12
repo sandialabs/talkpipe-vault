@@ -388,7 +388,9 @@ class TestDocumentIndexing:
             def __init__(self, **kwargs):
                 pass
 
-        monkeypatch.setattr(query, "ProcessDocumentsSegment", _FakeProcessDocumentsSegment)
+        monkeypatch.setattr(
+            query, "ProcessDocumentsSegment", _FakeProcessDocumentsSegment
+        )
         monkeypatch.setattr(
             query, "MakeVectorDatabaseSegment", _FakeMakeVectorDatabaseSegment
         )

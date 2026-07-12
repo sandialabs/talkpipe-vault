@@ -496,8 +496,8 @@ def test_chat_response_includes_source_citations(monkeypatch):
     assert 'id="server-citations"' in response.text
     assert "source.txt" in response.text
     assert "Relevant source chunk" in response.text
-    assert 'Copy Chunk' in response.text
-    assert 'fetch(\'/chunk-content?path=' in response.text
+    assert "Copy Chunk" in response.text
+    assert "fetch('/chunk-content?path=" in response.text
     assert '"lookup_path": "row-uuid"' in response.text
 
 
