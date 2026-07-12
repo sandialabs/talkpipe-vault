@@ -17,6 +17,8 @@ services:
       # LanceDB path (same semantics as makevectordatabase --path).
       # Whoosh index is created under VAULT_PATH/fulltext_vault.
       - VAULT_PATH=/app/data/vault
+      # Persist web-interface settings (recent vaults, model choices) in the data volume
+      - TALKPIPE_VAULT_HOME=/app/data/vault-home
       - TALKPIPE_OLLAMA_SERVER_URL=${TALKPIPE_OLLAMA_SERVER_URL:-http://host.containers.internal:11434}
       - PYTHONUNBUFFERED=1
     restart: unless-stopped
@@ -49,6 +51,8 @@ services:
       # LanceDB path (same semantics as makevectordatabase --path).
       # Whoosh index is created under VAULT_PATH/fulltext_vault.
       - VAULT_PATH=/app/data/vault
+      # Persist web-interface settings (recent vaults, model choices) in the data volume
+      - TALKPIPE_VAULT_HOME=/app/data/vault-home
       - TALKPIPE_OLLAMA_SERVER_URL=${TALKPIPE_OLLAMA_SERVER_URL:-http://host.containers.internal:11434}
       - PYTHONUNBUFFERED=1
     working_dir: /workspace

@@ -37,6 +37,8 @@ USER vault
 ENV VAULT_PATH=/app/data/vault
 ENV VAULT_HOST=0.0.0.0
 ENV VAULT_PORT=8002
+# Persist web-interface settings (recent vaults, model choices) in the data volume
+ENV TALKPIPE_VAULT_HOME=/app/data/vault-home
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PATH=/home/vault/.local/bin:$PATH
