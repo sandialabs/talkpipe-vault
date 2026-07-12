@@ -21,5 +21,9 @@
 {% set no_results_hint = "Semantic search works best with a complete question or descriptive phrase." %}
 {% include "_search_results.html" %}
 
+<script>
+    requireValue('search-input', 'search-btn');
+</script>
+
 {% include "_search_interactions.html" %}
 {% endblock %}

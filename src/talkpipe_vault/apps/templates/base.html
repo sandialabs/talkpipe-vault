@@ -802,6 +802,20 @@
     </style>
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script>
+        // Keep a submit button disabled until its input has a value.
+        // Works with typed input and with values set by the folder picker.
+        function requireValue(inputId, buttonId) {
+            const input = document.getElementById(inputId);
+            const button = document.getElementById(buttonId);
+            if (!input || !button) return;
+            const update = function () {
+                button.disabled = input.disabled || !input.value.trim();
+            };
+            input.addEventListener('input', update);
+            update();
+        }
+    </script>
 </head>
 <body>
     <header>
@@ -817,7 +831,7 @@
                 <div class="vault-stats">
                     <div class="vault-stat">
                         <span class="vault-stat-label">Vault</span>
-                        <span class="vault-stat-value" title="{{ vault_path or 'No vault selected' }}">{% if vault_path %}{{ vault_path }}{% else %}none selected{% endif %}</span>
+                        <span class="vault-stat-value" title="{{ vault_path or 'No vault selected' }}">{% if vault_path %}&lrm;{{ vault_path }}&lrm;{% else %}none selected{% endif %}</span>
                     </div>
                     <div class="vault-stat">
                         <span class="vault-stat-label">Chunks:</span>
@@ -850,5 +864,6 @@
         {% endif %}
         {% block content %}{% endblock %}
     </div>
+
 </body>
 </html>

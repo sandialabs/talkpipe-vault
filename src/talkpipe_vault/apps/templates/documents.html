@@ -14,7 +14,9 @@
     </p>
     <form method="post" action="/documents/index" id="index-form">
         <input type="text" name="source_path" id="source-path-input"
-               placeholder="e.g. ~/Documents/notes or ~/notes/**/*.md" required autofocus>
+               placeholder="No folder chosen yet &mdash; click Browse, or type a path or glob"
+               required autofocus>
+        <button type="button" id="source-browse-btn" class="btn-secondary">Browse&hellip;</button>
         <button type="submit" id="index-btn">Index Documents</button>
     </form>
     <label class="overwrite-option">
@@ -28,7 +30,10 @@
     <span>Reading, chunking, and embedding documents. Large folders can take a while...</span>
 </div>
 
+{% include "_dir_picker.html" %}
 <script>
+    attachDirPicker('source-browse-btn', 'source-path-input', { allowNewFolder: false });
+    requireValue('source-path-input', 'index-btn');
     document.getElementById('index-form').addEventListener('submit', function () {
         document.getElementById('loading-overlay').style.display = 'flex';
         document.getElementById('index-btn').disabled = true;

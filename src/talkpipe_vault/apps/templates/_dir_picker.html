@@ -1,0 +1,287 @@
+<div id="dir-picker-overlay" class="dir-picker-overlay" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="dir-picker-title">
+    <div class="dir-picker">
+        <div class="dir-picker-header">
+            <h3 id="dir-picker-title">Choose a Folder</h3>
+            <button type="button" id="dir-picker-close" aria-label="Close">&times;</button>
+        </div>
+        <div class="dir-picker-path" id="dir-picker-path" title=""></div>
+        <div class="dir-picker-error" id="dir-picker-error" style="display: none;"></div>
+        <ul class="dir-picker-list" id="dir-picker-list"></ul>
+        <div class="dir-picker-new" id="dir-picker-new-row" style="display: none;">
+            <label for="dir-picker-new-name">New folder name (optional &mdash; created inside the folder above)</label>
+            <input type="text" id="dir-picker-new-name" placeholder="e.g. my-vault" autocomplete="off">
+        </div>
+        <div class="dir-picker-actions">
+            <button type="button" class="btn-secondary" id="dir-picker-home">Home</button>
+            <span class="dir-picker-actions-spacer"></span>
+            <button type="button" class="btn-secondary" id="dir-picker-cancel">Cancel</button>
+            <button type="button" id="dir-picker-select" class="dir-picker-select">Use This Folder</button>
+        </div>
+    </div>
+</div>
+
+<style>
+    .dir-picker-overlay {
+        align-items: center;
+        background: rgba(15, 23, 42, 0.55);
+        bottom: 0;
+        display: flex;
+        justify-content: center;
+        left: 0;
+        padding: 20px;
+        position: fixed;
+        right: 0;
+        top: 0;
+        z-index: 9999;
+    }
+    .dir-picker {
+        background: #fff;
+        border-radius: var(--radius);
+        box-shadow: var(--shadow-md);
+        display: flex;
+        flex-direction: column;
+        max-height: min(560px, 86vh);
+        overflow: hidden;
+        width: min(520px, 100%);
+    }
+    .dir-picker-header {
+        align-items: center;
+        border-bottom: 1px solid var(--panel-border);
+        display: flex;
+        justify-content: space-between;
+        padding: 14px 18px;
+    }
+    .dir-picker-header h3 {
+        color: var(--heading);
+        font-size: 1.02rem;
+    }
+    #dir-picker-close {
+        background: transparent;
+        border: none;
+        color: var(--muted);
+        cursor: pointer;
+        font-size: 1.4rem;
+        line-height: 1;
+        padding: 2px 6px;
+    }
+    #dir-picker-close:hover {
+        color: var(--heading);
+    }
+    .dir-picker-path {
+        background: var(--field-bg);
+        border-bottom: 1px solid var(--panel-border);
+        color: var(--text);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 0.84rem;
+        overflow-wrap: anywhere;
+        padding: 9px 18px;
+    }
+    .dir-picker-error {
+        background: var(--danger-bg);
+        border-bottom: 1px solid var(--danger-border);
+        color: var(--danger-ink);
+        font-size: 0.86rem;
+        padding: 8px 18px;
+    }
+    .dir-picker-list {
+        flex: 1;
+        list-style: none;
+        margin: 0;
+        min-height: 160px;
+        overflow-y: auto;
+        padding: 6px 8px;
+    }
+    .dir-picker-list button {
+        background: transparent;
+        border: none;
+        border-radius: 8px;
+        color: var(--text);
+        cursor: pointer;
+        display: block;
+        font-size: 0.92rem;
+        overflow: hidden;
+        padding: 8px 12px;
+        text-align: left;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        width: 100%;
+    }
+    .dir-picker-list button:hover,
+    .dir-picker-list button:focus {
+        background: #eef1fd;
+        color: var(--primary-dark);
+        outline: none;
+    }
+    .dir-picker-list .dir-picker-up {
+        color: var(--muted);
+    }
+    .dir-picker-empty {
+        color: var(--faint);
+        font-size: 0.88rem;
+        padding: 10px 12px;
+    }
+    .dir-picker-new {
+        border-top: 1px solid var(--panel-border);
+        padding: 12px 18px;
+    }
+    .dir-picker-new label {
+        color: var(--muted);
+        display: block;
+        font-size: 0.82rem;
+        margin-bottom: 5px;
+    }
+    .dir-picker-new input {
+        background: var(--field-bg);
+        border: 1px solid var(--field-border);
+        border-radius: 8px;
+        font-size: 0.92rem;
+        outline: none;
+        padding: 8px 11px;
+        width: 100%;
+    }
+    .dir-picker-new input:focus {
+        background: #fff;
+        border-color: var(--primary);
+        box-shadow: 0 0 0 3px var(--ring);
+    }
+    .dir-picker-actions {
+        align-items: center;
+        border-top: 1px solid var(--panel-border);
+        display: flex;
+        gap: 10px;
+        padding: 12px 18px;
+    }
+    .dir-picker-actions-spacer {
+        flex: 1;
+    }
+    .dir-picker-select {
+        background: var(--grad);
+        border: none;
+        border-radius: var(--radius-sm);
+        color: #fff;
+        cursor: pointer;
+        font-size: 0.9rem;
+        font-weight: 600;
+        padding: 9px 18px;
+    }
+    .dir-picker-select:hover {
+        filter: brightness(1.05);
+    }
+</style>
+
+<script>
+(function () {
+    const overlay = document.getElementById('dir-picker-overlay');
+    const pathEl = document.getElementById('dir-picker-path');
+    const errorEl = document.getElementById('dir-picker-error');
+    const listEl = document.getElementById('dir-picker-list');
+    const newRow = document.getElementById('dir-picker-new-row');
+    const newName = document.getElementById('dir-picker-new-name');
+
+    let currentPath = '';
+    let currentParent = null;
+    let homePath = '';
+    let pathSep = '/';
+    let targetInput = null;
+
+    function showError(message) {
+        errorEl.textContent = message;
+        errorEl.style.display = message ? 'block' : 'none';
+    }
+
+    async function load(path) {
+        showError('');
+        let data;
+        try {
+            const response = await fetch('/api/directories?path=' + encodeURIComponent(path || ''));
+            data = await response.json();
+            if (!response.ok) {
+                showError(data.error || 'Could not open that folder.');
+                return;
+            }
+        } catch (err) {
+            showError('Could not list folders: ' + err.message);
+            return;
+        }
+
+        currentPath = data.path;
+        currentParent = data.parent;
+        homePath = data.home;
+        pathSep = data.sep;
+        pathEl.textContent = currentPath;
+        pathEl.title = currentPath;
+
+        listEl.innerHTML = '';
+        if (currentParent) {
+            const up = document.createElement('li');
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'dir-picker-up';
+            btn.textContent = '← .. (up one level)';
+            btn.addEventListener('click', function () { load(currentParent); });
+            up.appendChild(btn);
+            listEl.appendChild(up);
+        }
+        if (!data.directories.length) {
+            const empty = document.createElement('li');
+            empty.className = 'dir-picker-empty';
+            empty.textContent = 'No subfolders here.';
+            listEl.appendChild(empty);
+        }
+        data.directories.forEach(function (name) {
+            const item = document.createElement('li');
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.textContent = '📁 ' + name;
+            btn.addEventListener('click', function () {
+                load(currentPath === pathSep ? currentPath + name : currentPath + pathSep + name);
+            });
+            item.appendChild(btn);
+            listEl.appendChild(item);
+        });
+    }
+
+    function close() {
+        overlay.style.display = 'none';
+        targetInput = null;
+    }
+
+    document.getElementById('dir-picker-close').addEventListener('click', close);
+    document.getElementById('dir-picker-cancel').addEventListener('click', close);
+    document.getElementById('dir-picker-home').addEventListener('click', function () {
+        load(homePath || '');
+    });
+    overlay.addEventListener('click', function (event) {
+        if (event.target === overlay) close();
+    });
+    document.addEventListener('keydown', function (event) {
+        if (event.key === 'Escape' && overlay.style.display !== 'none') close();
+    });
+    document.getElementById('dir-picker-select').addEventListener('click', function () {
+        if (!targetInput) return;
+        let value = currentPath;
+        const extra = newRow.style.display !== 'none' ? newName.value.trim() : '';
+        if (extra) {
+            value = value === pathSep ? value + extra : value + pathSep + extra;
+        }
+        targetInput.value = value;
+        targetInput.dispatchEvent(new Event('input', { bubbles: true }));
+        close();
+    });
+
+    // Wire a "Browse" button to fill an input with the chosen folder.
+    // options.allowNewFolder shows the new-folder-name field.
+    window.attachDirPicker = function (triggerId, inputId, options) {
+        const trigger = document.getElementById(triggerId);
+        const input = document.getElementById(inputId);
+        if (!trigger || !input) return;
+        trigger.addEventListener('click', function () {
+            targetInput = input;
+            newName.value = '';
+            newRow.style.display = (options && options.allowNewFolder) ? 'block' : 'none';
+            overlay.style.display = 'flex';
+            load(input.value.trim() || '');
+        });
+    };
+})();
+</script>

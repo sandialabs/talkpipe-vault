@@ -35,6 +35,10 @@
 {% set no_results_hint = "Keyword search works best with exact terms, quoted phrases, or boolean operators." %}
 {% include "_search_results.html" %}
 
+<script>
+    requireValue('search-input', 'search-btn');
+</script>
+
 <style>
     .search-disabled {
         background: var(--warning-bg);

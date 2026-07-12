@@ -6,14 +6,16 @@
 <div class="search-box">
     <h2>Create or Choose a Vault</h2>
     <p class="panel-hint">
-        A vault is a directory holding the searchable index of your documents.
-        Enter a directory path: an existing vault is opened, a new path becomes
-        a new empty vault.
+        A vault is a folder holding the searchable index of your documents.
+        Click <strong>Browse</strong> to pick an existing vault folder or a
+        place for a new one &mdash; an empty or new folder becomes a new vault.
     </p>
     <form method="post" action="/vaults/open" id="open-vault-form">
         <input type="text" name="new_vault_path" id="vault-path-input"
-               placeholder="e.g. ~/my-vault" value="" required autofocus>
-        <button type="submit">Open or Create</button>
+               placeholder="No folder chosen yet &mdash; click Browse, or type a path like ~/my-vault"
+               value="" required autofocus>
+        <button type="button" id="vault-browse-btn" class="btn-secondary">Browse&hellip;</button>
+        <button type="submit" id="open-vault-btn">Open or Create</button>
     </form>
 </div>
 
@@ -40,4 +42,10 @@
     <p class="panel-hint">No vaults opened yet — create your first one above.</p>
     {% endif %}
 </div>
+
+{% include "_dir_picker.html" %}
+<script>
+    attachDirPicker('vault-browse-btn', 'vault-path-input', { allowNewFolder: true });
+    requireValue('vault-path-input', 'open-vault-btn');
+</script>
 {% endblock %}

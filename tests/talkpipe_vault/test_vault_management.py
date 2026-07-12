@@ -179,6 +179,59 @@ class TestVaultSelection:
         assert f"Opened vault at {existing}" in response.text
 
 
+class TestDirectoryPicker:
+    """Tests for the folder-picker dialog and its listing endpoint."""
+
+    def test_api_directories_lists_visible_subdirectories(self, client, tmp_path):
+        (tmp_path / "alpha").mkdir()
+        (tmp_path / "beta").mkdir()
+        (tmp_path / ".hidden").mkdir()
+        (tmp_path / "file.txt").write_text("not a directory")
+
+        response = client.get(f"/api/directories?path={tmp_path}")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["path"] == str(tmp_path.resolve())
+        assert data["parent"] == str(tmp_path.resolve().parent)
+        assert data["directories"] == ["alpha", "beta"]
+
+    def test_api_directories_defaults_to_home(self, client):
+        from pathlib import Path
+
+        response = client.get("/api/directories")
+
+        assert response.status_code == 200
+        assert response.json()["path"] == str(Path.home().resolve())
+
+    def test_api_directories_rejects_non_directories(self, client, tmp_path):
+        file_path = tmp_path / "file.txt"
+        file_path.write_text("hello")
+
+        for bad in (str(file_path), str(tmp_path / "missing")):
+            response = client.get(f"/api/directories?path={bad}")
+            assert response.status_code == 400, bad
+            assert "error" in response.json(), bad
+
+    def test_vaults_page_wires_picker_and_disabled_button(self, client):
+        page = client.get("/vaults").text
+
+        assert 'id="vault-browse-btn"' in page
+        assert 'id="dir-picker-overlay"' in page
+        assert "attachDirPicker('vault-browse-btn', 'vault-path-input'" in page
+        assert "requireValue('vault-path-input', 'open-vault-btn')" in page
+
+    def test_documents_page_wires_picker_and_disabled_button(self, client, tmp_path):
+        client.post("/vaults/open", data={"new_vault_path": str(tmp_path / "v")})
+
+        page = client.get("/documents").text
+
+        assert 'id="source-browse-btn"' in page
+        assert 'id="dir-picker-overlay"' in page
+        assert "attachDirPicker('source-browse-btn', 'source-path-input'" in page
+        assert "requireValue('source-path-input', 'index-btn')" in page
+
+
 class TestModelSettings:
     """Tests for configuring models from the interface."""
 

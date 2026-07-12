@@ -598,6 +598,51 @@ def _require_vault(state: AppState) -> RedirectResponse | None:
     )
 
 
+@app.get("/api/directories")
+async def list_directories(path: str = "") -> JSONResponse:
+    """List subdirectories of a path for the folder-picker dialog.
+
+    Returns the resolved path, its parent (null at the filesystem root), and
+    the visible (non-hidden) subdirectories. Falls back to the user's home
+    directory when no path is given; unreadable or nonexistent paths return
+    a 400 with an error message the dialog can display.
+    """
+    base = Path(path).expanduser() if path.strip() else Path.home()
+    try:
+        base = base.resolve()
+        if not base.is_dir():
+            return JSONResponse(
+                status_code=400,
+                content={"error": f"{base} is not a directory."},
+            )
+        directories = sorted(
+            (
+                entry.name
+                for entry in base.iterdir()
+                if entry.is_dir() and not entry.name.startswith(".")
+            ),
+            key=str.casefold,
+        )
+    except PermissionError:
+        return JSONResponse(
+            status_code=400,
+            content={"error": f"Permission denied reading {base}."},
+        )
+    except OSError as exc:
+        return JSONResponse(status_code=400, content={"error": str(exc)})
+
+    parent = str(base.parent) if base.parent != base else None
+    return JSONResponse(
+        content={
+            "path": str(base),
+            "parent": parent,
+            "home": str(Path.home()),
+            "sep": os.sep,
+            "directories": directories,
+        }
+    )
+
+
 @app.get("/", response_class=HTMLResponse)
 async def home(
     request: Request,

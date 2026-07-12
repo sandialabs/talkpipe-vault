@@ -51,8 +51,8 @@ Directory monitoring is still under development. The watcher sources and helper 
 
 TalkPipe Vault includes a web application for building, searching, and querying your document collection:
 
-- **Vaults**: Create a new vault or choose an existing one; recently used vaults are remembered
-- **Add Documents**: Index a folder or glob pattern of documents into the current vault
+- **Vaults**: Create a new vault or choose an existing one with a built-in folder browser; recently used vaults are remembered
+- **Add Documents**: Index a folder (pickable with the folder browser) or glob pattern of documents into the current vault
 - **Settings**: Configure the provider (source) and model for both embeddings and chat
 - **Semantic Search**: Find documents by meaning using AI-powered vector similarity search
 - **Keyword Search**: Traditional full-text search with boolean operators (AND, OR, NOT) and phrase matching

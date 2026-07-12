@@ -26,6 +26,9 @@
 
 ### Web Interface Refresh
 
+- Choosing a vault or a documents folder no longer requires typing a path: a Browse button opens a folder-picker dialog that navigates the server's directories (backed by a new `/api/directories` endpoint), with a jump-to-home shortcut and, on the Vaults page, an optional new-folder name for creating a vault in the chosen location. Paths can still be typed or pasted directly.
+- Submit buttons (Open or Create, Index Documents, Search, Keyword Search, Ask) stay disabled until their input has a value, so an accidental empty submission is no longer possible.
+
 - Redesigned the web interface with a coherent design system: unified indigo/violet palette and typography, refreshed header with vault/chunk pills and navigation, consistent panels, buttons, form fields, flash banners, result cards, and empty states, and improved responsive behavior on small screens. Page templates now share the design system from the base template instead of carrying duplicate inline styles.
 - Success and error notices now appear consistently across all pages, including the home page confirmation after opening a vault (previously dropped silently) and the keyword-search index messages.
 
