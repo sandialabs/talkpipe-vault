@@ -16,7 +16,7 @@
     <article class="result-card">
         <div class="result-card-header">
             <button type="button" class="result-title-link" data-path="{{ result.lookup_path }}" data-snippet="{{ result.snippet|e }}">{{ result.filename }}</button>
-            <button type="button" class="copy-snippet-btn" data-snippet="{{ result.snippet|e }}">Copy Snippet</button>
+            <button type="button" class="copy-snippet-btn" data-path="{{ result.lookup_path }}" data-snippet="{{ result.snippet|e }}">Copy Chunk</button>
         </div>
         {% if show_source_paths %}
         <div class="path"><a href="/source-file?path={{ result.path|urlencode }}" target="_blank" rel="noopener">{{ result.path }}</a></div>

@@ -196,10 +196,21 @@
         margin-bottom: 10px;
         padding: 14px 16px;
     }
+    .source-card-header {
+        align-items: flex-start;
+        display: flex;
+        gap: 12px;
+        justify-content: space-between;
+        margin-bottom: 6px;
+    }
     .source-card-title {
         color: #1e293b;
         font-weight: 700;
-        margin-bottom: 6px;
+    }
+    .source-copy-btn {
+        flex-shrink: 0;
+        font-size: 0.8rem;
+        padding: 4px 10px;
     }
     .source-card-snippet {
         color: #475569;
@@ -248,6 +259,28 @@ document.addEventListener('DOMContentLoaded', function() {
 
     let currentAnswer = '';
 
+    function setCopied(button, copiedLabel, originalLabel) {
+        button.textContent = copiedLabel;
+        button.classList.add('copied');
+        setTimeout(function() {
+            button.textContent = originalLabel;
+            button.classList.remove('copied');
+        }, 2000);
+    }
+
+    async function fetchChunkContent(path, snippet) {
+        if (!path) {
+            return '';
+        }
+
+        const response = await fetch('/chunk-content?path=' + encodeURIComponent(path) + '&snippet=' + encodeURIComponent(snippet || ''));
+        const payload = await response.json();
+        if (!response.ok) {
+            throw new Error(payload.error || 'Failed to load document content.');
+        }
+        return payload.content || '';
+    }
+
     // Handle copy button click
     function handleCopy() {
         if (!currentAnswer) return;
@@ -263,22 +296,12 @@ document.addEventListener('DOMContentLoaded', function() {
             });
 
             navigator.clipboard.write([clipboardItem]).then(function() {
-                copyBtn.innerHTML = '&#10003; Copied';
-                copyBtn.classList.add('copied');
-                setTimeout(function() {
-                    copyBtn.innerHTML = '&#128203; Copy';
-                    copyBtn.classList.remove('copied');
-                }, 2000);
+                setCopied(copyBtn, '✓ Copied', '📋 Copy');
             });
         } catch (err) {
             // Fallback to plain text if ClipboardItem not supported
             navigator.clipboard.writeText(currentAnswer).then(function() {
-                copyBtn.innerHTML = '&#10003; Copied';
-                copyBtn.classList.add('copied');
-                setTimeout(function() {
-                    copyBtn.innerHTML = '&#128203; Copy';
-                    copyBtn.classList.remove('copied');
-                }, 2000);
+                setCopied(copyBtn, '✓ Copied', '📋 Copy');
             });
         }
     }
@@ -320,9 +343,36 @@ document.addEventListener('DOMContentLoaded', function() {
             const card = document.createElement('div');
             card.className = 'source-card';
 
+            const header = document.createElement('div');
+            header.className = 'source-card-header';
+
             const title = document.createElement('div');
             title.className = 'source-card-title';
             title.textContent = (index + 1) + '. ' + citation.filename;
+
+            const copyChunkBtn = document.createElement('button');
+            copyChunkBtn.type = 'button';
+            copyChunkBtn.className = 'copy-btn source-copy-btn';
+            copyChunkBtn.textContent = 'Copy Chunk';
+            copyChunkBtn.dataset.path = citation.lookup_path || citation.path || '';
+            copyChunkBtn.dataset.snippet = citation.snippet || '';
+            copyChunkBtn.addEventListener('click', async function() {
+                const path = copyChunkBtn.dataset.path || '';
+                const snippetText = copyChunkBtn.dataset.snippet || '';
+
+                try {
+                    const content = await fetchChunkContent(path, snippetText);
+                    await navigator.clipboard.writeText(content || snippetText);
+                    setCopied(copyChunkBtn, 'Copied', 'Copy Chunk');
+                } catch (err) {
+                    navigator.clipboard.writeText(snippetText).then(function() {
+                        setCopied(copyChunkBtn, 'Copied', 'Copy Chunk');
+                    });
+                }
+            });
+
+            header.appendChild(title);
+            header.appendChild(copyChunkBtn);
 
             const snippet = document.createElement('div');
             snippet.className = 'source-card-snippet';
@@ -332,7 +382,7 @@ document.addEventListener('DOMContentLoaded', function() {
             score.className = 'source-card-score';
             score.textContent = 'Score: ' + citation.score;
 
-            card.appendChild(title);
+            card.appendChild(header);
             card.appendChild(snippet);
             card.appendChild(score);
             sourcesList.appendChild(card);

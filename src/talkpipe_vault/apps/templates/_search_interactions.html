@@ -178,6 +178,19 @@ document.addEventListener('DOMContentLoaded', function() {
         }, 2000);
     }
 
+    async function fetchChunkContent(path, snippet) {
+        if (!path) {
+            return '';
+        }
+
+        const response = await fetch('/chunk-content?path=' + encodeURIComponent(path) + '&snippet=' + encodeURIComponent(snippet || ''));
+        const payload = await response.json();
+        if (!response.ok) {
+            throw new Error(payload.error || 'Failed to load document content.');
+        }
+        return payload.content || '';
+    }
+
     function escapeRegExp(value) {
         return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     }
@@ -252,10 +265,19 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     document.querySelectorAll('.copy-snippet-btn').forEach(function(button) {
-        button.addEventListener('click', function() {
-            navigator.clipboard.writeText(button.getAttribute('data-snippet') || '').then(function() {
+        button.addEventListener('click', async function() {
+            const path = button.getAttribute('data-path');
+            const snippet = button.getAttribute('data-snippet') || '';
+
+            try {
+                const content = await fetchChunkContent(path, snippet);
+                await navigator.clipboard.writeText(content || snippet);
                 setCopied(button, 'Copied');
-            });
+            } catch (err) {
+                navigator.clipboard.writeText(snippet).then(function() {
+                    setCopied(button, 'Copied');
+                });
+            }
         });
     });
 
@@ -274,15 +296,10 @@ document.addEventListener('DOMContentLoaded', function() {
             modalClose.focus();
 
             try {
-                const response = await fetch('/chunk-content?path=' + encodeURIComponent(path) + '&snippet=' + encodeURIComponent(snippet));
-                const payload = await response.json();
-                if (!response.ok) {
-                    modalBody.textContent = payload.error || 'Failed to load document content.';
-                    return;
-                }
-                modalBody.textContent = payload.content || '(No content)';
+                const content = await fetchChunkContent(path, snippet);
+                modalBody.textContent = content || '(No content)';
             } catch (err) {
-                modalBody.textContent = 'Failed to load document content.';
+                modalBody.textContent = err.message || 'Failed to load document content.';
             }
         });
     });

@@ -309,6 +309,33 @@ def test_keyword_search_results_display_source_path_as_server_link(monkeypatch):
     assert "/original/source.pdf" in response.text
 
 
+def test_keyword_search_results_copy_button_targets_full_chunk(monkeypatch):
+    """Keyword results should expose lookup metadata for full chunk copy."""
+    query._state.keyword_search_enabled = True
+    query._state.keyword_search_pipeline = lambda _query: [
+        {
+            "doc_id": "row-uuid",
+            "score": 1.0,
+            "document": {
+                "content": "indexed text",
+                "path": "/original/source.pdf",
+                "filename": "source.pdf",
+            },
+        }
+    ]
+    monkeypatch.setattr(query, "_refresh_pipelines", lambda: None)
+    monkeypatch.setattr(query, "_update_document_counts", lambda vault_path: None)
+    client = TestClient(query.app)
+
+    response = client.post("/keyword-search", data={"query": "indexed"})
+
+    assert response.status_code == 200
+    assert 'class="copy-snippet-btn"' in response.text
+    assert 'data-path="row-uuid"' in response.text
+    assert 'data-snippet="indexed text"' in response.text
+    assert "Copy Chunk" in response.text
+
+
 def test_process_keyword_results_keeps_multiple_hits_for_same_source_path():
     """Keyword search should show every matching indexed row from a source file."""
     raw_results = [
@@ -465,6 +492,9 @@ def test_chat_response_includes_source_citations(monkeypatch):
     assert 'id="server-citations"' in response.text
     assert "source.txt" in response.text
     assert "Relevant source chunk" in response.text
+    assert 'Copy Chunk' in response.text
+    assert 'fetch(\'/chunk-content?path=' in response.text
+    assert '"lookup_path": "row-uuid"' in response.text
 
 
 def test_vault_text_search_default_limit_returns_all_whoosh_results(
