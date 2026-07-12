@@ -1,15 +1,20 @@
 """
 Web application for querying and chatting with vault contents.
 
-Provides three interaction modes via web interface:
+Provides the following via web interface:
+- Vault management: create a new vault or choose an existing one
+- Document indexing: add documents to the current vault
 - Semantic Search: Vector similarity search returning ranked results
 - Keyword Search: Full-text search using a Whoosh index
 - Ask: Single-turn RAG-based Q&A interface
+- Settings: configure embedding and chat model source/name
 """
 
 import argparse
+import glob as globlib
 import json
 import os
+import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Any, Callable
@@ -25,13 +30,23 @@ from fastapi.responses import (
 )
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from talkpipe.llm.config import getEmbeddingSources, getPromptSources
+from talkpipe.pipelines.vector_databases import (
+    MakeVectorDatabaseSegment,
+    ProcessDocumentsSegment,
+)
 from talkpipe.search.lancedb import LanceDBDocumentStore
 from talkpipe.search.whoosh import WhooshFullTextIndex, indexWhoosh
 from talkpipe.util.config import configure_logger
 
+from talkpipe_vault.apps import user_settings
 from talkpipe_vault.pipelines.config import (
     DEFAULT_VECTOR_TABLE_NAME,
     ensure_supported_vault_layout,
+    get_chat_model,
+    get_chat_source,
+    get_embedding_model,
+    get_embedding_source,
     get_whoosh_index_path,
     get_vector_db_path,
 )
@@ -63,6 +78,12 @@ class AppState:
     keyword_search_enabled: bool = False
     show_source_paths: bool = False
     last_refresh_time: float = 0.0
+    # Model overrides chosen in the web interface. None falls through to
+    # TalkPipe configuration and then the vault defaults.
+    embedding_model: str | None = None
+    embedding_source: str | None = None
+    chat_model: str | None = None
+    chat_source: str | None = None
 
 
 # Application state singleton
@@ -91,6 +112,33 @@ def _template_context(
     }
     context.update(extra)
     return context
+
+
+def _effective_models(state: AppState) -> dict[str, str]:
+    """Resolve the model configuration in effect (overrides, config, defaults)."""
+    return {
+        "embedding_model": state.embedding_model or get_embedding_model(),
+        "embedding_source": state.embedding_source or get_embedding_source(),
+        "chat_model": state.chat_model or get_chat_model(),
+        "chat_source": state.chat_source or get_chat_source(),
+    }
+
+
+def load_saved_model_overrides() -> None:
+    """Apply model overrides persisted by the settings page to app state."""
+    overrides = user_settings.get_model_overrides()
+    _state.embedding_model = overrides.get("embedding_model")
+    _state.embedding_source = overrides.get("embedding_source")
+    _state.chat_model = overrides.get("chat_model")
+    _state.chat_source = overrides.get("chat_source")
+
+
+def _redirect_with_message(url: str, **params: str) -> RedirectResponse:
+    """Redirect to a vault page with query-string feedback parameters."""
+    filtered = {key: value for key, value in params.items() if value}
+    if filtered:
+        url = f"{url}?{urllib.parse.urlencode(filtered)}"
+    return RedirectResponse(url=url, status_code=303)
 
 
 def _keyword_search_enabled(vault_path: str) -> bool:
@@ -231,12 +279,18 @@ def _refresh_pipelines(force: bool = False) -> None:
     if not force and (current_time - _state.last_refresh_time) < 5.0:
         return
 
-    _state.search_pipeline = VaultSearch(vault_path=vault_path).as_function(
-        single_in=True, single_out=True
-    )
-    _state.chat_pipeline = VaultChat(vault_path=vault_path).as_function(
-        single_in=True, single_out=True
-    )
+    _state.search_pipeline = VaultSearch(
+        vault_path=vault_path,
+        embedding_model=_state.embedding_model,
+        embedding_source=_state.embedding_source,
+    ).as_function(single_in=True, single_out=True)
+    _state.chat_pipeline = VaultChat(
+        vault_path=vault_path,
+        embedding_model=_state.embedding_model,
+        embedding_source=_state.embedding_source,
+        chat_model=_state.chat_model,
+        chat_source=_state.chat_source,
+    ).as_function(single_in=True, single_out=True)
     _state.keyword_search_enabled = _keyword_search_enabled(vault_path)
     if _state.keyword_search_enabled:
         _state.keyword_search_pipeline = VaultTextSearch(
@@ -505,9 +559,26 @@ def _get_chunk_text_for_path_and_snippet(
     return ""
 
 
+def _vault_selected(state: AppState) -> bool:
+    """Return True when a vault is currently selected."""
+    return bool(state.vault_path)
+
+
+def _require_vault(state: AppState) -> RedirectResponse | None:
+    """Redirect to the vault manager when no vault is selected."""
+    if _vault_selected(state):
+        return None
+    return _redirect_with_message(
+        "/vaults", error="Choose or create a vault to get started."
+    )
+
+
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request, state: AppState = Depends(get_state)) -> HTMLResponse:
     """Render the home page with navigation to search and chat."""
+    redirect = _require_vault(state)
+    if redirect:
+        return redirect
     # Refresh document counts on home page load
     _update_document_counts(state.vault_path)
     return templates.TemplateResponse(
@@ -515,6 +586,260 @@ async def home(request: Request, state: AppState = Depends(get_state)) -> HTMLRe
         name="home.html",
         context=_template_context(request, state),
     )
+
+
+@app.get("/vaults", response_class=HTMLResponse)
+async def vaults_page(
+    request: Request,
+    message: str | None = None,
+    error: str | None = None,
+    state: AppState = Depends(get_state),
+) -> HTMLResponse:
+    """Render the vault manager for creating or choosing a vault."""
+    return templates.TemplateResponse(
+        request=request,
+        name="vaults.html",
+        context=_template_context(
+            request,
+            state,
+            recent_vaults=user_settings.get_recent_vaults(),
+            message=message,
+            error=error,
+        ),
+    )
+
+
+@app.post("/vaults/open", response_class=HTMLResponse)
+async def open_vault(
+    new_vault_path: Annotated[str, Form()],
+    state: AppState = Depends(get_state),
+) -> HTMLResponse:
+    """Open an existing vault, or create a new one when the path doesn't exist.
+
+    Expects form data with:
+        - new_vault_path: str - Directory for the vault (created if missing)
+    """
+    raw_path = new_vault_path.strip()
+    if not raw_path:
+        return _redirect_with_message("/vaults", error="Enter a vault path.")
+
+    vault_path = Path(raw_path).expanduser()
+    if vault_path.is_file():
+        return _redirect_with_message(
+            "/vaults",
+            error=f"{vault_path} is a file. A vault must be a directory.",
+        )
+
+    created = not vault_path.is_dir()
+    try:
+        vault_path.mkdir(parents=True, exist_ok=True)
+        init_pipelines(str(vault_path))
+    except (OSError, ValueError) as exc:
+        return _redirect_with_message("/vaults", error=str(exc))
+
+    user_settings.remember_vault(str(vault_path))
+    if created:
+        return _redirect_with_message(
+            "/documents",
+            message=(
+                f"Created new vault at {vault_path}. "
+                "Add documents to make it searchable."
+            ),
+        )
+    return _redirect_with_message("/", message=f"Opened vault at {vault_path}.")
+
+
+@app.get("/documents", response_class=HTMLResponse)
+async def documents_page(
+    request: Request,
+    message: str | None = None,
+    error: str | None = None,
+    state: AppState = Depends(get_state),
+) -> HTMLResponse:
+    """Render the page for indexing documents into the current vault."""
+    redirect = _require_vault(state)
+    if redirect:
+        return redirect
+    return templates.TemplateResponse(
+        request=request,
+        name="documents.html",
+        context=_template_context(
+            request,
+            state,
+            models=_effective_models(state),
+            message=message,
+            error=error,
+        ),
+    )
+
+
+def _resolve_source_pattern(raw_source: str) -> str:
+    """Turn a folder path into a recursive glob; leave explicit globs alone."""
+    source = os.path.expanduser(raw_source.strip())
+    if os.path.isdir(source):
+        return os.path.join(source, "**", "*")
+    return source
+
+
+def index_documents_into_vault(
+    vault_path: str,
+    source_pattern: str,
+    embedding_model: str,
+    embedding_source: str,
+    overwrite: bool = False,
+) -> int:
+    """Index documents matching a glob into the vault's docs table.
+
+    Uses TalkPipe's document pipeline (the same one behind the
+    makevectordatabase CLI) so the resulting table matches what the
+    search/chat pipelines expect. Returns the number of indexed chunks.
+    """
+    ensure_supported_vault_layout(vault_path)
+    pipeline = ProcessDocumentsSegment() | MakeVectorDatabaseSegment(
+        embedding_field="shingle_text",
+        embedding_model=embedding_model,
+        embedding_source=embedding_source,
+        path=get_vector_db_path(vault_path),
+        table_name=DEFAULT_VECTOR_TABLE_NAME,
+        doc_id_field=None,
+        overwrite=overwrite,
+        batch_size=100,
+        fail_on_error=False,
+    )
+    chunk_count = 0
+    for _ in pipeline.transform([source_pattern]):
+        chunk_count += 1
+    return chunk_count
+
+
+@app.post("/documents/index", response_class=HTMLResponse)
+async def index_documents(
+    source_path: Annotated[str, Form()],
+    overwrite: Annotated[bool, Form()] = False,
+    state: AppState = Depends(get_state),
+) -> HTMLResponse:
+    """Index documents from a folder or glob pattern into the current vault.
+
+    Expects form data with:
+        - source_path: str - Folder path or glob pattern of documents to index
+        - overwrite: bool - Replace the existing index instead of adding to it
+    """
+    redirect = _require_vault(state)
+    if redirect:
+        return redirect
+
+    if not source_path.strip():
+        return _redirect_with_message(
+            "/documents", error="Enter a folder or glob pattern to index."
+        )
+
+    pattern = _resolve_source_pattern(source_path)
+    if not globlib.glob(pattern, recursive=True):
+        return _redirect_with_message(
+            "/documents",
+            error=(
+                f"'{source_path.strip()}' matched no files. Check the folder "
+                "path or glob pattern."
+            ),
+        )
+
+    models = _effective_models(state)
+    try:
+        chunk_count = index_documents_into_vault(
+            vault_path=state.vault_path,
+            source_pattern=pattern,
+            embedding_model=models["embedding_model"],
+            embedding_source=models["embedding_source"],
+            overwrite=overwrite,
+        )
+    except Exception as exc:
+        return _redirect_with_message("/documents", error=str(exc))
+
+    _refresh_pipelines(force=True)
+    _update_document_counts(state.vault_path)
+
+    if chunk_count == 0:
+        return _redirect_with_message(
+            "/documents",
+            error=(
+                "The matched files contained no readable document content; "
+                "nothing was indexed."
+            ),
+        )
+    return _redirect_with_message(
+        "/documents",
+        message=(
+            f"Indexed {chunk_count} chunk(s) using "
+            f"{models['embedding_source']}/{models['embedding_model']}."
+        ),
+    )
+
+
+@app.get("/settings", response_class=HTMLResponse)
+async def settings_page(
+    request: Request,
+    message: str | None = None,
+    error: str | None = None,
+    state: AppState = Depends(get_state),
+) -> HTMLResponse:
+    """Render the model configuration page."""
+    return templates.TemplateResponse(
+        request=request,
+        name="settings.html",
+        context=_template_context(
+            request,
+            state,
+            models=_effective_models(state),
+            embedding_sources=getEmbeddingSources(),
+            chat_sources=getPromptSources(),
+            message=message,
+            error=error,
+        ),
+    )
+
+
+@app.post("/settings", response_class=HTMLResponse)
+async def save_settings(
+    embedding_source: Annotated[str, Form()] = "",
+    embedding_model: Annotated[str, Form()] = "",
+    chat_source: Annotated[str, Form()] = "",
+    chat_model: Annotated[str, Form()] = "",
+    state: AppState = Depends(get_state),
+) -> HTMLResponse:
+    """Save model configuration chosen in the web interface.
+
+    Expects form data with:
+        - embedding_source / embedding_model: provider and model for embeddings
+        - chat_source / chat_model: provider and model for chat/completion
+    """
+    previous_embedding = (
+        _effective_models(state)["embedding_source"],
+        _effective_models(state)["embedding_model"],
+    )
+
+    user_settings.save_model_overrides(
+        embedding_source=embedding_source,
+        embedding_model=embedding_model,
+        chat_source=chat_source,
+        chat_model=chat_model,
+    )
+    load_saved_model_overrides()
+    if _vault_selected(state):
+        _refresh_pipelines(force=True)
+
+    models = _effective_models(state)
+    message = "Settings saved."
+    embedding_changed = previous_embedding != (
+        models["embedding_source"],
+        models["embedding_model"],
+    )
+    if embedding_changed:
+        message += (
+            " The embedding model changed: existing vaults were indexed with "
+            "the previous model, so re-index their documents (with Overwrite) "
+            "before searching them."
+        )
+    return _redirect_with_message("/settings", message=message)
 
 
 @app.post("/refresh", response_class=HTMLResponse)
@@ -538,6 +863,9 @@ async def search_page(
     request: Request, state: AppState = Depends(get_state)
 ) -> HTMLResponse:
     """Render the semantic search interface page."""
+    redirect = _require_vault(state)
+    if redirect:
+        return redirect
     return templates.TemplateResponse(
         request=request,
         name="search.html",
@@ -600,6 +928,9 @@ async def keyword_search_page(
     state: AppState = Depends(get_state),
 ) -> HTMLResponse:
     """Render the keyword search interface page."""
+    redirect = _require_vault(state)
+    if redirect:
+        return redirect
     return templates.TemplateResponse(
         request=request,
         name="keyword_search.html",
@@ -768,6 +1099,9 @@ async def chat_page(
     request: Request, state: AppState = Depends(get_state)
 ) -> HTMLResponse:
     """Render the Ask interface page."""
+    redirect = _require_vault(state)
+    if redirect:
+        return redirect
     return templates.TemplateResponse(
         request=request,
         name="chat.html",
@@ -827,7 +1161,7 @@ async def chat_response(
 
 
 def run_app(
-    vault_path: str,
+    vault_path: str = "",
     host: str = "127.0.0.1",
     port: int = 8000,
     show_source_paths: bool = False,
@@ -836,13 +1170,18 @@ def run_app(
     Start the web application server.
 
     Args:
-        vault_path: Path to LanceDB created by makevectordatabase.
+        vault_path: Path to LanceDB created by makevectordatabase. When empty,
+            the interface starts on the vault manager page so a vault can be
+            created or chosen in the browser.
         host: Host to bind to (default: 127.0.0.1)
         port: Port to listen on (default: 8000)
         show_source_paths: If True, display and serve source file paths in search results.
     """
     _state.show_source_paths = show_source_paths
-    init_pipelines(vault_path)
+    load_saved_model_overrides()
+    if vault_path:
+        init_pipelines(vault_path)
+        user_settings.remember_vault(vault_path)
     uvicorn.run(app, host=host, port=port)
 
 
@@ -853,9 +1192,12 @@ def main() -> None:
     )
     parser.add_argument(
         "vault_path",
+        nargs="?",
+        default="",
         help=(
             "Path to LanceDB directory containing the TalkPipe docs table "
-            "(e.g., output path from makevectordatabase)"
+            "(e.g., output path from makevectordatabase). When omitted, "
+            "create or choose a vault from the web interface."
         ),
     )
     parser.add_argument(

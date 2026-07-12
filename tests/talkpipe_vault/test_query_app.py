@@ -31,8 +31,11 @@ class _FakeDocStore:
 
 
 @pytest.fixture(autouse=True)
-def reset_app_state(tmp_path):
+def reset_app_state(tmp_path, monkeypatch):
     """Reset global query app state between tests."""
+    from talkpipe_vault.apps import user_settings
+
+    monkeypatch.setenv(user_settings.VAULT_HOME_ENV, str(tmp_path / "vault-home"))
     query._state.vault_path = str(tmp_path)
     query._state.search_pipeline = None
     query._state.chat_pipeline = None
@@ -42,6 +45,10 @@ def reset_app_state(tmp_path):
     query._state.keyword_search_enabled = False
     query._state.show_source_paths = False
     query._state.last_refresh_time = 0.0
+    query._state.embedding_model = None
+    query._state.embedding_source = None
+    query._state.chat_model = None
+    query._state.chat_source = None
     yield
 
 

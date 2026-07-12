@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+
+{% block title %}Add Documents - Talkpipe Vault{% endblock %}
+
+{% block content %}
+{% if message %}
+<div class="flash-status">{{ message }}</div>
+{% endif %}
+{% if error %}
+<div class="flash-error">{{ error }}</div>
+{% endif %}
+
+<div class="search-box">
+    <h2>Add Documents to This Vault</h2>
+    <p class="panel-hint">
+        Index files from a folder (searched recursively) or a glob pattern such as
+        <code>~/notes/**/*.md</code>. Documents are embedded with
+        <strong>{{ models.embedding_source }}/{{ models.embedding_model }}</strong>
+        (change this under Settings) into the vault at
+        <code>{{ vault_path }}</code>.
+    </p>
+    <form method="post" action="/documents/index" id="index-form">
+        <input type="text" name="source_path" id="source-path-input"
+               placeholder="e.g. ~/Documents/notes or ~/notes/**/*.md" autofocus>
+        <button type="submit" id="index-btn">Index Documents</button>
+    </form>
+    <label class="overwrite-option">
+        <input type="checkbox" name="overwrite" value="true" form="index-form">
+        Overwrite: replace the vault's existing index instead of adding to it
+    </label>
+</div>
+
+<div id="loading-overlay" class="search-loading" style="display: none;">
+    <div class="spinner"></div>
+    <span>Reading, chunking, and embedding documents. Large folders can take a while...</span>
+</div>
+
+<style>
+    .flash-status, .flash-error {
+        border-radius: 8px;
+        font-size: 0.95rem;
+        margin-bottom: 12px;
+        padding: 10px 14px;
+        text-align: center;
+    }
+    .flash-status {
+        background: #e6f4ea;
+        border: 1px solid #34a853;
+        color: #1f5f2e;
+    }
+    .flash-error {
+        background: #fce8e6;
+        border: 1px solid #ea4335;
+        color: #8b1d13;
+    }
+    .panel-hint {
+        color: var(--muted);
+        font-size: 0.92rem;
+        margin: 8px 0 14px;
+    }
+    .search-box h2 {
+        margin-bottom: 6px;
+    }
+    .overwrite-option {
+        color: var(--muted);
+        display: block;
+        font-size: 0.92rem;
+        margin-top: 12px;
+    }
+</style>
+
+<script>
+    document.getElementById('index-form').addEventListener('submit', function () {
+        document.getElementById('loading-overlay').style.display = 'flex';
+        document.getElementById('index-btn').disabled = true;
+    });
+</script>
+{% endblock %}
