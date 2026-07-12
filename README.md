@@ -19,7 +19,7 @@
 
 ## What is TalkPipe Vault?
 
-NOTE: TalkPipe Vault is still under development (in alpha) and not all features are intended for broad use.
+NOTE: TalkPipe Vault is still under development (in alpha) and is not intended for production use.
 
 **TalkPipe Vault** is a set of practical tools and reusable components for turning folders of files into a searchable "vault" you can explore with semantic search, keyword search, and retrieval-augmented Q&A. It is a production-oriented example built on the **[TalkPipe](https://github.com/sandialabs/talkpipe)** framework, demonstrating how to assemble document processing, vector search, and RAG with clean, composable pipelines.
 
@@ -37,9 +37,9 @@ Together, these applications and components provide both ready-to-use capabiliti
 
 ### Current Status
 
-The stable runtime path is: start `vault-server` (locally or in a container), then create a vault and index documents from the web interface — or build the vault ahead of time with TalkPipe's `makevectordatabase`.
+The stable runtime path is: start `vault-server`, then create a vault and index documents from the web interface — or build the vault ahead of time with TalkPipe's `makevectordatabase`.
 
-Directory monitoring is still under development. The watcher sources and helper functions are present in `talkpipe_vault.watchdog` and `talkpipe_vault.pipelines.building_and_watching`, but they are not started by the default container and should be treated as experimental until the indexing and serving paths are fully unified.
+Directory monitoring is still under development. The watcher sources and helper functions are present in `talkpipe_vault.watchdog` and `talkpipe_vault.pipelines.building_and_watching`, but they are not part of the default runtime and should be treated as experimental until the indexing and serving paths are fully unified.
 
 ### Key Features
 
@@ -78,8 +78,10 @@ vault-server ~/my-vault --host 127.0.0.1 --port 8002
 
 ### Installation
 
+TalkPipe Vault is in **alpha and is not yet published to PyPI**, so install it
+from source by cloning the repository and doing an editable install:
+
 ```bash
-# Install from source
 git clone https://github.com/sandialabs/talkpipe-vault.git
 cd talkpipe-vault
 
@@ -90,10 +92,16 @@ python -m venv .venv
 source .venv/bin/activate      # Windows: .venv\Scripts\activate
 
 pip install -e .
-
-# For development
-pip install -e ".[dev]"
 ```
+
+This installs the `vault-server` command along with TalkPipe and its
+`makevectordatabase` command, so you're ready to jump to [Basic Usage](#basic-usage).
+(Add the `[dev]` extra — `pip install -e ".[dev]"` — if you also want the test and
+lint tools; see [Development Setup](#development-setup) for the full workflow.)
+
+> **Note:** `pip install talkpipe-vault` from PyPI does not work yet — the package
+> has not been published. This section will switch to the PyPI install once the
+> first release is out.
 
 ### Basic Usage
 
@@ -123,7 +131,7 @@ To show file-path links in search results, add `--show-source-paths` (hidden by 
 
 ### Experimental Directory Monitoring
 
-Directory monitoring is not the recommended production path yet. The default container does not start a watcher, and the installed package currently exposes only `vault-server` as a console script.
+Directory monitoring is not the recommended production path yet. The installed package currently exposes only `vault-server` as a console script.
 
 For local experiments, you can call the watcher helper directly:
 
@@ -137,135 +145,6 @@ python -c "from talkpipe_vault.pipelines.cli import watch_vectordb_main; watch_v
 ```
 
 The watcher pipeline writes LanceDB content directly under `~/watched-vault` and Whoosh data under `~/watched-vault/fulltext_vault`.
-
----
-
-## Container Deployment
-
-TalkPipe Vault can run in a Podman or Docker-compatible container with no local Python installation. The default container serves the web interface for an existing vault; it does not start a live file watcher.
-
-### Prerequisites
-
-- [Podman](https://podman.io/) installed
-- For local AI models: [Ollama](https://ollama.ai/) reachable from the container. Set `TALKPIPE_OLLAMA_SERVER_URL` to the URL that works from inside the container: `http://host.containers.internal:11434` when Ollama runs on the container host, or `http://your-ollama-host:11434` for a remote server.
-
-### Build the Image
-
-```bash
-podman build -t talkpipe-vault -f Containerfile .
-```
-
-### Run the Web Server Container
-
-```bash
-mkdir -p ~/Desktop/talkpipe-vault-data/vault
-
-podman run --rm -p 8002:8002 \
-    --name talkpipe-vault \
-    --userns=keep-id \
-    --add-host=host.containers.internal:host-gateway \
-    -v ~/Desktop/talkpipe-vault-data:/app/data:Z \
-    -v /path/to/documents:/documents:ro,Z \
-    -e TALKPIPE_OLLAMA_SERVER_URL=http://host.containers.internal:11434 \
-    talkpipe-vault
-```
-
-The web interface is at **http://localhost:8002**. The vault database is stored under `~/Desktop/talkpipe-vault-data/vault` on the host and mounted at `/app/data/vault` in the container. Your documents are readable inside the container at `/documents`, so on the **Add Documents** page enter `/documents` (or a glob such as `/documents/**/*.md`) to index them.
-
-### Build a Vault in the Container from the Command Line
-
-Instead of indexing through the web interface, you can run TalkPipe's `makevectordatabase` inside the image:
-
-```bash
-podman run --rm \
-    --userns=keep-id \
-    --add-host=host.containers.internal:host-gateway \
-    -v /path/to/documents:/documents:ro,Z \
-    -v ~/Desktop/talkpipe-vault-data:/app/data:Z \
-    -e TALKPIPE_OLLAMA_SERVER_URL=http://host.containers.internal:11434 \
-    talkpipe-vault \
-    makevectordatabase "/documents/**/*.txt" \
-        --path /app/data/vault \
-        --embedding_source model2vec \
-        --embedding_model minishlab/potion-retrieval-32M \
-        --overwrite
-```
-
-If you already built the vault locally at `~/Desktop/talkpipe-vault-data/vault`, skip this step and run the server container directly.
-
-### Run With Compose
-
-You can also build and run the web server from the repository with Compose-compatible tooling. The production service uses a named volume at `/app/data`; use direct `podman run` with a bind mount when you want to point the container at a specific host vault directory.
-
-```bash
-# Production web service
-docker-compose up vault
-
-# Development container
-docker-compose --profile dev up vault-dev
-```
-
-### Experimental Monitoring in a Container
-
-Directory monitoring remains experimental. If you want to test it in a container, override the default command and mount both the watched directory and the output directory:
-
-```bash
-podman run --rm \
-    --userns=keep-id \
-    --add-host=host.containers.internal:host-gateway \
-    -v /path/to/documents:/documents:Z \
-    -v ~/Desktop/talkpipe-vault-data:/app/data:Z \
-    -e TALKPIPE_OLLAMA_SERVER_URL=http://host.containers.internal:11434 \
-    talkpipe-vault \
-    python -c "from talkpipe_vault.pipelines.cli import watch_vectordb_main; watch_vectordb_main()" \
-        /documents \
-        --vault-path /app/data/watched-vault \
-        --patterns "*.txt" "*.md" \
-        --polling
-```
-
-This is for development testing, not unattended production monitoring.
-
-### Debugging
-
-Connect to a running container with standard Podman commands:
-
-```bash
-podman ps
-podman exec -it talkpipe-vault /bin/bash
-```
-
-### Ollama Access
-
-Set `TALKPIPE_OLLAMA_SERVER_URL` to the URL that is reachable from inside the container. For an Ollama server on a remote machine, use:
-
-```bash
-podman run -it --rm \
-    --name talkpipe-vault \
-    --userns=keep-id \
-    -p 8002:8002 \
-    --add-host=host.containers.internal:host-gateway \
-    -v ~/Desktop/talkpipe-vault-data:/app/data:Z \
-    -e VAULT_PATH=/app/data/vault \
-    -e TALKPIPE_OLLAMA_SERVER_URL=http://your-ollama-host:11434 \
-    talkpipe-vault
-```
-
-(`VAULT_PATH` points to the LanceDB directory directly.) If Ollama runs on the same host as Podman, use `http://host.containers.internal:11434` instead.
-
-### Troubleshooting
-
-**Permission errors on vault directory**
-
-Use `--userns=keep-id` so the container runs as your user. If problems persist:
-
-```bash
-chmod -R u+rwX ~/Desktop/talkpipe-vault-data/vault
-```
-
-**Ollama not reachable**
-
-Ensure the hostname is reachable from inside the container and that Ollama is listening on a non-loopback interface on that machine. For a remote server, `TALKPIPE_OLLAMA_SERVER_URL` should be `http://your-ollama-host:11434`; for Ollama on the container host, use `http://host.containers.internal:11434`.
 
 ---
 
@@ -686,10 +565,7 @@ talkpipe-vault/
 ├── docs/
 │   └── talkpipe_vault.jpg                  # Project logo
 ├── tests/                                  # Test suite
-├── pyproject.toml                          # Package configuration
-├── Containerfile                           # Container image
-├── docker-compose.yml                      # Compose services for container runs
-└── .env.example                            # Example container environment
+└── pyproject.toml                          # Package configuration
 ```
 
 ## Requirements

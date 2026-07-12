@@ -63,6 +63,7 @@
 - Flagged the "Building Your Own Pipelines" examples as using the experimental watcher/list components, which write the `full_documents`/`shingled_chunks` layout rather than the `docs` table that `vault-server` reads, and clarified that the file-watcher example runs until interrupted.
 
 #### Installation
+- Clarified that TalkPipe Vault is in alpha and not yet published to PyPI, so the editable source install (`pip install -e .`) is the documented path; added a note that `pip install talkpipe-vault` does not work yet and that the section will switch to the PyPI install once the first release is out.
 - Added an explicit virtual-environment step to the Installation and Development Setup instructions, with a note that recent Linux distributions mark the system Python as externally managed (PEP 668), so a bare `pip install` into it fails. Quoted the `.[dev]` extras so the command also works in shells like zsh.
 
 #### Keyword search behavior
@@ -71,10 +72,9 @@
 #### Vault storage structure
 - Rewrote the "Vault Storage Structure" section to lead with the stable layout that `vault-server` actually reads (the `docs` LanceDB table produced by Add Documents / `makevectordatabase`, plus the on-demand `fulltext_vault` Whoosh index) and clearly label the `full_documents`/`shingled_chunks` tables as the separate experimental watcher layout.
 
-#### Podman Deployment
-- Added README section for Podman deployment: prerequisites, quick start, configuration, scripts, debugging, Ollama access, troubleshooting
-- Updated container examples and Compose environment to support a remote Ollama
-  server at `deeplearn`.
+#### Container / Podman Deployment
+- Removed the Container Deployment section and all container references (Podman/Docker build and run, Compose, `Containerfile`/`docker-compose.yml`/`.env.example` in the project tree, and the "locally or in a container" / "default container" mentions) from the README. The container workflow needs more thorough testing before it is advertised; it will be documented again once verified.
+- (Earlier) Added README section for Podman deployment: prerequisites, quick start, configuration, scripts, debugging, Ollama access, troubleshooting; updated container examples and Compose environment to support a remote Ollama server at `deeplearn`.
 
 #### TalkPipe 0.12 Compatibility Notes
 - Updated README and `vault-query` CLI help to clarify that query mode expects a LanceDB path containing TalkPipe's `docs` table (for example, output from `makevectordatabase`).
