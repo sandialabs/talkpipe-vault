@@ -1,4 +1,5 @@
 import json
+import logging
 from typing import Annotated, Any
 
 from talkpipe import segment
@@ -31,6 +32,8 @@ from .config import (
     get_whoosh_index_path,
 )
 
+logger = logging.getLogger(__name__)
+
 
 def _has_document_fts_index(table: Any, field_name: str) -> bool:
     """Return True when an FTS index exists for the target field."""
@@ -46,6 +49,7 @@ def _has_document_fts_index(table: Any, field_name: str) -> bool:
             if field_name in list(index.columns):
                 return True
         except Exception:
+            logger.debug("Skipping unreadable index entry", exc_info=True)
             continue
     return False
 
