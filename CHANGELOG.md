@@ -48,8 +48,19 @@
 
 #### Packaging Cleanup
 - Fixed coverage and isort configuration to reference the `talkpipe_vault` package (previously pointed at a nonexistent `vault` package), removed a stale package-data entry and commented-out console scripts, removed the empty `segments` module, and cleaned an unused import out of the plugin initializer.
+- Added a Python 3.14 trove classifier (the package builds and runs on 3.14).
 
 ### Documentation
+
+#### Building Your Own Pipelines examples
+- Fixed the "Using registered components via configuration" example, which imported a non-existent `talkpipe.Pipeline` and a fabricated `Pipeline.from_config` API. It now uses the real config-driven path — a chatterlang script compiled with `talkpipe.compile` — and references the registered source by name with its correct parameter (`source_pattern`).
+- Flagged the "Building Your Own Pipelines" examples as using the experimental watcher/list components, which write the `full_documents`/`shingled_chunks` layout rather than the `docs` table that `vault-server` reads, and clarified that the file-watcher example runs until interrupted.
+
+#### Installation
+- Added an explicit virtual-environment step to the Installation and Development Setup instructions, with a note that recent Linux distributions mark the system Python as externally managed (PEP 668), so a bare `pip install` into it fails. Quoted the `.[dev]` extras so the command also works in shells like zsh.
+
+#### Keyword search behavior
+- Documented that web keyword search matches exact, case-insensitive word tokens (no stemming) — e.g. `apple` does not match `apples` — and to prefer semantic search for meaning-based lookups.
 
 #### Podman Deployment
 - Added README section for Podman deployment: prerequisites, quick start, configuration, scripts, debugging, Ollama access, troubleshooting

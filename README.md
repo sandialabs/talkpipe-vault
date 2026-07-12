@@ -55,7 +55,7 @@ TalkPipe Vault includes a web application for building, searching, and querying 
 - **Add Documents**: Index a folder (pickable with the folder browser) or glob pattern of documents into the current vault
 - **Settings**: Configure the provider (source) and model for both embeddings and chat
 - **Semantic Search**: Find documents by meaning using AI-powered vector similarity search
-- **Keyword Search**: Traditional full-text search with boolean operators (AND, OR, NOT) and phrase matching
+- **Keyword Search**: Traditional full-text search with boolean operators (AND, OR, NOT) and phrase matching. Matching is case-insensitive but on exact word tokens (no stemming), so `apple` will not match `apples` — use semantic search for meaning-based lookups, or search the exact word form.
 - **Ask a Question**: Get AI-generated answers based on your vault's contents (single-turn Q&A)
 - **Copy Results**: Easily copy search results or answers to clipboard
 
@@ -79,10 +79,17 @@ vault-server ~/my-vault --host 127.0.0.1 --port 8002
 # Install from source
 git clone https://github.com/sandialabs/talkpipe-vault.git
 cd talkpipe-vault
+
+# Create and activate a virtual environment first. Recent Linux distributions
+# (Debian/Ubuntu/Fedora) mark the system Python as "externally managed" (PEP 668),
+# so installing into it fails; a venv avoids that.
+python -m venv .venv
+source .venv/bin/activate      # Windows: .venv\Scripts\activate
+
 pip install -e .
 
 # For development
-pip install -e .[dev]
+pip install -e ".[dev]"
 ```
 
 ### Basic Usage
@@ -367,6 +374,13 @@ TalkPipe Vault registers custom sources and segments with TalkPipe:
 
 One of TalkPipe's strengths is composability. Here's how TalkPipe Vault builds complex functionality from simple pipeline operators:
 
+> **Note:** Examples 1–3 below use the **experimental** watcher/list components
+> (`fileWatcher`, `watchIntoVectorDB`, `listIntoVectorDB`). They are useful for
+> understanding composition and for development, but the watcher pipelines write the
+> experimental `full_documents`/`shingled_chunks` layout, **not** the `docs` table that
+> `vault-server` reads. For the stable path, index with `makevectordatabase` or the
+> **Add Documents** page. See [Current Status](#current-status).
+
 **Example 1: Simple file watching pipeline**
 
 ```python
@@ -376,7 +390,8 @@ from talkpipe.pipe.io import Print
 # Watch a directory and print events
 pipeline = file_watcher(path="/path/to/watch") | Print()
 
-# Run the pipeline
+# Run the pipeline. file_watcher runs until interrupted (Ctrl+C), so this loop
+# does not return on its own — each iteration yields one filesystem event.
 for event in pipeline():
     # Process events as they occur
     pass
@@ -412,24 +427,37 @@ for result in pipeline():
 
 **Example 3: Using registered components via configuration**
 
+The registered sources and segments (see [Custom TalkPipe Components](#custom-talkpipe-components))
+can be referenced by name from a TalkPipe **chatterlang** script, which you compile with
+`talkpipe.compile`. This batch example indexes a glob of files with the experimental
+`listIntoVectorDB` source (note the parameter is `source_pattern`, not a directory path):
+
 ```python
-from talkpipe import Pipeline
+import talkpipe
 
-# Create a pipeline from configuration
-pipeline = Pipeline.from_config({
-    "source": {
-        "type": "watchIntoVectorDB",
-        "source_path": "/path/to/watch",
-        "vault_path": "~/my-vault",
-        "embedding_model": "mxbai-embed-large:latest",
-        "embedding_source": "ollama",
-        "polling": True
-    }
-})
+# Registered components are discovered from installed plugins.
+talkpipe.load_plugins()
 
-# Run it
-list(pipeline())
+pipeline = talkpipe.compile(
+    'INPUT FROM listIntoVectorDB['
+    '  source_pattern="/path/to/documents/**/*.txt",'
+    '  vault_path="~/watched-vault",'
+    '  embedding_source="model2vec",'
+    '  embedding_model="minishlab/potion-retrieval-32M",'
+    '  overwrite=True'
+    ']'
+)
+
+# Run it. Each yielded item is an indexed chunk
+# (keys: shingle_id, shingle, source, title).
+chunks = list(pipeline())
+print(f"Indexed {len(chunks)} chunk(s) into the vault.")
 ```
+
+To watch a directory instead of processing a fixed glob, use the `watchIntoVectorDB`
+source (which takes `source_path` and `polling`) in place of `listIntoVectorDB` — it runs
+until interrupted. Both write the experimental `full_documents`/`shingled_chunks` layout
+rather than the `docs` table used by `vault-server`.
 
 This composability is what makes TalkPipe powerful: you can build sophisticated AI applications by connecting well-tested components.
 
@@ -450,8 +478,13 @@ These are produced by the pipelines in [src/talkpipe_vault/pipelines/building_an
 git clone https://github.com/sandialabs/talkpipe-vault.git
 cd talkpipe-vault
 
+# Create and activate a virtual environment (see the note under Installation
+# about PEP 668 / "externally managed" system Python)
+python -m venv .venv
+source .venv/bin/activate      # Windows: .venv\Scripts\activate
+
 # Install with development dependencies
-pip install -e .[dev]
+pip install -e ".[dev]"
 
 # Run tests
 pytest
