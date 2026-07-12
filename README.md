@@ -11,7 +11,10 @@
 [![Development Status](https://img.shields.io/badge/status-alpha-yellow.svg)](https://github.com/sandialabs/talkpipe-vault)
 
 <p align="center">
-<img src="docs/talkpipe_homepage.png" alt="Talkpipe Homepage" width="100%">
+<img src="docs/vault-homepage.png" alt="Talkpipe Homepage" width="100%">
+</p>
+<p align="center">
+<img src="docs/vault-search.png" alt="vault search example" width="100%">
 </p>
 
 ## What is TalkPipe Vault?
