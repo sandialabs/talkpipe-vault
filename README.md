@@ -21,8 +21,8 @@ NOTE: TalkPipe Vault is still under development (in alpha) and not all features 
 **TalkPipe Vault** is a set of practical tools and reusable components for turning folders of files into a searchable "vault" you can explore with semantic search, keyword search, and retrieval-augmented Q&A. It is a production-oriented example built on the **[TalkPipe](https://github.com/sandialabs/talkpipe)** framework, demonstrating how to assemble document processing, vector search, and RAG with clean, composable pipelines.
 
 What you get:
-- **A web application for discovery**: `vault-server` starts a FastAPI UI for semantic search, keyword search, and single-turn Q&A over an existing vault.
-- **Command-line indexing through TalkPipe**: use TalkPipe's `makevectordatabase` command to create the LanceDB `docs` table consumed by the web application.
+- **A self-contained web application**: `vault-server` starts a FastAPI UI where you can create or choose a vault, index documents into it, configure the embedding and chat models, and then explore it with semantic search, keyword search, and single-turn Q&A — all from the browser.
+- **Command-line indexing through TalkPipe**: alternatively, use TalkPipe's `makevectordatabase` command to create the LanceDB `docs` table consumed by the web application.
 - **Reusable building blocks**: TalkPipe sources, segments, and end-to-end pipelines that you can compose to build your own file/document management workflows.
 
 How it works (at a glance):
@@ -34,7 +34,7 @@ Together, these applications and components provide both ready-to-use capabiliti
 
 ### Current Status
 
-The stable runtime path is: build a vault with TalkPipe's `makevectordatabase`, then serve it with `vault-server` either locally or in a container.
+The stable runtime path is: start `vault-server` (locally or in a container), then create a vault and index documents from the web interface — or build the vault ahead of time with TalkPipe's `makevectordatabase`.
 
 Directory monitoring is still under development. The watcher sources and helper functions are present in `talkpipe_vault.watchdog` and `talkpipe_vault.pipelines.building_and_watching`, but they are not started by the default container and should be treated as experimental until the indexing and serving paths are fully unified.
 
@@ -49,8 +49,11 @@ Directory monitoring is still under development. The watcher sources and helper 
 
 ### Web Interface
 
-TalkPipe Vault includes a web application for searching and querying your document collection:
+TalkPipe Vault includes a web application for building, searching, and querying your document collection:
 
+- **Vaults**: Create a new vault or choose an existing one; recently used vaults are remembered
+- **Add Documents**: Index a folder or glob pattern of documents into the current vault
+- **Settings**: Configure the provider (source) and model for both embeddings and chat
 - **Semantic Search**: Find documents by meaning using AI-powered vector similarity search
 - **Keyword Search**: Traditional full-text search with boolean operators (AND, OR, NOT) and phrase matching
 - **Ask a Question**: Get AI-generated answers based on your vault's contents (single-turn Q&A)
@@ -59,10 +62,14 @@ TalkPipe Vault includes a web application for searching and querying your docume
 **Launch the web interface:**
 
 ```bash
-vault-server ~/my-vault --host 127.0.0.1 --port 8002
+vault-server
 ```
 
-Then open http://127.0.0.1:8002 in your browser.
+Then open http://127.0.0.1:8002 in your browser and create or choose a vault from the Vaults page. To open a vault directly, pass its path:
+
+```bash
+vault-server ~/my-vault --host 127.0.0.1 --port 8002
+```
 
 ## Quick Start
 
@@ -80,31 +87,29 @@ pip install -e .[dev]
 
 ### Basic Usage
 
-**Build a vault from existing files:**
+**Option 1 — everything in the browser:**
+
+```bash
+vault-server
+```
+
+Open http://127.0.0.1:8002, create a vault on the **Vaults** page, index a folder of documents on the **Add Documents** page, and start searching. Pick your embedding and chat models on the **Settings** page (defaults: Ollama with `embeddinggemma` for embeddings and `mistral-small` for chat).
+
+**Option 2 — build the vault from the command line:**
 
 ```bash
 makevectordatabase "/path/to/documents/**/*.txt" \
     --path ~/my-vault \
+    --embedding_source ollama \
+    --embedding_model embeddinggemma \
     --overwrite
-```
 
-`vault-server` expects a LanceDB directory containing TalkPipe's `docs` table. The `makevectordatabase` command above creates that layout.
-
-**Run the web interface from the command line:**
-
-```bash
 vault-server ~/my-vault --host 127.0.0.1 --port 8002
 ```
 
-Then open http://127.0.0.1:8002 in your browser.
+`vault-server` expects a LanceDB directory containing TalkPipe's `docs` table; `makevectordatabase` creates that layout. Note that `makevectordatabase` requires the embedding configuration explicitly — pass `--embedding_source`/`--embedding_model` or set `default_embedding_model_source`/`default_embedding_model_name` in `~/.talkpipe.toml` (or as `TALKPIPE_*` environment variables).
 
-**Run the web interface with Python directly:**
-
-```bash
-python -m talkpipe_vault.apps.query ~/my-vault --host 127.0.0.1 --port 8002
-```
-
-Use this form when you need options exposed by the app module, such as `--show-source-paths`.
+To show file-path links in search results, add `--show-source-paths` (hidden by default).
 
 ### Experimental Directory Monitoring
 
@@ -132,7 +137,7 @@ TalkPipe Vault can run in a Podman or Docker-compatible container with no local 
 ### Prerequisites
 
 - [Podman](https://podman.io/) installed
-- For local AI models: [Ollama](https://ollama.ai/) reachable from the container. The examples use `http://deeplearn:11434`; change `OLLAMA_BASE_URL` if your Ollama server is elsewhere.
+- For local AI models: [Ollama](https://ollama.ai/) reachable from the container. Set `TALKPIPE_OLLAMA_SERVER_URL` to the URL that works from inside the container: `http://host.containers.internal:11434` when Ollama runs on the container host, or `http://your-ollama-host:11434` for a remote server.
 
 ### Build the Image
 
@@ -140,39 +145,43 @@ TalkPipe Vault can run in a Podman or Docker-compatible container with no local 
 podman build -t talkpipe-vault -f Containerfile .
 ```
 
-### Build a Vault in the Container
-
-Mount your document directory and a host data directory, then run TalkPipe's `makevectordatabase` inside the image:
+### Run the Web Server Container
 
 ```bash
 mkdir -p ~/Desktop/talkpipe-vault-data/vault
 
-podman run --rm \
-    --userns=keep-id \
-    --add-host=host.containers.internal:host-gateway \
-    -v /path/to/documents:/documents:Z \
-    -v ~/Desktop/talkpipe-vault-data:/app/data:Z \
-    -e OLLAMA_BASE_URL=http://deeplearn:11434 \
-    talkpipe-vault \
-    makevectordatabase "/documents/**/*.txt" \
-        --path /app/data/vault \
-        --overwrite
-```
-
-If you already built the vault locally at `~/Desktop/talkpipe-vault-data/vault`, skip this step and run the server container directly.
-
-### Run the Web Server Container
-
-```bash
 podman run --rm -p 8002:8002 \
     --name talkpipe-vault \
     --userns=keep-id \
     --add-host=host.containers.internal:host-gateway \
     -v ~/Desktop/talkpipe-vault-data:/app/data:Z \
+    -v /path/to/documents:/documents:ro,Z \
+    -e TALKPIPE_OLLAMA_SERVER_URL=http://host.containers.internal:11434 \
     talkpipe-vault
 ```
 
-The web interface is at **http://localhost:8002**. The vault database is stored under `~/Desktop/talkpipe-vault-data/vault` on the host and mounted at `/app/data/vault` in the container.
+The web interface is at **http://localhost:8002**. The vault database is stored under `~/Desktop/talkpipe-vault-data/vault` on the host and mounted at `/app/data/vault` in the container. Your documents are readable inside the container at `/documents`, so on the **Add Documents** page enter `/documents` (or a glob such as `/documents/**/*.md`) to index them.
+
+### Build a Vault in the Container from the Command Line
+
+Instead of indexing through the web interface, you can run TalkPipe's `makevectordatabase` inside the image:
+
+```bash
+podman run --rm \
+    --userns=keep-id \
+    --add-host=host.containers.internal:host-gateway \
+    -v /path/to/documents:/documents:ro,Z \
+    -v ~/Desktop/talkpipe-vault-data:/app/data:Z \
+    -e TALKPIPE_OLLAMA_SERVER_URL=http://host.containers.internal:11434 \
+    talkpipe-vault \
+    makevectordatabase "/documents/**/*.txt" \
+        --path /app/data/vault \
+        --embedding_source ollama \
+        --embedding_model embeddinggemma \
+        --overwrite
+```
+
+If you already built the vault locally at `~/Desktop/talkpipe-vault-data/vault`, skip this step and run the server container directly.
 
 ### Run With Compose
 
@@ -196,7 +205,7 @@ podman run --rm \
     --add-host=host.containers.internal:host-gateway \
     -v /path/to/documents:/documents:Z \
     -v ~/Desktop/talkpipe-vault-data:/app/data:Z \
-    -e OLLAMA_BASE_URL=http://deeplearn:11434 \
+    -e TALKPIPE_OLLAMA_SERVER_URL=http://host.containers.internal:11434 \
     talkpipe-vault \
     python -c "from talkpipe_vault.pipelines.cli import watch_vectordb_main; watch_vectordb_main()" \
         /documents \
@@ -218,7 +227,7 @@ podman exec -it talkpipe-vault /bin/bash
 
 ### Ollama Access
 
-Set `OLLAMA_BASE_URL` to the URL that is reachable from inside the container. If Ollama runs on `deeplearn`, use:
+Set `TALKPIPE_OLLAMA_SERVER_URL` to the URL that is reachable from inside the container. For an Ollama server on a remote machine, use:
 
 ```bash
 podman run -it --rm \
@@ -227,13 +236,12 @@ podman run -it --rm \
     -p 8002:8002 \
     --add-host=host.containers.internal:host-gateway \
     -v ~/Desktop/talkpipe-vault-data:/app/data:Z \
-    # VAULT_PATH points to the LanceDB directory directly.
     -e VAULT_PATH=/app/data/vault \
-    -e OLLAMA_BASE_URL=http://deeplearn:11434 \
+    -e TALKPIPE_OLLAMA_SERVER_URL=http://your-ollama-host:11434 \
     talkpipe-vault
 ```
 
-If Ollama runs on the same host as Podman, use `http://host.containers.internal:11434` instead.
+(`VAULT_PATH` points to the LanceDB directory directly.) If Ollama runs on the same host as Podman, use `http://host.containers.internal:11434` instead.
 
 ### Troubleshooting
 
@@ -247,7 +255,7 @@ chmod -R u+rwX ~/Desktop/talkpipe-vault-data/vault
 
 **Ollama not reachable**
 
-Ensure the hostname is reachable from inside the container and that Ollama is listening on a non-loopback interface on that machine. For a remote server such as `deeplearn`, `OLLAMA_BASE_URL` should be `http://deeplearn:11434`.
+Ensure the hostname is reachable from inside the container and that Ollama is listening on a non-loopback interface on that machine. For a remote server, `TALKPIPE_OLLAMA_SERVER_URL` should be `http://your-ollama-host:11434`; for Ollama on the container host, use `http://host.containers.internal:11434`.
 
 ---
 
@@ -269,10 +277,11 @@ TalkPipe Vault is built on [TalkPipe](https://github.com/sandialabs/talkpipe), a
 
 ### Processing Pipeline
 
-The stable web application reads a LanceDB directory containing TalkPipe's `docs` table. Create that database with TalkPipe's `makevectordatabase` command:
+The stable web application reads a LanceDB directory containing TalkPipe's `docs` table. The **Add Documents** page creates that database with TalkPipe's document pipeline; TalkPipe's `makevectordatabase` command produces the same layout:
 
 ```bash
-makevectordatabase "/path/to/documents/**/*.txt" --path ~/my-vault --overwrite
+makevectordatabase "/path/to/documents/**/*.txt" --path ~/my-vault \
+    --embedding_source ollama --embedding_model embeddinggemma --overwrite
 ```
 
 The in-development monitoring pipeline uses a separate internal flow:
@@ -290,36 +299,41 @@ TalkPipe Vault currently installs `vault-server` as its package console script. 
 
 #### `makevectordatabase`
 
-Builds the LanceDB `docs` table used by `vault-server`.
+Builds the LanceDB `docs` table used by `vault-server`. Embedding configuration is required — pass it explicitly or set it in the TalkPipe config.
 
 ```bash
 makevectordatabase "/path/to/documents/**/*.txt" \
     --path ~/my-vault \
+    --embedding_source ollama \
+    --embedding_model embeddinggemma \
     --overwrite
 ```
 
 #### `vault-server`
 
-Launches the web interface for searching and querying your vault.
+Launches the web interface. The vault path is optional; without it, create or choose a vault on the Vaults page.
 
 ```bash
-vault-server ~/my-vault --host 0.0.0.0 --port 8002
+vault-server [~/my-vault] [--host 0.0.0.0] [--port 8002] [--show-source-paths]
 ```
 
-The web interface provides three modes:
+The web interface provides:
+- **Vaults**: Create a new vault or choose an existing one
+- **Add Documents**: Index a folder or glob pattern into the current vault
+- **Settings**: Choose the embedding and chat source/model
 - **Semantic Search**: Vector similarity search to find documents by meaning
 - **Keyword Search**: Full-text search when a Whoosh index is available
 - **Ask**: Single-turn Q&A that retrieves relevant context and generates AI responses
 
+`--show-source-paths` shows source file paths in search results and serves the files over HTTP; they are hidden by default.
+
 #### Python Module Entry Point
 
-The app module can also be run directly:
+The app module can also be run directly with the same options:
 
 ```bash
 python -m talkpipe_vault.apps.query ~/my-vault --host 0.0.0.0 --port 8002
 ```
-
-Use this form for app-module options such as `--show-source-paths`.
 
 #### Experimental Watcher Helpers
 
@@ -465,8 +479,9 @@ safety check
 TalkPipe Vault supports flexible model configuration through multiple methods, with the following precedence (highest to lowest):
 
 1. **Explicit parameters** in code/CLI (always takes precedence)
-2. **TalkPipe configuration** (from `~/.talkpipe.toml` or `TALKPIPE_*` environment variables)
-3. **Default values** in `config.py` (fallback)
+2. **Web interface Settings page** (persisted under `~/.talkpipe-vault/settings.json`; override the location with `TALKPIPE_VAULT_HOME`)
+3. **TalkPipe configuration** (from `~/.talkpipe.toml` or `TALKPIPE_*` environment variables)
+4. **Default values** in `config.py` (fallback)
 
 #### Configuration Methods
 
@@ -535,7 +550,7 @@ Keys can be specified:
 
 **Ollama:**
 - Set `embedding_source="ollama"` and/or `chat_source="ollama"`
-- Customize server URL with `OLLAMA_BASE_URL` (default: `http://localhost:11434`)
+- Customize the server URL with the `TALKPIPE_OLLAMA_SERVER_URL` environment variable or `OLLAMA_SERVER_URL` in `~/.talkpipe.toml` (default: `http://localhost:11434`). The model must already be pulled on that server.
 
 #### Example: Switching to OpenAI
 
@@ -613,9 +628,11 @@ talkpipe-vault/
 │       │   └── cli.py                      # CLI entry points
 │       ├── apps/
 │       │   ├── query.py                    # Web application
-│       │   └── templates/                  # HTML templates
-│       ├── watchdog.py                     # File system monitoring
-│       └── segments.py                     # Text extraction segments
+│       │   ├── vault_server.py             # vault-server CLI entry point
+│       │   ├── user_settings.py            # Persisted UI settings (vaults, models)
+│       │   ├── templates/                  # HTML templates
+│       │   └── static/                     # Static assets
+│       └── watchdog.py                     # File system monitoring
 ├── docs/
 │   └── talkpipe_vault.jpg                  # Project logo
 ├── tests/                                  # Test suite

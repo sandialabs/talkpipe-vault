@@ -2,6 +2,36 @@
 
 ## In Development
 
+### Features
+
+#### Vault Management from the Web Interface
+- Added a Vaults page to create a new vault or choose an existing one from the browser; recently used vaults are remembered (persisted under `~/.talkpipe-vault`, overridable with `TALKPIPE_VAULT_HOME`).
+- Made `vault-server`'s vault path argument optional: starting with no arguments opens the vault manager so everything can be done from the browser.
+- Added `--show-source-paths` to `vault-server`, matching the app module's flag.
+- Pages that need a vault now redirect to the vault manager when none is selected, instead of showing empty results.
+
+#### Document Indexing from the Web Interface
+- Added an Add Documents page that indexes a folder (recursively) or glob pattern into the current vault using TalkPipe's document pipeline — the same pipeline behind `makevectordatabase`, so the resulting `docs` table matches what search and chat expect.
+- Indexing reports the number of chunks indexed and the embedding model used, and fails with a clear message when the pattern matches no files or the files contain no readable content.
+
+#### Model Configuration from the Web Interface
+- Added a Settings page to configure the provider (source) and model for both embeddings and chat. Choices persist across restarts, take precedence over TalkPipe configuration, and apply to the search/chat pipelines immediately.
+- Changing the embedding model warns that existing vaults must be re-indexed so stored and query vectors match.
+
+### TalkPipe 0.12.4 Compatibility
+
+- Require `talkpipe[all]>=0.12.4`.
+- Updated all `makevectordatabase` examples to pass `--embedding_source`/`--embedding_model`, which TalkPipe now requires unless embedding defaults are set in its configuration.
+- Test fixtures that build vaults via `makevectordatabase` now pass the configured embedding model/source explicitly and invoke the CLI via `python -m`, and the test suite's Ollama availability probe honors `TALKPIPE_OLLAMA_SERVER_URL` so the Ollama-dependent tests can run against a remote server.
+
+### Bug Fixes
+
+#### Ollama Server Configuration
+- Replaced `OLLAMA_BASE_URL` with `TALKPIPE_OLLAMA_SERVER_URL` in the README, `.env.example`, and Compose files. TalkPipe reads the Ollama server URL from `TALKPIPE_OLLAMA_SERVER_URL` (or `OLLAMA_SERVER_URL` in `~/.talkpipe.toml`); the previously documented variable had no effect.
+
+#### Packaging Cleanup
+- Fixed coverage and isort configuration to reference the `talkpipe_vault` package (previously pointed at a nonexistent `vault` package), removed a stale package-data entry and commented-out console scripts, removed the empty `segments` module, and cleaned an unused import out of the plugin initializer.
+
 ### Documentation
 
 #### Podman Deployment

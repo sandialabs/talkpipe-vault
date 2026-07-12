@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 def initialize_plugin() -> None:
     """Initialize the talkpipe_vault plugin.
 
+    Sources and segments are registered via the ``talkpipe.sources`` and
+    ``talkpipe.segments`` entry points in pyproject.toml, so no additional
+    setup is required here.
     """
-    from talkpipe.data.extraction import global_extractor_registry
-
-    pass

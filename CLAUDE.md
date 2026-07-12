@@ -3,17 +3,20 @@
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Coding conventions
-- When commenting segments or sources, do not include the parameters in the coode comment.
-  Include a description of the data structure that the it expects.  
+- When commenting segments or sources, do not include the parameters in the code comment.
+  Include a description of the data structure that it expects.
 - For sources and segments, parameters should be defined using the Annotated typing convention.
 
 ## Project Overview
 
-TalkPipe Vault is an AI-powered personal information assistant that automatically watches documents, processes them with AI models, and creates a searchable vector database. It demonstrates real-world usage of the TalkPipe framework for composable AI data pipelines.
+TalkPipe Vault is an AI-powered personal information assistant: a web application for turning
+folders of documents into a searchable vault (semantic search, keyword search, RAG Q&A). It is
+built on the TalkPipe framework and demonstrates real-world usage of its composable pipelines.
 
 - **Package**: `talkpipe-vault`
 - **Module**: `talkpipe_vault`
 - **Python**: 3.11.4+ required
+- **TalkPipe**: >=0.12.4 (`talkpipe[all]`)
 - **Status**: Alpha (active development)
 - **License**: Apache 2.0
 
@@ -22,200 +25,126 @@ TalkPipe Vault is an AI-powered personal information assistant that automaticall
 ```
 src/talkpipe_vault/
 ├── __init__.py                 # Package initialization
-├── segments.py                 # Text extraction segments
-├── watchdog.py                 # File system monitoring
+├── initialize_plugin.py        # talkpipe.plugins entry point (no-op; entry points do the work)
+├── watchdog.py                 # File system monitoring (fileWatcher source)
+├── apps/
+│   ├── query.py                # FastAPI web application (all routes + run_app)
+│   ├── vault_server.py         # vault-server CLI entry point
+│   ├── user_settings.py        # Persisted UI settings (recent vaults, model overrides)
+│   ├── templates/              # Jinja2 templates (base, home, vaults, documents,
+│   │                           #   settings, search, keyword_search, chat, partials)
+│   └── static/                 # favicon.svg, logo.jpg
 └── pipelines/
-    ├── config.py               # Default embedding/template config
-    ├── cli.py                  # CLI entry points
-    ├── building_and_watching.py # Vector DB pipeline definitions
-    └── searching_and_prompting.py # Search and RAG chat segments
+    ├── config.py               # Model/template config resolution + vault layout helpers
+    ├── cli.py                  # Experimental watcher CLI helpers (not installed as scripts)
+    ├── building_and_watching.py # Experimental watch/batch vector DB pipelines
+    └── searching_and_prompting.py # VaultSearch / VaultChat / VaultTextSearch segments
 ```
 
-## Core Components
+## The Web Application (primary user path)
 
-### TalkPipe Sources (registered entry points)
-- `fileWatcher` - Real-time file system event monitoring
-- `watchIntoVectorDB` - Watch directory and process into vector DB
-- `listIntoVectorDB` - Batch process files matching glob pattern
+`vault-server [vault_path] [--host] [--port] [--show-source-paths]` — the vault path is
+optional; without it the UI starts on the Vaults page.
 
-### TalkPipe Segments (registered entry points)
-- `buildVectorDBFromPaths` - Core document processing pipeline
-- `vaultSearch` - Semantic search in vector database
-- `vaultChat` - RAG-based conversational AI
+Routes in `apps/query.py`:
+- `/vaults` (+ `/vaults/open`): create or choose a vault; recents persisted via
+  `user_settings.py` in `$TALKPIPE_VAULT_HOME` (default `~/.talkpipe-vault`).
+- `/documents` (+ `/documents/index`): index a folder/glob into the current vault using
+  TalkPipe's `ProcessDocumentsSegment | MakeVectorDatabaseSegment` (writes the `docs`
+  table — same layout as TalkPipe's `makevectordatabase`).
+- `/settings`: embedding + chat source/model overrides, persisted and applied immediately.
+- `/`, `/search`, `/keyword-search` (+ index creation), `/chat`, `/chunk-content`,
+  `/source-file`, `/refresh`.
+- Pages that need a vault redirect to `/vaults` when none is selected.
 
-### CLI Commands
-```bash
-# Watch directory and build vector DB in real-time
-vault-watch-into-vectordb /path/to/docs --vault-path ~/my-vault \
-    --patterns "*.txt" "*.md" --polling
+State lives in the module-level `_state: AppState` singleton; pipelines are rebuilt by
+`_refresh_pipelines()` (throttled to every 5s unless forced).
 
-# Batch process files into vector DB
-vault-list-into-vectordb "/path/to/docs/**/*.pdf" --vault-path ~/my-vault
-```
+## Model Configuration Precedence (highest to lowest)
+
+1. Explicit parameters passed to segments/sources
+2. Web-interface Settings page (`$TALKPIPE_VAULT_HOME/settings.json`)
+3. TalkPipe configuration (`~/.talkpipe.toml` or `TALKPIPE_*` env vars; also accepts
+   `default_embedding_model_name`/`default_model_name` style keys)
+4. Defaults in `pipelines/config.py`: ollama/embeddinggemma (embeddings),
+   ollama/mistral-small (chat)
+
+Ollama server URL comes from `TALKPIPE_OLLAMA_SERVER_URL` (or `OLLAMA_SERVER_URL` in
+`~/.talkpipe.toml`) — not `OLLAMA_BASE_URL`, which is meaningless to TalkPipe.
+
+## Vault Layout
+
+- LanceDB lives directly at `vault_path` (same semantics as `makevectordatabase --path`);
+  the web app reads the `docs` table (`DEFAULT_VECTOR_TABLE_NAME`).
+- Whoosh full-text index lives at `vault_path/fulltext_vault`.
+- A legacy `vault_path/vector_vault` layout is rejected with migration guidance
+  (`ensure_supported_vault_layout`).
+- The experimental watcher pipelines in `building_and_watching.py` write different tables
+  (`full_documents`, `shingled_chunks`) that the web app does NOT read; they are not part
+  of the stable path and are not installed as console scripts.
+
+## TalkPipe Sources/Segments (registered entry points)
+
+Sources: `fileWatcher`, `watchIntoVectorDB`, `listIntoVectorDB` (watcher ones experimental).
+Segments: `buildVectorDBFromPaths`, `vaultSearch`, `vaultChat`, `vaultTextSearch`,
+`searchLance`.
 
 ## Development Commands
 
-### Environment Setup
-
 ```bash
-# Install development dependencies
+# Setup
 pip install -e .[dev]
 
-# Install test dependencies only
-pip install -e .[test]
-
-# Install security scanning tools
-pip install -e .[security]
-```
-
-### Testing
-
-```bash
-# Run all tests with coverage
+# Tests (Ollama-dependent tests skip unless a server is reachable; point at a
+# remote server with TALKPIPE_OLLAMA_SERVER_URL — never commit a real URL/IP)
 pytest
+TALKPIPE_OLLAMA_SERVER_URL=http://<ollama-host>:11434 pytest
 
-# Run tests with detailed coverage and reports
-pytest --cov=src --cov-report=term-missing --cov-report=html --cov-report=xml
-
-# Run tests with debug logging
-pytest --log-cli-level=DEBUG
-```
-
-### Code Quality
-
-```bash
-# Format code
-black src/ tests/
-
-# Check formatting
+# Quality (CI runs these)
 black --check src/ tests/
-
-# Sort imports
-isort src/ tests/
-
-# Lint - errors only
+isort --check-only src/ tests/
 flake8 src/ tests/ --count --select=E9,F63,F7,F82 --show-source --statistics
+mypy src/          # allowed to fail in CI
 
-# Lint - with complexity check
-flake8 src/ tests/ --count --exit-zero --max-complexity=10 --max-line-length=88 --statistics
-
-# Type checking (may fail - strict mode enabled)
-mypy src/
-```
-
-### Security
-
-```bash
-# Security analysis
+# Security
 bandit -r src/
-
-# Dependency vulnerability scan
 safety check
 ```
 
-### Docker
+Test notes:
+- `tests/conftest.py` provides `build_docs_vault()` (builds a docs-table vault via
+  `python -m talkpipe.app.makevectordatabase` with explicit embedding flags — required
+  since TalkPipe 0.12.4) and `is_ollama_available()`.
+- Web-app tests use FastAPI's TestClient against `query.app` and monkeypatch
+  `TALKPIPE_VAULT_HOME` to a tmp dir so real user settings are never touched. Follow that
+  pattern for new UI tests.
+
+## Container
 
 ```bash
-# Production service
-docker-compose up -d vault
-docker-compose logs -f vault
-
-# Development service (hot reload)
-docker-compose --profile dev up vault-dev
-
-# Stop services
-docker-compose down
+podman build -t talkpipe-vault -f Containerfile .
+podman run --rm -p 8002:8002 --userns=keep-id \
+    -v <host-data-dir>:/app/data:Z -v <host-docs-dir>:/documents:ro,Z \
+    -e TALKPIPE_OLLAMA_SERVER_URL=http://host.containers.internal:11434 \
+    talkpipe-vault
 ```
 
-## Architecture
+Default CMD serves `/app/data/vault` on port 8002. Mount documents somewhere readable
+(e.g. `/documents`) and index them from the Add Documents page. Compose services (`vault`,
+`vault-dev`) exist in docker-compose.yml.
 
-### Technology Stack
+## CI/CD
 
-- **Pipeline Framework**: TalkPipe (>=0.10.2a1) with OpenAI/Ollama support
-- **Vector Database**: LanceDB
-- **Document Conversion**: Text extraction pipeline
-- **File Monitoring**: Watchdog
-- **Web Framework**: FastAPI + Uvicorn (infrastructure exists, not yet used)
-
-### Document Processing Pipeline
-
-```
-File Events/Paths
-    ↓
-ReadFile (extract textual content from files)
-    ↓
-Template formatting
-    ↓
-MakeVectorDatabaseSegment (full_documents table)
-    ↓
-splitText (~500 char chunks)
-    ↓
-ShingleText (3-chunk overlapping windows)
-    ↓
-MakeVectorDatabaseSegment (shingled_chunks table)
-```
-
-### Vector Database Tables
-- `full_documents` - Complete documents with embeddings
-- `shingled_chunks` - Overlapping text windows for better retrieval
-
-### Docker Multi-Stage Build
-
-1. **builder stage**: Full build environment (Fedora + dev tools)
-   - Runs tests (allowed to fail)
-   - Builds wheel package
-   - Non-root `builder` user
-
-2. **runtime stage**: Minimal runtime (Fedora + Python)
-   - Installs pre-built wheel
-   - Non-root `app` user (UID 1001)
-   - NUMBA_CACHE_DIR configured for TalkPipe dependencies
-
-### Container Networking
-
-Both services map `host.containers.internal:host-gateway` to access host services (e.g., local Ollama instance).
-
-## Code Standards
-
-- **Line length**: 88 characters (Black)
-- **Type hints**: Required (strict mypy enabled)
-- **First-party imports**: `talkpipe_vault`
-- **Coverage**: Track with pytest-cov
-- **Security**: Bandit + Safety scans in CI/CD
-- **Code-to-test ratio**: ~1:2.5
-
-## CI/CD Pipeline
-
-GitHub Actions workflow on push/PR to main/master/develop:
-
-1. **Test** (Python 3.11, 3.12, 3.13):
-   - flake8, black, isort
-   - mypy (allowed to fail)
-   - pytest with coverage
-   - Codecov upload
-
-2. **Security Scan**:
-   - Bandit
-   - Safety
-
-3. **Build Container**:
-   - Docker build/push to GHCR
-   - Trivy security scan
-
-4. **CodeQL Analysis**
-
-5. **Publish** (on release): PyPI upload
+GitHub Actions (`.github/workflows/ci-cd.yml`), analogous to TalkPipe's pipeline:
+1. Test (Python 3.11/3.12/3.13): flake8, black, isort, mypy (allowed to fail), pytest+coverage, Codecov
+2. Security scan: Bandit + Safety
+3. Container build: build/push to GHCR + Trivy scan
+4. CodeQL analysis
+5. Publish to PyPI on release
 
 ## Key Configuration Files
 
-- `pyproject.toml`: Package config, dependencies, tool settings, entry points
-- `docker-compose.yml`: Service definitions (vault, vault-dev)
-- `Containerfile`: Container image build
+- `pyproject.toml`: package config, entry points, tool settings
+- `Containerfile` / `docker-compose.yml`: container image and services
+- `.env.example`: example container environment (uses `TALKPIPE_OLLAMA_SERVER_URL`)
 - `.github/workflows/ci-cd.yml`: CI/CD pipeline
-
-## Default Configuration
-
-Located in `src/talkpipe_vault/pipelines/config.py`:
-- `EMBEDDING_MODEL`: embeddinggemma
-- `EMBEDDING_SOURCE`: ollama
-- Templates for document, shingle, and retrieval formatting
