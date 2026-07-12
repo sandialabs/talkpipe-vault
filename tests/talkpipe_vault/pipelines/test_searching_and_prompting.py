@@ -1,10 +1,11 @@
 """Unit tests for the searching_and_prompting pipeline module."""
 
-import subprocess
 from pathlib import Path
 
 import pytest
 from talkpipe import compile
+
+from tests.conftest import build_docs_vault
 
 from talkpipe_vault.pipelines.searching_and_prompting import (
     VaultChat,
@@ -47,21 +48,7 @@ def populated_vector_db(tmp_path):
     )
 
     # Build vector database with TalkPipe's native makevectordatabase command
-    result = subprocess.run(
-        [
-            "makevectordatabase",
-            f"{source_dir}/*.txt",
-            "--path",
-            str(vectordb_path),
-            "--overwrite",
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert result.returncode == 0, result.stderr
-
-    yield str(vectordb_path)
+    yield build_docs_vault(f"{source_dir}/*.txt", vectordb_path)
 
 
 class TestVaultSearch:
@@ -302,20 +289,7 @@ class TestIntegrationWithSampleDocs:
         """Create a docs-table vector database from sample documents."""
         vectordb_path = tmp_path / "vectordb"
         vectordb_path.mkdir()
-        result = subprocess.run(
-            [
-                "makevectordatabase",
-                f"{SAMPLE_DOCS_DIR}/*",
-                "--path",
-                str(vectordb_path),
-                "--overwrite",
-            ],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        assert result.returncode == 0, result.stderr
-        yield str(vectordb_path)
+        yield build_docs_vault(f"{SAMPLE_DOCS_DIR}/*", vectordb_path)
 
     def test_search_sample_documents(self, sample_docs_vector_db):
         """Test searching the sample documents."""
