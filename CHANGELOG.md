@@ -40,6 +40,12 @@
 #### Form Submissions
 - Submitting any form with an empty field (Open or Create, Search, Keyword Search, Ask, Index Documents) no longer surfaces a raw `422` JSON validation error; empty submissions now land on a friendly page or redirect with a clear message. Inputs that require a value also declare it client-side.
 
+#### Search Result Scores
+- Semantic search (and the Ask source chunks) no longer show a misleading "Score: 0.0000" on every result. Vector backends such as the default model2vec report a score of 0.0 with no distance, so the score badge is now hidden when no meaningful similarity is available; keyword search continues to show its Whoosh relevance scores, and any backend that does return a similarity still shows it.
+
+#### Server Console Output
+- The Ask/RAG pipeline no longer dumps the full query embedding vector and assembled RAG prompt to the server console on every question (a leftover `diagPrintOutput="stdout"` diagnostic), so the server log stays readable.
+
 #### Keyword Index Creation
 - Fixed "Create Full-Text Index" failing with `Schema() got multiple values for keyword argument 'doc_id'`: TalkPipe 0.12.4 reserves the Whoosh `doc_id` schema field, so the index is now built through `WhooshFullTextIndex` directly, keeping LanceDB row ids as stable document ids so results can be resolved back to stored chunks. Rebuilding replaces the previous index contents, and the success notice reports how many documents were indexed. The regression tests build a real index instead of mocking the builder, which is what had hidden this incompatibility.
 
@@ -61,6 +67,9 @@
 
 #### Keyword search behavior
 - Documented that web keyword search matches exact, case-insensitive word tokens (no stemming) — e.g. `apple` does not match `apples` — and to prefer semantic search for meaning-based lookups.
+
+#### Vault storage structure
+- Rewrote the "Vault Storage Structure" section to lead with the stable layout that `vault-server` actually reads (the `docs` LanceDB table produced by Add Documents / `makevectordatabase`, plus the on-demand `fulltext_vault` Whoosh index) and clearly label the `full_documents`/`shingled_chunks` tables as the separate experimental watcher layout.
 
 #### Podman Deployment
 - Added README section for Podman deployment: prerequisites, quick start, configuration, scripts, debugging, Ollama access, troubleshooting

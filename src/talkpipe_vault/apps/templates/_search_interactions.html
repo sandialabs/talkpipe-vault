@@ -248,13 +248,15 @@ document.addEventListener('DOMContentLoaded', function() {
                 const title = card.querySelector('.result-title-link').textContent;
                 const pathLink = card.querySelector('.path a');
                 const snippet = card.querySelector('.snippet').textContent;
-                const score = card.querySelector('.score').textContent;
+                const scoreEl = card.querySelector('.score');
 
                 text += (index + 1) + '. ' + title + '\n';
                 if (pathLink) {
                     text += '   Path: ' + pathLink.textContent + '\n';
                 }
-                text += '   ' + score + '\n';
+                if (scoreEl) {
+                    text += '   ' + scoreEl.textContent + '\n';
+                }
                 text += '   ' + snippet + '\n\n';
             });
 

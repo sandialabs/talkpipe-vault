@@ -466,13 +466,20 @@ This composability is what makes TalkPipe powerful: you can build sophisticated 
 
 ### Vault Storage Structure
 
-The vault at `vault_path` contains:
+**Stable layout** (what `vault-server` reads) — produced by the **Add Documents** page and
+by TalkPipe's `makevectordatabase`:
+
+- `docs`: LanceDB table of document/chunk embeddings (TalkPipe's `DEFAULT_VECTOR_TABLE_NAME`)
+- `fulltext_vault`: Whoosh full-text index, created on demand from the **Keyword Search** page
+
+**Experimental watcher layout** — produced by the in-development pipelines in
+[src/talkpipe_vault/pipelines/building_and_watching.py](src/talkpipe_vault/pipelines/building_and_watching.py)
+(`listIntoVectorDB`/`watchIntoVectorDB`, see [Current Status](#current-status)). These tables
+are **not** read by `vault-server`:
 
 - `full_documents`: Embeddings for templated full-document content (unique id is document-based)
 - `shingled_chunks`: Embeddings for overlapping chunk windows with composite ids like `first-last-source`
 - `fulltext_vault`: Whoosh full-text index over full document content
-
-These are produced by the pipelines in [src/talkpipe_vault/pipelines/building_and_watching.py](src/talkpipe_vault/pipelines/building_and_watching.py).
 
 ### Development Setup
 

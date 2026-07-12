@@ -378,13 +378,14 @@ document.addEventListener('DOMContentLoaded', function() {
             snippet.className = 'source-card-snippet';
             snippet.textContent = citation.snippet;
 
-            const score = document.createElement('span');
-            score.className = 'source-card-score';
-            score.textContent = 'Score: ' + citation.score;
-
             card.appendChild(header);
             card.appendChild(snippet);
-            card.appendChild(score);
+            if (citation.score) {
+                const score = document.createElement('span');
+                score.className = 'source-card-score';
+                score.textContent = 'Score: ' + citation.score;
+                card.appendChild(score);
+            }
             sourcesList.appendChild(card);
         });
 

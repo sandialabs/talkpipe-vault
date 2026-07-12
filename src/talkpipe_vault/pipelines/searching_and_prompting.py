@@ -285,7 +285,6 @@ class VaultChat(AbstractFieldSegment):
                 limit=limit if limit is not None else 10,
                 role_map=RAG_PREFIX_PROMPTS,
                 prompt_directive=RAG_PROMPT_DIRECTIVE,
-                diagPrintOutput="stdout",
             )
             | EvalExpression(field="chat_response", expression="item")
         ).as_function(single_in=True, single_out=True)

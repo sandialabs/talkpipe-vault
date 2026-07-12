@@ -22,7 +22,7 @@
         <div class="path"><a href="/source-file?path={{ result.path|urlencode }}" target="_blank" rel="noopener">{{ result.path }}</a></div>
         {% endif %}
         <div class="snippet">{{ result.snippet }}</div>
-        <span class="score" title="{{ score_help }}">Score: {{ result.score }}</span>
+        {% if result.score %}<span class="score" title="{{ score_help }}">Score: {{ result.score }}</span>{% endif %}
     </article>
     {% endfor %}
     </div>

@@ -466,7 +466,10 @@ def _process_semantic_results(raw_results: Any) -> list[dict[str, Any]]:
                 "lookup_path": doc_id or path,
                 "filename": _resolve_title(title, filename, path),
                 "snippet": _create_snippet(snippet_text),
-                "score": f"{score:.4f}",
+                # Some vector backends (e.g. model2vec) don't return a usable similarity
+                # score and report 0.0 for every hit. Rendering "Score: 0.0000" on every
+                # result is misleading, so only surface a score when it's meaningful.
+                "score": f"{score:.4f}" if score and score > 0 else "",
             }
         )
 

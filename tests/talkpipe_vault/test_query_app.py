@@ -1,5 +1,7 @@
 """Unit tests for the vault query web app."""
 
+from types import SimpleNamespace
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -423,6 +425,57 @@ def test_process_semantic_results_keeps_multiple_hits_for_same_source_path():
     ]
     assert [result["score"] for result in results] == ["0.9000", "0.8000"]
     assert {result["path"] for result in results} == {"/original/source.pdf"}
+
+
+def test_process_semantic_results_hides_unavailable_zero_score():
+    """Vector backends that report score=0.0 (e.g. model2vec) should not show a score.
+
+    The real search pipeline yields ``SearchResult`` objects whose ``.score`` is 0.0 and
+    whose document carries no distance, so displaying "Score: 0.0000" on every hit is
+    misleading. Those results should come back with an empty score string.
+    """
+    raw_results = [
+        SimpleNamespace(
+            score=0.0,
+            doc_id="row-uuid",
+            document={
+                "source": "/original/source.pdf",
+                "title": "source.pdf",
+                "content": "semantic result text",
+            },
+        )
+    ]
+
+    results = query._process_semantic_results(raw_results)
+
+    assert len(results) == 1
+    assert results[0]["snippet"] == "semantic result text"
+    assert results[0]["score"] == ""
+
+
+def test_semantic_search_omits_zero_score_badge(monkeypatch):
+    """A zero/unavailable semantic score must not render a "Score:" badge in the page."""
+    query._state.search_pipeline = lambda _query: [
+        SimpleNamespace(
+            score=0.0,
+            doc_id="row-uuid",
+            document={
+                "source": "/original/source.pdf",
+                "title": "source.pdf",
+                "content": "semantic result text",
+            },
+        )
+    ]
+    monkeypatch.setattr(query, "_refresh_pipelines", lambda: None)
+    monkeypatch.setattr(query, "_update_document_counts", lambda vault_path: None)
+    client = TestClient(query.app)
+
+    response = client.post("/search", data={"query": "semantic"})
+
+    assert response.status_code == 200
+    assert "semantic result text" in response.text
+    assert "Score: 0.0000" not in response.text
+    assert "Score:" not in response.text
 
 
 def test_semantic_search_results_match_keyword_result_display(monkeypatch):
