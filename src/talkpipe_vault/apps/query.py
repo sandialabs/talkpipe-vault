@@ -16,6 +16,7 @@ import json
 import os
 import shutil
 import threading
+import time
 import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
@@ -249,7 +250,11 @@ def _iter_lancedb_docs_for_whoosh(vault_path: str) -> list[dict[str, str]]:
 WHOOSH_INDEX_FIELDS = ["content", "path", "filename"]
 
 
-def _build_whoosh_index(vault_path: str, documents: list[dict[str, str]]) -> None:
+def _build_whoosh_index(
+    vault_path: str,
+    documents: list[dict[str, str]],
+    progress: Callable[[int, int], None] | None = None,
+) -> None:
     """Rebuild the vault's Whoosh full-text index from normalized documents.
 
     Expects documents as dicts with doc_id, content, path, and filename keys.
@@ -257,36 +262,22 @@ def _build_whoosh_index(vault_path: str, documents: list[dict[str, str]]) -> Non
     Whoosh doc_ids so search results can be resolved back to stored chunks.
     (talkpipe's indexWhoosh segment reserves the doc_id schema field, so the
     index is built through WhooshFullTextIndex to control ids directly.)
+    The optional progress callback receives (docs_done, total_docs) after each
+    document is added.
     """
     whoosh_index_path = get_whoosh_index_path(vault_path)
     if os.path.isdir(whoosh_index_path):
         shutil.rmtree(whoosh_index_path)
 
+    total = len(documents)
     with WhooshFullTextIndex(whoosh_index_path, fields=WHOOSH_INDEX_FIELDS) as ix:
-        for document in documents:
+        for done, document in enumerate(documents, start=1):
             ix.add_document(
                 {field: document.get(field, "") for field in WHOOSH_INDEX_FIELDS},
                 doc_id=document.get("doc_id") or None,
             )
-
-
-def _print_whoosh_index_documents(documents: list[dict[str, str]]) -> None:
-    """Print the full document text sent to the Whoosh index."""
-    print(
-        f"Indexing {len(documents)} document(s) into the Whoosh full-text index.",
-        flush=True,
-    )
-    for index, document in enumerate(documents, start=1):
-        print(
-            f"\n--- Whoosh document {index}/{len(documents)} ---\n"
-            f"doc_id: {document.get('doc_id', '')}\n"
-            f"path: {document.get('path', '')}\n"
-            f"filename: {document.get('filename', '')}\n"
-            "content:",
-            flush=True,
-        )
-        print(document.get("content", ""), flush=True)
-    print("--- End Whoosh document dump ---", flush=True)
+            if progress is not None:
+                progress(done, total)
 
 
 def init_pipelines(vault_path: str) -> None:
@@ -763,6 +754,88 @@ async def open_vault(
     return _redirect_with_message("/", message=f"Opened vault at {vault_path}.")
 
 
+def _is_dangerous_delete_target(real_path: Path) -> bool:
+    """Return True for paths too broad to ever delete as a vault.
+
+    Guards against wiping the filesystem root, the user's home directory, or
+    other shallow top-level paths even if they somehow reach this code.
+    """
+    home = Path(os.path.realpath(Path.home()))
+    return (
+        real_path == real_path.parent  # filesystem root
+        or real_path == home
+        or len(real_path.parts) < 3
+    )
+
+
+@app.post("/vaults/delete", response_class=HTMLResponse)
+async def delete_vault(
+    vault_path: Annotated[str, Form()] = "",
+    confirm: Annotated[str, Form()] = "",
+    state: AppState = Depends(get_state),
+) -> HTMLResponse:
+    """Forget a vault and delete its folder (index files) from disk.
+
+    Destructive and irreversible. Only vaults already in the recent list can be
+    deleted, never the currently-open vault, and an explicit confirm field is
+    required.
+
+    Expects form data with:
+        - vault_path: str - The recent-vault path to delete
+        - confirm: str - Must equal "delete" to proceed
+    """
+    raw_path = vault_path.strip()
+    if not raw_path:
+        return _redirect_with_message("/vaults", error="No vault specified.")
+    if confirm != "delete":
+        return _redirect_with_message("/vaults", error="Deletion was not confirmed.")
+
+    resolved = str(Path(raw_path).expanduser())
+
+    # Only vaults the user already knows about are deletable — never an
+    # arbitrary path supplied to this endpoint.
+    if resolved not in user_settings.get_recent_vaults():
+        return _redirect_with_message(
+            "/vaults", error="That vault is not in the recent list."
+        )
+
+    # Refuse to delete the vault currently open in the app.
+    if state.vault_path and os.path.realpath(state.vault_path) == os.path.realpath(
+        resolved
+    ):
+        return _redirect_with_message(
+            "/vaults",
+            error="Cannot delete the vault that is currently open. "
+            "Open a different vault first.",
+        )
+
+    real_path = Path(os.path.realpath(resolved))
+    if _is_dangerous_delete_target(real_path):
+        return _redirect_with_message(
+            "/vaults",
+            error=f"Refusing to delete {resolved}: path is too broad to be a vault.",
+        )
+
+    existed = os.path.isdir(resolved)
+    try:
+        if existed:
+            shutil.rmtree(resolved)
+    except OSError as exc:
+        return _redirect_with_message(
+            "/vaults", error=f"Failed to delete {resolved}: {exc}"
+        )
+
+    user_settings.forget_vault(resolved)
+    if existed:
+        message = f"Deleted vault {resolved} and removed it from the list."
+    else:
+        message = (
+            f"Removed {resolved} from the list "
+            "(its folder was already gone from disk)."
+        )
+    return _redirect_with_message("/vaults", message=message)
+
+
 @app.get("/documents", response_class=HTMLResponse)
 async def documents_page(
     request: Request,
@@ -981,6 +1054,109 @@ def start_index_job(
 async def index_status() -> JSONResponse:
     """Report the state of the background document-indexing job."""
     return JSONResponse(content=_index_job_snapshot())
+
+
+@dataclass
+class FulltextIndexJob:
+    """Progress of the (single) background full-text (Whoosh) index build."""
+
+    running: bool = False
+    vault_path: str = ""
+    total_docs: int = 0
+    docs_done: int = 0
+    message: str = ""
+    error: str | None = None
+
+
+_fulltext_index_job = FulltextIndexJob()
+_fulltext_index_job_lock = threading.Lock()
+
+
+def _fulltext_index_job_snapshot() -> dict[str, Any]:
+    with _fulltext_index_job_lock:
+        return {
+            "running": _fulltext_index_job.running,
+            "vault_path": _fulltext_index_job.vault_path,
+            "total_docs": _fulltext_index_job.total_docs,
+            "docs_done": _fulltext_index_job.docs_done,
+            "message": _fulltext_index_job.message,
+            "error": _fulltext_index_job.error,
+        }
+
+
+def _run_fulltext_index_job(vault_path: str) -> None:
+    """Thread target: rebuild the Whoosh index, publishing progress as it goes."""
+    started = time.monotonic()
+    next_log_pct = 0
+
+    def report(docs_done: int, total_docs: int) -> None:
+        nonlocal next_log_pct
+        with _fulltext_index_job_lock:
+            _fulltext_index_job.docs_done = docs_done
+            _fulltext_index_job.total_docs = total_docs
+        # Console progress: log on each ~10% step so long builds stay legible.
+        pct = int(docs_done / total_docs * 100) if total_docs else 0
+        if pct >= next_log_pct:
+            print(
+                f"  full-text index: {docs_done}/{total_docs} docs ({pct}%)",
+                flush=True,
+            )
+            next_log_pct = (pct // 10 + 1) * 10
+
+    try:
+        documents = _iter_lancedb_docs_for_whoosh(vault_path)
+        with _fulltext_index_job_lock:
+            _fulltext_index_job.total_docs = len(documents)
+        print(
+            f"Building full-text index: {len(documents)} document(s) from {vault_path}",
+            flush=True,
+        )
+        _build_whoosh_index(vault_path, documents, progress=report)
+        _refresh_pipelines(force=True)
+        _update_document_counts(vault_path)
+        elapsed = time.monotonic() - started
+        print(
+            f"Full-text index built: {len(documents)} document(s) in {elapsed:.1f}s",
+            flush=True,
+        )
+        with _fulltext_index_job_lock:
+            _fulltext_index_job.message = (
+                f"Full-text index created with {len(documents)} document(s)."
+            )
+    except Exception as exc:
+        print(f"Full-text index build failed: {exc}", flush=True)
+        with _fulltext_index_job_lock:
+            _fulltext_index_job.error = f"Failed to create index: {exc}"
+    finally:
+        with _fulltext_index_job_lock:
+            _fulltext_index_job.running = False
+
+
+def start_fulltext_index_job(vault_path: str) -> bool:
+    """Start the background full-text index build; False if one is already running."""
+    with _fulltext_index_job_lock:
+        if _fulltext_index_job.running:
+            return False
+        _fulltext_index_job.running = True
+        _fulltext_index_job.vault_path = vault_path
+        _fulltext_index_job.total_docs = 0
+        _fulltext_index_job.docs_done = 0
+        _fulltext_index_job.message = ""
+        _fulltext_index_job.error = None
+
+    thread = threading.Thread(
+        target=_run_fulltext_index_job,
+        args=(vault_path,),
+        daemon=True,
+    )
+    thread.start()
+    return True
+
+
+@app.get("/api/fulltext-index-status")
+async def fulltext_index_status() -> JSONResponse:
+    """Report the state of the background full-text index build."""
+    return JSONResponse(content=_fulltext_index_job_snapshot())
 
 
 @app.post("/documents/index", response_class=HTMLResponse)
@@ -1287,28 +1463,26 @@ async def keyword_search_results(
 async def create_keyword_index(
     state: AppState = Depends(get_state),
 ) -> HTMLResponse:
-    """Create a Whoosh full-text index using existing LanceDB docs-table records."""
+    """Start a background rebuild of the Whoosh full-text index.
+
+    The build runs in a worker thread that publishes progress via
+    ``/api/fulltext-index-status``; the Keyword Search page polls it and shows a
+    live progress bar, then reloads with the outcome.
+    """
     if not state.vault_path:
         return RedirectResponse(
             url="/keyword-search?error=Vault%20path%20is%20not%20configured.",
             status_code=303,
         )
 
-    try:
-        documents = _iter_lancedb_docs_for_whoosh(state.vault_path)
-        _print_whoosh_index_documents(documents)
-        _build_whoosh_index(state.vault_path, documents)
-        _refresh_pipelines(force=True)
-        _update_document_counts(state.vault_path)
-    except Exception as exc:
+    if not start_fulltext_index_job(state.vault_path):
         return _redirect_with_message(
-            "/keyword-search", error=f"Failed to create index: {exc}"
+            "/keyword-search",
+            error="A full-text index build is already in progress; "
+            "wait for it to finish.",
         )
 
-    return _redirect_with_message(
-        "/keyword-search",
-        created=f"Full-text index created with {len(documents)} document(s).",
-    )
+    return RedirectResponse(url="/keyword-search", status_code=303)
 
 
 @app.get("/chunk-content")

@@ -91,6 +91,23 @@ def remember_vault(vault_path: str) -> None:
     save_settings(settings)
 
 
+def forget_vault(vault_path: str) -> bool:
+    """Remove a vault path from the recent-vault list.
+
+    Returns True if the path was present and removed. Does not touch any files
+    on disk.
+    """
+    resolved = str(Path(vault_path).expanduser())
+    settings = load_settings()
+    recents = settings["recent_vaults"]
+    remaining = [p for p in recents if p != resolved]
+    if len(remaining) == len(recents):
+        return False
+    settings["recent_vaults"] = remaining
+    save_settings(settings)
+    return True
+
+
 def get_model_overrides() -> dict:
     """Return saved settings overrides; absent/blank values are omitted."""
     settings = load_settings()

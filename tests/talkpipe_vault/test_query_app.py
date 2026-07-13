@@ -1,5 +1,6 @@
 """Unit tests for the vault query web app."""
 
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -8,6 +9,17 @@ from fastapi.testclient import TestClient
 from talkpipe_vault.apps import query
 from talkpipe_vault.pipelines import searching_and_prompting
 from talkpipe_vault.pipelines.searching_and_prompting import VaultTextSearch
+
+
+def _wait_for_fulltext_job(timeout: float = 10.0) -> dict:
+    """Block until the background full-text index build finishes."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        snapshot = query._fulltext_index_job_snapshot()
+        if not snapshot["running"] and (snapshot["message"] or snapshot["error"]):
+            return snapshot
+        time.sleep(0.02)
+    raise AssertionError("full-text index build did not finish in time")
 
 
 class _FakeLanceTable:
@@ -188,8 +200,14 @@ def test_create_whoosh_index_route_builds_searchable_index(
     client = TestClient(query.app)
     response = client.post("/keyword-search/create-index", follow_redirects=False)
 
+    # The build runs in the background; the POST just redirects to the page,
+    # which then polls for progress and reloads with the outcome.
     assert response.status_code == 303
-    assert "created=Full-text+index+created" in response.headers["location"]
+    assert response.headers["location"] == "/keyword-search"
+
+    snapshot = _wait_for_fulltext_job()
+    assert snapshot["error"] is None
+    assert snapshot["message"] == "Full-text index created with 1 document(s)."
 
     # The index exists, keeps the stable doc_id, and is searchable.
     from talkpipe.search.whoosh import WhooshFullTextIndex
@@ -200,8 +218,8 @@ def test_create_whoosh_index_route_builds_searchable_index(
         assert hits[0].document["path"] == "a.txt"
 
     output = capsys.readouterr().out
-    assert "Indexing 1 document(s) into the Whoosh full-text index." in output
-    assert "doc_id: row-1" in output
+    assert "Building full-text index: 1 document(s)" in output
+    assert "Full-text index built: 1 document(s)" in output
 
 
 def test_create_whoosh_index_route_replaces_existing_index(monkeypatch, tmp_path):
@@ -217,11 +235,13 @@ def test_create_whoosh_index_route_replaces_existing_index(monkeypatch, tmp_path
     monkeypatch.setattr(query, "_update_document_counts", lambda vault_path: None)
     client = TestClient(query.app)
     client.post("/keyword-search/create-index", follow_redirects=False)
+    _wait_for_fulltext_job()
 
     documents[:] = [
         {"doc_id": "new", "content": "fresh text", "path": "new.txt", "filename": ""}
     ]
     client.post("/keyword-search/create-index", follow_redirects=False)
+    _wait_for_fulltext_job()
 
     from talkpipe.search.whoosh import WhooshFullTextIndex
 

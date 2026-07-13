@@ -30,10 +30,18 @@
                 {% if recent == vault_path %}<span class="vault-entry-current">current</span>{% endif %}
             </span>
             {% if recent != vault_path %}
-            <form method="post" action="/vaults/open">
-                <input type="hidden" name="new_vault_path" value="{{ recent }}">
-                <button type="submit" class="btn-secondary">Open</button>
-            </form>
+            <span class="vault-entry-actions">
+                <form method="post" action="/vaults/open">
+                    <input type="hidden" name="new_vault_path" value="{{ recent }}">
+                    <button type="submit" class="btn-secondary">Open</button>
+                </form>
+                <form method="post" action="/vaults/delete" class="delete-vault-form"
+                      data-vault-path="{{ recent }}">
+                    <input type="hidden" name="vault_path" value="{{ recent }}">
+                    <input type="hidden" name="confirm" value="delete">
+                    <button type="submit" class="btn-danger">Delete</button>
+                </form>
+            </span>
             {% endif %}
         </li>
         {% endfor %}
@@ -44,8 +52,39 @@
 </div>
 
 {% include "_dir_picker.html" %}
+<style>
+    .vault-entry-actions {
+        display: flex;
+        flex-shrink: 0;
+        gap: 8px;
+    }
+    .btn-danger {
+        background: var(--danger-bg);
+        border: 1px solid var(--danger-border);
+        color: var(--danger-ink);
+    }
+    .btn-danger:hover {
+        background: var(--danger);
+        border-color: var(--danger);
+        color: #fff;
+    }
+</style>
 <script>
     attachDirPicker('vault-browse-btn', 'vault-path-input', { allowNewFolder: true });
     requireValue('vault-path-input', 'open-vault-btn');
+
+    // Confirm before the destructive, irreversible vault deletion.
+    document.querySelectorAll('.delete-vault-form').forEach(function (form) {
+        form.addEventListener('submit', function (event) {
+            const path = form.getAttribute('data-vault-path');
+            const ok = window.confirm(
+                'Permanently delete this vault and its index files from disk?\n\n' +
+                path + '\n\nThis cannot be undone.'
+            );
+            if (!ok) {
+                event.preventDefault();
+            }
+        });
+    });
 </script>
 {% endblock %}

@@ -20,6 +20,13 @@ def isolated_app(tmp_path, monkeypatch):
         query._index_job.chunks = 0
         query._index_job.message = ""
         query._index_job.error = None
+    with query._fulltext_index_job_lock:
+        query._fulltext_index_job.running = False
+        query._fulltext_index_job.vault_path = ""
+        query._fulltext_index_job.total_docs = 0
+        query._fulltext_index_job.docs_done = 0
+        query._fulltext_index_job.message = ""
+        query._fulltext_index_job.error = None
     query._state.vault_path = ""
     query._state.search_pipeline = None
     query._state.chat_pipeline = None
@@ -190,6 +197,105 @@ class TestVaultSelection:
 
         assert response.status_code == 200
         assert f"Opened vault at {existing}" in response.text
+
+
+class TestVaultDeletion:
+    """Tests for forgetting and deleting vaults from the vault manager."""
+
+    def _remember_dir(self, tmp_path, name):
+        vault = tmp_path / name
+        vault.mkdir()
+        (vault / "docs.lance").mkdir()
+        (vault / "marker.txt").write_text("x")
+        user_settings.remember_vault(str(vault))
+        return vault
+
+    def test_delete_removes_from_list_and_disk(self, client, tmp_path):
+        vault = self._remember_dir(tmp_path, "doomed")
+
+        response = client.post(
+            "/vaults/delete",
+            data={"vault_path": str(vault), "confirm": "delete"},
+        )
+
+        assert response.status_code == 303
+        assert not vault.exists()
+        assert str(vault) not in user_settings.get_recent_vaults()
+
+    def test_delete_requires_confirmation(self, client, tmp_path):
+        vault = self._remember_dir(tmp_path, "kept")
+
+        client.post(
+            "/vaults/delete",
+            data={"vault_path": str(vault), "confirm": "nope"},
+        )
+
+        assert vault.is_dir()
+        assert str(vault) in user_settings.get_recent_vaults()
+
+    def test_cannot_delete_currently_open_vault(self, client, tmp_path):
+        vault = self._remember_dir(tmp_path, "open-one")
+        query._state.vault_path = str(vault)
+
+        response = client.post(
+            "/vaults/delete",
+            data={"vault_path": str(vault), "confirm": "delete"},
+        )
+
+        assert "currently+open" in response.headers["location"]
+        assert vault.is_dir()
+        assert str(vault) in user_settings.get_recent_vaults()
+
+    def test_cannot_delete_path_not_in_recents(self, client, tmp_path):
+        stranger = tmp_path / "stranger"
+        stranger.mkdir()
+        (stranger / "keep.txt").write_text("x")
+
+        client.post(
+            "/vaults/delete",
+            data={"vault_path": str(stranger), "confirm": "delete"},
+        )
+
+        assert stranger.is_dir()
+
+    def test_refuses_dangerous_shallow_path(self, client, monkeypatch, tmp_path):
+        # A home directory forced into recents must still be refused.
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.setattr(query.Path, "home", staticmethod(lambda: home))
+        user_settings.remember_vault(str(home))
+
+        response = client.post(
+            "/vaults/delete",
+            data={"vault_path": str(home), "confirm": "delete"},
+        )
+
+        assert "too+broad" in response.headers["location"]
+        assert home.is_dir()
+
+    def test_delete_forgets_already_missing_folder(self, client, tmp_path):
+        vault = self._remember_dir(tmp_path, "ghost")
+        import shutil
+
+        shutil.rmtree(vault)
+
+        response = client.post(
+            "/vaults/delete",
+            data={"vault_path": str(vault), "confirm": "delete"},
+        )
+
+        assert response.status_code == 303
+        assert str(vault) not in user_settings.get_recent_vaults()
+
+    def test_vaults_page_shows_delete_button_for_non_current_vault(
+        self, client, tmp_path
+    ):
+        user_settings.remember_vault("/vault/other")
+
+        response = client.get("/vaults")
+
+        assert 'action="/vaults/delete"' in response.text
+        assert "This cannot be undone" in response.text
 
 
 class TestDirectoryPicker:

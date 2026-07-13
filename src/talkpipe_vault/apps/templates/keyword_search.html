@@ -25,6 +25,17 @@
     {% endif %}
 </div>
 
+<div class="search-box" id="fulltext-progress" style="display: none;" aria-live="polite">
+    <div class="progress-header">
+        <div class="spinner"></div>
+        <h3 id="fulltext-progress-title">Building full-text index&hellip;</h3>
+    </div>
+    <div class="progress-track">
+        <div class="progress-fill" id="fulltext-progress-fill" style="width: 0%;"></div>
+    </div>
+    <p class="progress-text" id="fulltext-progress-text"></p>
+</div>
+
 <div id="loading-overlay" class="search-loading" style="display: none;">
     <div class="spinner"></div>
     <span>Refreshing vault connections and searching exact matches...</span>
@@ -53,7 +64,101 @@
         margin-top: 12px;
         text-align: center;
     }
+    .progress-header {
+        align-items: center;
+        display: flex;
+        gap: 12px;
+        margin-bottom: 14px;
+    }
+    .progress-header h3 {
+        margin-bottom: 0;
+    }
+    .progress-track {
+        background: var(--field-bg);
+        border: 1px solid var(--field-border);
+        border-radius: 999px;
+        height: 12px;
+        overflow: hidden;
+    }
+    .progress-fill {
+        background: var(--grad);
+        border-radius: 999px;
+        height: 100%;
+        min-width: 6px;
+        transition: width 0.4s ease;
+    }
+    .progress-fill.indeterminate {
+        animation: progress-slide 1.2s ease-in-out infinite;
+        width: 30% !important;
+    }
+    @keyframes progress-slide {
+        0% { margin-left: 0; }
+        50% { margin-left: 70%; }
+        100% { margin-left: 0; }
+    }
+    .progress-text {
+        color: var(--muted);
+        font-size: 0.9rem;
+        margin-top: 10px;
+    }
 </style>
+
+<script>
+    (function () {
+        const panel = document.getElementById('fulltext-progress');
+        const fill = document.getElementById('fulltext-progress-fill');
+        const text = document.getElementById('fulltext-progress-text');
+        const createBtn = document.getElementById('create-index-btn');
+        let sawRunningJob = false;
+
+        function render(status) {
+            panel.style.display = 'block';
+            if (createBtn) {
+                createBtn.disabled = true;
+            }
+            if (status.total_docs > 0) {
+                const done = Math.min(status.docs_done, status.total_docs);
+                const pct = Math.round((done / status.total_docs) * 100);
+                fill.classList.remove('indeterminate');
+                fill.style.width = pct + '%';
+                text.textContent = done + ' of ' + status.total_docs +
+                    ' document(s) indexed (' + pct + '%)';
+            } else {
+                fill.classList.add('indeterminate');
+                text.textContent = 'Reading documents from the vault…';
+            }
+        }
+
+        async function poll() {
+            let status;
+            try {
+                status = await (await fetch('/api/fulltext-index-status')).json();
+            } catch (err) {
+                setTimeout(poll, 2000);
+                return;
+            }
+            if (status.running) {
+                sawRunningJob = true;
+                render(status);
+                setTimeout(poll, 800);
+            } else if (sawRunningJob) {
+                // The build we were watching finished: reload with its outcome.
+                const params = new URLSearchParams();
+                if (status.error) {
+                    params.set('error', status.error);
+                } else if (status.message) {
+                    params.set('created', status.message);
+                }
+                window.location = '/keyword-search' +
+                    (params.toString() ? '?' + params : '');
+            } else {
+                panel.style.display = 'none';
+            }
+        }
+
+        poll();
+    })();
+</script>
 
 {% include "_search_interactions.html" %}
 {% endblock %}
