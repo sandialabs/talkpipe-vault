@@ -20,8 +20,8 @@ from talkpipe.util.data_manipulation import assign_property, extract_property
 
 from .config import (
     DEFAULT_VECTOR_TABLE_NAME,
-    RAG_PREFIX_PROMPTS,
     RAG_PROMPT_DIRECTIVE,
+    RAG_SYSTEM_PROMPT,
     ensure_supported_vault_layout,
     get_chat_model,
     get_chat_source,
@@ -283,7 +283,7 @@ class VaultChat(AbstractFieldSegment):
                 completion_model=chat_model,
                 completion_source=chat_source,
                 limit=limit if limit is not None else 10,
-                role_map=RAG_PREFIX_PROMPTS,
+                system_prompt=RAG_SYSTEM_PROMPT,
                 prompt_directive=RAG_PROMPT_DIRECTIVE,
             )
             | EvalExpression(field="chat_response", expression="item")

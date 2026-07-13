@@ -51,7 +51,6 @@ Configuration can be set via:
 import os
 
 from talkpipe.util.config import get_config
-from talkpipe.util.data_manipulation import dict_to_text
 
 # Default values (used if not specified in TalkPipe config).
 # model2vec runs in-process (no server or API key); the model is downloaded
@@ -235,13 +234,13 @@ def get_chat_source() -> str:
     )
 
 
-RAG_PREFIX_PROMPTS = dict_to_text(
-    {
-        "developer": """You are a helpful assistant that answers questions based on provided background information.
+# Passed to RAGToText as ``system_prompt`` (a plain string), not ``role_map``.
+# role_map is parsed as comma-separated ``role:message`` pairs, so any comma in
+# this text would be split into bogus roles that strict providers (e.g. OpenAI)
+# reject with a 400; a system_prompt is sent verbatim as a single system message.
+RAG_SYSTEM_PROMPT = """You are a helpful assistant that answers questions based on provided background information.
 Ground your responses in the background context given. If the background does not contain sufficient information to answer the question, acknowledge this limitation rather than speculating or making up information.
 Be concise and accurate in your responses.  Make it clear which answers are from general knowledge and which are from the provided content. List the files used to inform your answer."""
-    }
-)
 RAG_PROMPT_DIRECTIVE = "Remember to list the files you used to inform your answer."
 
 
