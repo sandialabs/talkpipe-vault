@@ -1,5 +1,6 @@
 """Unit tests for the vault query web app."""
 
+import os
 import time
 from types import SimpleNamespace
 
@@ -133,6 +134,104 @@ def test_config_status_endpoint_skips_probe(monkeypatch):
         c for c in response.json()["checks"] if c["name"] == "Chat (Ask) provider"
     )
     assert chat["status"] == "unknown"
+
+
+def test_save_credentials_persists_and_applies(monkeypatch):
+    """Posting credentials should store them and apply to the environment."""
+    from talkpipe_vault.apps import credentials
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("TALKPIPE_OLLAMA_SERVER_URL", raising=False)
+    credentials._managed_env.clear()
+    monkeypatch.setattr(query, "_refresh_pipelines", lambda force=False: None)
+    client = TestClient(query.app)
+
+    response = client.post(
+        "/settings/credentials",
+        data={
+            "openai_api_key": "sk-ui-123456",
+            "ollama_server_url": "http://ollama.example:11434",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert os.environ["OPENAI_API_KEY"] == "sk-ui-123456"
+    assert os.environ["TALKPIPE_OLLAMA_SERVER_URL"] == "http://ollama.example:11434"
+    assert credentials.load()["openai_api_key"] == "sk-ui-123456"
+    credentials._managed_env.clear()
+
+
+def test_save_credentials_blank_secret_keeps_saved_key(monkeypatch):
+    """A blank secret field must not wipe an already-saved key."""
+    from talkpipe_vault.apps import credentials
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    credentials._managed_env.clear()
+    credentials.set_values({"openai_api_key": "sk-existing-9999"})
+    monkeypatch.setattr(query, "_refresh_pipelines", lambda force=False: None)
+    client = TestClient(query.app)
+
+    client.post(
+        "/settings/credentials",
+        data={"openai_api_key": "", "ollama_server_url": ""},
+        follow_redirects=False,
+    )
+
+    assert credentials.load()["openai_api_key"] == "sk-existing-9999"
+    credentials._managed_env.clear()
+
+
+def test_save_credentials_clear_checkbox_removes_key(monkeypatch):
+    """The clear checkbox removes a saved secret even with a blank field."""
+    from talkpipe_vault.apps import credentials
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    credentials._managed_env.clear()
+    credentials.set_values({"openai_api_key": "sk-existing-9999"})
+    monkeypatch.setattr(query, "_refresh_pipelines", lambda force=False: None)
+    client = TestClient(query.app)
+
+    client.post(
+        "/settings/credentials",
+        data={"openai_api_key": "", "clear_openai_api_key": "true"},
+        follow_redirects=False,
+    )
+
+    assert "openai_api_key" not in credentials.load()
+    assert "OPENAI_API_KEY" not in os.environ
+    credentials._managed_env.clear()
+
+
+def test_settings_page_shows_credentials_form_without_leaking_secret(monkeypatch):
+    """The settings page should show the credentials form and never echo a key."""
+    from talkpipe_vault.apps import credentials
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    credentials._managed_env.clear()
+    credentials.set_values({"openai_api_key": "sk-topsecret-4242"})
+    client = TestClient(query.app)
+
+    response = client.get("/settings")
+
+    assert response.status_code == 200
+    assert "Connections &amp; credentials" in response.text
+    assert 'action="/settings/credentials"' in response.text
+    assert "sk-topsecret-4242" not in response.text  # secret never rendered
+    assert "4242" in response.text  # but the masked hint is shown
+    credentials._managed_env.clear()
+
+
+def test_settings_page_shows_resolved_credentials_path(tmp_path):
+    """The credentials panel should show the concrete file path, not a variable."""
+    client = TestClient(query.app)
+
+    response = client.get("/settings")
+
+    assert response.status_code == 200
+    expected = str(tmp_path / "vault-home" / "credentials.json")
+    assert expected in response.text
+    assert "$TALKPIPE_VAULT_HOME/credentials.json" not in response.text
 
 
 def test_settings_page_shows_config_status_panel():

@@ -59,7 +59,7 @@ services:
     entrypoint: ["/bin/bash", "-lc"]
     command: >
       python3 -m pip install --user -e '.[dev]' &&
-      vault-server "$${VAULT_PATH}" --host "$${VAULT_HOST}" --port "$${VAULT_PORT}"
+      vault-server "$${VAULT_PATH}" --host "$${VAULT_HOST}" --port "$${VAULT_PORT}" --no-browser
     extra_hosts:
       - "host.containers.internal:host-gateway"
     networks:

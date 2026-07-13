@@ -47,4 +47,4 @@ ENV PATH=/home/vault/.local/bin:$PATH
 EXPOSE 8002
 
 # Run the web application
-CMD ["vault-server", "/app/data/vault", "--host", "0.0.0.0", "--port", "8002"]
+CMD ["vault-server", "/app/data/vault", "--host", "0.0.0.0", "--port", "8002", "--no-browser"]

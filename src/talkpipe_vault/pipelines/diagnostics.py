@@ -15,6 +15,7 @@ The report is a plain JSON-serializable dict so it can be returned straight
 from a FastAPI endpoint and rendered by the Settings page.
 """
 
+import importlib.util
 import json
 import logging
 import os
@@ -24,9 +25,13 @@ from pathlib import Path
 from typing import Any
 
 from talkpipe.util.config import get_config
-from talkpipe.util.constants import OLLAMA_SERVER_URL
+from talkpipe.util.constants import (
+    MODEL2VEC_CACHE_DIR,
+    MODEL2VEC_REVISION,
+    OLLAMA_SERVER_URL,
+)
 
-from talkpipe_vault.apps import user_settings
+from talkpipe_vault.apps import credentials, user_settings
 
 logger = logging.getLogger(__name__)
 
@@ -123,12 +128,7 @@ def _check_provider(
     normalized = (source or "").strip().lower()
 
     if normalized == "model2vec":
-        base["status"] = "ok"
-        base["summary"] = (
-            f"model2vec runs in-process — no server or API key needed. "
-            f"Model '{model}' downloads from Hugging Face on first use."
-        )
-        return base
+        return _check_model2vec(base, model, probe=probe)
 
     if normalized == "eliza":
         base["status"] = "ok"
@@ -158,6 +158,155 @@ def _check_provider(
     base["status"] = "warn"
     base["summary"] = f"Can't automatically verify provider '{source}'."
     return base
+
+
+def _check_model2vec(
+    base: dict[str, Any], model: str, *, probe: bool
+) -> dict[str, Any]:
+    """Check that a model2vec model is available locally.
+
+    model2vec runs in-process but resolves its model through Hugging Face,
+    which downloads on first use. Two firewall realities shape this check:
+
+    - An uncached model can only be fetched with outbound access to
+      huggingface.co; behind a firewall the download fails, or (worse) hangs
+      on connection timeouts.
+    - Even a *cached* model, loaded in online mode, makes an etag HEAD request
+      that can stall for the full timeout before falling back to the cache.
+
+    So the reliable firewall setup is ``HF_HUB_OFFLINE=1`` plus a pre-populated
+    cache (or a local model directory). This check reports against that: it
+    inspects the local cache rather than loading the model (never triggering a
+    download just by opening Settings) and factors in whether offline mode is
+    on.
+    """
+    if _is_local_model_dir(model):
+        base["status"] = "ok"
+        base["summary"] = (
+            f"Local model directory '{model}' — runs in-process, no download "
+            "and no network access."
+        )
+        return base
+
+    if not probe:
+        base["status"] = "unknown"
+        base["summary"] = f"model2vec model '{model}' (not checked)."
+        return base
+
+    offline = _hf_offline()
+    state, detail = _model2vec_cache_state(model)
+
+    if state == "ready":
+        base["status"] = "ok"
+        if offline:
+            base["summary"] = (
+                f"model2vec model '{model}' loads from the local cache and "
+                "Hugging Face offline mode is on, so it needs no network access."
+            )
+            base["detail"] = f"Cached at {detail}"
+        else:
+            base["summary"] = (
+                f"model2vec model '{model}' is available locally and ready — "
+                "runs in-process, no server or API key needed."
+            )
+            base["detail"] = (
+                f"Cached at {detail}. Behind a firewall, start the app with "
+                "HF_HUB_OFFLINE=1 so loading never waits on the network."
+            )
+        return base
+
+    if state == "missing_package":
+        base["status"] = "error"
+        base["summary"] = (
+            "model2vec is selected but the model2vec package is not installed."
+        )
+        base["fix"] = "Install it with: pip install talkpipe[model2vec]"
+        return base
+
+    # "absent": the model cannot be loaded from the local cache right now
+    # (not cached, or cached without a revision that resolves offline).
+    if offline:
+        base["status"] = "error"
+        base["summary"] = (
+            f"Hugging Face offline mode is on, but model2vec model '{model}' "
+            "cannot be loaded from the local cache, so indexing and search will "
+            "fail."
+        )
+        base["fix"] = (
+            "Most reliable behind a firewall: download the model and point the "
+            "embedding model at that local directory (loads with no Hugging "
+            "Face lookup). Otherwise, fully pre-cache it on a connected machine."
+        )
+        return base
+
+    base["status"] = "warn"
+    base["summary"] = (
+        f"model2vec model '{model}' is not available in the local cache. It "
+        "downloads from Hugging Face on first index or search — which fails or "
+        "hangs behind a firewall."
+    )
+    base["fix"] = (
+        "Online: it downloads automatically (~30 MB). Firewalled: point the "
+        "embedding model at a local model directory, or pre-cache it and start "
+        "the app with HF_HUB_OFFLINE=1."
+    )
+    return base
+
+
+def _hf_offline() -> bool:
+    """Return True if Hugging Face offline mode is enabled via the environment.
+
+    Only ``HF_HUB_OFFLINE`` governs huggingface_hub's download path (which is
+    what model2vec uses). Read fresh from the environment for reporting; note
+    that huggingface_hub itself latches this at import time, so it must be set
+    before the app starts to actually take effect.
+    """
+    return os.environ.get("HF_HUB_OFFLINE", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _is_local_model_dir(model: str) -> bool:
+    """Return True if the model name refers to an existing local directory."""
+    try:
+        return Path(model).expanduser().is_dir()
+    except OSError:  # pragma: no cover - defensive against odd path values
+        return False
+
+
+def _model2vec_cache_state(model: str) -> tuple[str, str | None]:
+    """Return the local availability of a model2vec model without downloading.
+
+    Returns one of ``("ready", path)``, ``("absent", None)``, or
+    ``("missing_package", None)``. Honors the same cache dir / revision config
+    that the model2vec adapter uses, so it looks where the model would load
+    from.
+    """
+    if importlib.util.find_spec("model2vec") is None:
+        return "missing_package", None
+    try:
+        import huggingface_hub
+    except ImportError:
+        return "missing_package", None
+
+    config = get_config()
+    cache_dir = config.get(MODEL2VEC_CACHE_DIR)
+    revision = config.get(MODEL2VEC_REVISION)
+    try:
+        # local_files_only forces an offline lookup: it returns the snapshot
+        # path if fully cached and raises otherwise — never hits the network.
+        path = huggingface_hub.snapshot_download(
+            repo_id=model,
+            revision=revision,
+            cache_dir=str(cache_dir) if cache_dir else None,
+            local_files_only=True,
+        )
+        return "ready", path
+    except Exception:  # noqa: BLE001 - any offline failure means "not cached"
+        return "absent", None
 
 
 def _check_ollama(
@@ -213,14 +362,16 @@ def _check_api_key(
     key = os.environ.get(env_var)
     if not key:
         base["status"] = "error"
-        base["summary"] = f"{display} is selected but {env_var} is not set."
+        base["summary"] = f"{display} is selected but no {display} API key is set."
         base["fix"] = (
-            f"Set {env_var} in your environment — the {display} SDK reads it "
-            "directly (not TALKPIPE_* keys)."
+            f"Enter your {display} API key under Connections & credentials below, "
+            f"or set {env_var} in the environment."
         )
         return base
 
-    base["detail"] = f"{env_var} is set ({_mask(key)})."
+    base["detail"] = (
+        f"{env_var} is set ({_mask(key)}); from {credentials.source_for(env_var)}."
+    )
 
     if not probe:
         base["status"] = "ok"
@@ -313,6 +464,8 @@ def _ollama_url_and_source() -> tuple[str, str]:
     """Resolve the Ollama server URL and a human label for where it came from."""
     env_url = os.environ.get("TALKPIPE_OLLAMA_SERVER_URL")
     if env_url:
+        if credentials.source_for("TALKPIPE_OLLAMA_SERVER_URL") == "Vault settings":
+            return env_url.rstrip("/"), "Vault settings"
         return env_url.rstrip("/"), "TALKPIPE_OLLAMA_SERVER_URL env var"
     try:
         configured = get_config().get(OLLAMA_SERVER_URL)

@@ -22,6 +22,7 @@ def isolate_env(tmp_path, monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("TALKPIPE_OLLAMA_SERVER_URL", raising=False)
+    monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
     yield
 
 
@@ -36,11 +37,95 @@ def _models(**overrides):
     return base
 
 
-def test_model2vec_needs_no_credentials():
+def test_model2vec_not_checked_when_probe_disabled():
     report = diagnostics.collect_config_status(_models(), vault_path=None, probe=False)
     embeddings = _find(report, "Embeddings provider")
+    assert embeddings["status"] == "unknown"
+
+
+def test_model2vec_ready_when_cached(monkeypatch):
+    monkeypatch.setattr(
+        diagnostics, "_model2vec_cache_state", lambda model: ("ready", "/hf/cache/x")
+    )
+    report = diagnostics.collect_config_status(_models(), vault_path=None)
+    embeddings = _find(report, "Embeddings provider")
     assert embeddings["status"] == "ok"
-    assert "in-process" in embeddings["summary"]
+    assert "ready" in embeddings["summary"]
+    assert "/hf/cache/x" in embeddings["detail"]
+
+
+def test_model2vec_absent_online_warns_about_firewall(monkeypatch):
+    monkeypatch.setattr(
+        diagnostics, "_model2vec_cache_state", lambda model: ("absent", None)
+    )
+    report = diagnostics.collect_config_status(_models(), vault_path=None)
+    embeddings = _find(report, "Embeddings provider")
+    assert embeddings["status"] == "warn"
+    assert "not available in the local cache" in embeddings["summary"]
+    assert "firewall" in embeddings["summary"]
+    assert "HF_HUB_OFFLINE=1" in embeddings["fix"]
+
+
+def test_model2vec_absent_offline_is_error(monkeypatch):
+    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
+    monkeypatch.setattr(
+        diagnostics, "_model2vec_cache_state", lambda model: ("absent", None)
+    )
+    report = diagnostics.collect_config_status(_models(), vault_path=None)
+    embeddings = _find(report, "Embeddings provider")
+    assert embeddings["status"] == "error"
+    assert "offline mode is on" in embeddings["summary"]
+    assert "cannot be loaded from the local cache" in embeddings["summary"]
+
+
+def test_model2vec_ready_offline_notes_no_network(monkeypatch):
+    monkeypatch.setenv("HF_HUB_OFFLINE", "on")
+    monkeypatch.setattr(
+        diagnostics, "_model2vec_cache_state", lambda model: ("ready", "/hf/cache/x")
+    )
+    report = diagnostics.collect_config_status(_models(), vault_path=None)
+    embeddings = _find(report, "Embeddings provider")
+    assert embeddings["status"] == "ok"
+    assert "offline mode is on" in embeddings["summary"]
+
+
+def test_model2vec_ready_online_hints_offline_for_firewall(monkeypatch):
+    monkeypatch.setattr(
+        diagnostics, "_model2vec_cache_state", lambda model: ("ready", "/hf/cache/x")
+    )
+    report = diagnostics.collect_config_status(_models(), vault_path=None)
+    embeddings = _find(report, "Embeddings provider")
+    assert embeddings["status"] == "ok"
+    assert "HF_HUB_OFFLINE=1" in embeddings["detail"]
+
+
+def test_model2vec_missing_package_is_error(monkeypatch):
+    monkeypatch.setattr(
+        diagnostics, "_model2vec_cache_state", lambda model: ("missing_package", None)
+    )
+    report = diagnostics.collect_config_status(_models(), vault_path=None)
+    embeddings = _find(report, "Embeddings provider")
+    assert embeddings["status"] == "error"
+    assert "not installed" in embeddings["summary"]
+    assert "pip install" in embeddings["fix"]
+
+
+def test_model2vec_local_directory_is_ok(tmp_path):
+    report = diagnostics.collect_config_status(
+        _models(embedding_model=str(tmp_path)), vault_path=None
+    )
+    embeddings = _find(report, "Embeddings provider")
+    assert embeddings["status"] == "ok"
+    assert "Local model directory" in embeddings["summary"]
+
+
+def test_model2vec_cache_state_reports_ready_for_cached_default():
+    # The default model is expected to be cached in most dev/CI environments;
+    # if it is not, the check must still degrade to "absent", never raise.
+    state, _detail = diagnostics._model2vec_cache_state(
+        "minishlab/potion-retrieval-32M"
+    )
+    assert state in {"ready", "absent", "missing_package"}
 
 
 def test_ollama_unreachable_is_error_with_fix(monkeypatch):
@@ -86,7 +171,7 @@ def test_openai_selected_without_key_is_error():
     )
     chat = _find(report, "Chat (Ask) provider")
     assert chat["status"] == "error"
-    assert "OPENAI_API_KEY is not set" in chat["summary"]
+    assert "no OpenAI API key is set" in chat["summary"]
 
 
 def test_openai_key_present_validates(monkeypatch):
@@ -164,6 +249,21 @@ def test_ollama_url_provenance_from_env(monkeypatch):
     chat = _find(report, "Chat (Ask) provider")
     assert "example.test" in chat["detail"]
     assert "TALKPIPE_OLLAMA_SERVER_URL env var" in chat["detail"]
+
+
+def test_api_key_provenance_shows_vault_settings(monkeypatch):
+    from talkpipe_vault.apps import credentials
+
+    credentials._managed_env.clear()
+    credentials.set_values({"openai_api_key": "sk-vault-9999"})
+    monkeypatch.setattr(diagnostics, "_probe_api_key", lambda package, timeout: None)
+    report = diagnostics.collect_config_status(
+        _models(chat_source="openai", chat_model="gpt-4o"), vault_path=None
+    )
+    chat = _find(report, "Chat (Ask) provider")
+    assert chat["status"] == "ok"
+    assert "from Vault settings" in chat["detail"]
+    credentials._managed_env.clear()
 
 
 def test_model_present_matching():

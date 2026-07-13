@@ -2,8 +2,9 @@
 
 Stores the recent-vault list and model configuration chosen in the web
 interface as JSON under the vault application home directory
-(``~/.talkpipe-vault`` by default, overridable via the
-``TALKPIPE_VAULT_HOME`` environment variable).
+(``~/.talkpipe-vault`` by default). The location is resolved like other
+TalkPipe configuration: the ``TALKPIPE_VAULT_HOME`` environment variable, then
+a ``VAULT_HOME`` key in ``~/.talkpipe.toml``, then the default.
 
 Model values saved here act as user overrides: ``None``/absent values fall
 through to TalkPipe configuration and then to the vault defaults (see
@@ -15,9 +16,13 @@ import logging
 import os
 from pathlib import Path
 
+from talkpipe.util.config import get_config
+
 logger = logging.getLogger(__name__)
 
 VAULT_HOME_ENV = "TALKPIPE_VAULT_HOME"
+# TalkPipe config key (the TALKPIPE_ prefix of the env var maps to this).
+VAULT_HOME_CONFIG_KEY = "VAULT_HOME"
 DEFAULT_VAULT_HOME = "~/.talkpipe-vault"
 SETTINGS_FILENAME = "settings.json"
 MAX_RECENT_VAULTS = 10
@@ -37,9 +42,25 @@ INTEGER_SETTING_MINIMUMS = {
 }
 
 
+def _configured_vault_home() -> str | None:
+    """Return a ``VAULT_HOME`` value from TalkPipe config (~/.talkpipe.toml)."""
+    try:
+        value = get_config().get(VAULT_HOME_CONFIG_KEY)
+    except Exception:  # pragma: no cover - defensive; config load is cheap
+        return None
+    return str(value) if value else None
+
+
 def get_vault_home() -> Path:
-    """Return the vault application home directory (not necessarily existing)."""
-    return Path(os.environ.get(VAULT_HOME_ENV) or DEFAULT_VAULT_HOME).expanduser()
+    """Return the vault application home directory (not necessarily existing).
+
+    Resolved like other TalkPipe configuration, highest precedence first: the
+    ``TALKPIPE_VAULT_HOME`` environment variable, a ``VAULT_HOME`` key in
+    ``~/.talkpipe.toml``, then the ``~/.talkpipe-vault`` default. The env var is
+    read directly (not via cached config) so a freshly set value takes effect.
+    """
+    configured = os.environ.get(VAULT_HOME_ENV) or _configured_vault_home()
+    return Path(configured or DEFAULT_VAULT_HOME).expanduser()
 
 
 def _settings_path() -> Path:

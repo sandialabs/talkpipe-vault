@@ -101,11 +101,10 @@
     <p class="panel-hint">
         Choose the provider (source) and model used for embeddings and for
         answering questions. Values saved here override the TalkPipe
-        configuration; connection details such as API keys or a remote Ollama
-        server URL still come from the environment
-        (e.g. <code>OPENAI_API_KEY</code>, <code>TALKPIPE_OLLAMA_SERVER_URL</code>).
-        After changing a provider, use <strong>Re-test</strong> in Configuration
-        status above to confirm it is reachable.
+        configuration. Enter API keys and connection URLs under
+        <strong>Connections &amp; credentials</strong> below. After changing a
+        provider, use <strong>Re-test</strong> in Configuration status above to
+        confirm it is reachable.
     </p>
     <form method="post" action="/settings" class="settings-form">
         <fieldset>
@@ -164,6 +163,61 @@
             </p>
         </fieldset>
         <button type="submit">Save Settings</button>
+    </form>
+</div>
+
+<div class="search-box">
+    <h2>Connections &amp; credentials</h2>
+    <p class="panel-hint">
+        API keys and connection URLs for the providers above. These are saved
+        for this app only &mdash; written to
+        <code>{{ credentials_store }}</code> (readable only by you) and applied
+        to the vault process. Your shell and <code>~/.talkpipe.toml</code> are
+        left untouched.
+    </p>
+    <form method="post" action="/settings/credentials" class="settings-form">
+        {% for cred in credentials %}
+        <fieldset>
+            <legend>{{ cred.label }}</legend>
+            {% if cred.secret %}
+            {% if cred.present %}
+            <p class="field-hint">
+                A key is saved (<code>{{ cred.masked }}</code>, from {{ cred.source }}).
+                Leave blank to keep it.
+            </p>
+            {% endif %}
+            <label for="cred-{{ cred.key }}">
+                {% if cred.present %}Replace {{ cred.label }}{% else %}{{ cred.label }}{% endif %}
+            </label>
+            <input type="password" name="{{ cred.key }}" id="cred-{{ cred.key }}"
+                   autocomplete="off" placeholder="Paste a new key to change it">
+            {% if cred.present %}
+            <label class="overwrite-option">
+                <input type="checkbox" name="clear_{{ cred.key }}" value="true">
+                Remove the saved key
+            </label>
+            {% endif %}
+            {% else %}
+            <label for="cred-{{ cred.key }}">{{ cred.label }}</label>
+            <input type="text" name="{{ cred.key }}" id="cred-{{ cred.key }}"
+                   value="{{ cred.value }}" autocomplete="off"
+                   placeholder="Leave blank to use the default">
+            {% if cred.present %}
+            <p class="field-hint">In effect from {{ cred.source }}. Clear the field to remove it.</p>
+            {% elif cred.active %}
+            <p class="field-hint">
+                Currently <code>{{ cred.active }}</code> from {{ cred.source }}.
+                Enter a value to override it for this app.
+            </p>
+            {% endif %}
+            {% endif %}
+        </fieldset>
+        {% endfor %}
+        <p class="field-hint">
+            The OpenAI base URL is optional &mdash; set it only for
+            OpenAI-compatible endpoints (Azure OpenAI, LocalAI, a proxy, etc.).
+        </p>
+        <button type="submit">Save Connection Settings</button>
     </form>
 </div>
 

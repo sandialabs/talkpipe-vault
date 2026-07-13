@@ -15,9 +15,11 @@ import glob as globlib
 import json
 import os
 import shutil
+import socket
 import threading
 import time
 import urllib.parse
+import webbrowser
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Any, Callable
@@ -42,7 +44,7 @@ from talkpipe.search.lancedb import LanceDBDocumentStore
 from talkpipe.search.whoosh import WhooshFullTextIndex
 from talkpipe.util.config import configure_logger
 
-from talkpipe_vault.apps import user_settings
+from talkpipe_vault.apps import credentials, user_settings
 from talkpipe_vault.pipelines import diagnostics
 from talkpipe_vault.pipelines.config import (
     DEFAULT_VECTOR_TABLE_NAME,
@@ -1255,9 +1257,49 @@ async def settings_page(
             models=_effective_models(state),
             embedding_sources=getEmbeddingSources(),
             chat_sources=getPromptSources(),
+            credentials=credentials.describe(),
+            credentials_store=str(credentials.store_path()),
             flash_message=message,
             flash_error=error,
         ),
+    )
+
+
+@app.post("/settings/credentials", response_class=HTMLResponse)
+async def save_credentials(
+    openai_api_key: Annotated[str, Form()] = "",
+    clear_openai_api_key: Annotated[bool, Form()] = False,
+    openai_base_url: Annotated[str, Form()] = "",
+    anthropic_api_key: Annotated[str, Form()] = "",
+    clear_anthropic_api_key: Annotated[bool, Form()] = False,
+    ollama_server_url: Annotated[str, Form()] = "",
+    state: AppState = Depends(get_state),
+) -> HTMLResponse:
+    """Save vault-scoped provider credentials and connection settings.
+
+    Non-secret fields (base/server URLs) are set from the form directly — a
+    blank value clears them. Secret fields (API keys) are never echoed back, so
+    a blank value keeps the saved key and the matching "clear" checkbox removes
+    it. Saved values are applied to the process environment immediately.
+    """
+    changes: dict[str, str | None] = {
+        "openai_base_url": openai_base_url,
+        "ollama_server_url": ollama_server_url,
+    }
+    if clear_openai_api_key:
+        changes["openai_api_key"] = ""
+    elif openai_api_key.strip():
+        changes["openai_api_key"] = openai_api_key
+    if clear_anthropic_api_key:
+        changes["anthropic_api_key"] = ""
+    elif anthropic_api_key.strip():
+        changes["anthropic_api_key"] = anthropic_api_key
+
+    credentials.set_values(changes)
+    if _vault_selected(state):
+        _refresh_pipelines(force=True)
+    return _redirect_with_message(
+        "/settings", message="Connection settings saved for this app."
     )
 
 
@@ -1646,6 +1688,7 @@ def run_app(
     host: str = "127.0.0.1",
     port: int = 8000,
     show_source_paths: bool = False,
+    open_browser: bool = True,
 ) -> None:
     """
     Start the web application server.
@@ -1657,13 +1700,58 @@ def run_app(
         host: Host to bind to (default: 127.0.0.1)
         port: Port to listen on (default: 8000)
         show_source_paths: If True, display and serve source file paths in search results.
+        open_browser: If True, open the app in a web browser once the server is
+            accepting connections. No-op in headless environments.
     """
     _state.show_source_paths = show_source_paths
+    # Apply persisted credentials before building any pipeline so the LLM SDKs
+    # and Ollama connection see the vault-scoped values.
+    credentials.apply()
     load_saved_model_overrides()
     if vault_path:
         init_pipelines(vault_path)
         user_settings.remember_vault(vault_path)
+    if open_browser:
+        _launch_browser_when_ready(host, port)
     uvicorn.run(app, host=host, port=port)
+
+
+def _browser_url(host: str, port: int) -> str:
+    """Build the URL to open in a browser for the given bind host and port.
+
+    A wildcard bind address (0.0.0.0 / ::) isn't a routable target, so open the
+    loopback address instead; any concrete host is used as-is.
+    """
+    browser_host = "127.0.0.1" if host in ("", "0.0.0.0", "::") else host
+    return f"http://{browser_host}:{port}/"
+
+
+def _launch_browser_when_ready(host: str, port: int, timeout: float = 15.0) -> None:
+    """Open the app in a browser once the server accepts connections.
+
+    Waits in a background daemon thread so we never open a dead page before the
+    server is up, and so this does not block server startup. Failures (e.g. a
+    headless container with no browser) are ignored.
+    """
+    url = _browser_url(host, port)
+    connect_host = "127.0.0.1" if host in ("", "0.0.0.0", "::") else host
+
+    def _wait_and_open() -> None:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                with socket.create_connection((connect_host, port), timeout=0.5):
+                    break
+            except OSError:
+                time.sleep(0.2)
+        else:
+            return  # server never came up; nothing to open
+        try:
+            webbrowser.open(url)
+        except Exception:  # noqa: BLE001 - headless / no browser available
+            pass
+
+    threading.Thread(target=_wait_and_open, daemon=True).start()
 
 
 def main() -> None:
@@ -1700,9 +1788,20 @@ def main() -> None:
             "files. Hidden by default."
         ),
     )
+    parser.add_argument(
+        "--no-browser",
+        action="store_true",
+        help="Do not open the app in a web browser on startup.",
+    )
 
     args = parser.parse_args()
-    run_app(args.vault_path, args.host, args.port, args.show_source_paths)
+    run_app(
+        args.vault_path,
+        args.host,
+        args.port,
+        args.show_source_paths,
+        open_browser=not args.no_browser,
+    )
 
 
 if __name__ == "__main__":

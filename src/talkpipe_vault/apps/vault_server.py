@@ -45,6 +45,11 @@ def main() -> None:
             "those files. Hidden by default."
         ),
     )
+    parser.add_argument(
+        "--no-browser",
+        action="store_true",
+        help="Do not open the app in a web browser on startup.",
+    )
 
     args = parser.parse_args()
 
@@ -67,6 +72,8 @@ def main() -> None:
         print("Vault storage: none selected yet — create or choose a vault")
         print("in the web interface after it starts.")
     print(f"Web interface: http://{args.host}:{args.port}")
+    if not args.no_browser:
+        print("Opening in your web browser...")
     print()
 
     # Start the web application (this will block)
@@ -77,6 +84,7 @@ def main() -> None:
             host=args.host,
             port=args.port,
             show_source_paths=args.show_source_paths,
+            open_browser=not args.no_browser,
         )
     except KeyboardInterrupt:
         sys.exit(0)
