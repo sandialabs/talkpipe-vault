@@ -95,6 +95,58 @@ def test_keyword_search_page_can_rebuild_existing_whoosh_index():
     assert 'action="/keyword-search/create-index"' in response.text
 
 
+def test_config_status_endpoint_returns_report(monkeypatch):
+    """The config-status endpoint should return a rolled-up report as JSON."""
+    from talkpipe_vault.pipelines import diagnostics
+
+    monkeypatch.setattr(
+        diagnostics,
+        "_ollama_tags",
+        lambda url, timeout: (["mistral-small:latest"], None),
+    )
+    client = TestClient(query.app)
+
+    response = client.get("/api/config-status")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["overall"] in {"ok", "warn", "error", "unknown"}
+    names = {check["name"] for check in body["checks"]}
+    assert {"Embeddings provider", "Chat (Ask) provider", "Vault"} <= names
+
+
+def test_config_status_endpoint_skips_probe(monkeypatch):
+    """?probe=0 should avoid live provider calls and report unknown for Ollama."""
+
+    def _fail(*_args, **_kwargs):
+        raise AssertionError("network probe should not run when probe=0")
+
+    from talkpipe_vault.pipelines import diagnostics
+
+    monkeypatch.setattr(diagnostics, "_ollama_tags", _fail)
+    client = TestClient(query.app)
+
+    response = client.get("/api/config-status?probe=0")
+
+    assert response.status_code == 200
+    chat = next(
+        c for c in response.json()["checks"] if c["name"] == "Chat (Ask) provider"
+    )
+    assert chat["status"] == "unknown"
+
+
+def test_settings_page_shows_config_status_panel():
+    """The settings page should host the configuration status panel."""
+    client = TestClient(query.app)
+
+    response = client.get("/settings")
+
+    assert response.status_code == 200
+    assert "Configuration status" in response.text
+    assert 'id="config-status-body"' in response.text
+    assert "/api/config-status" in response.text
+
+
 def test_header_shows_chunk_count_without_full_text_index(monkeypatch):
     """Header should show the docs-table chunk count and no full-text stat."""
     rows = [

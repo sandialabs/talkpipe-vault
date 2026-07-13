@@ -3,6 +3,99 @@
 {% block title %}Settings - Talkpipe Vault{% endblock %}
 
 {% block content %}
+<style>
+    .config-status-head {
+        align-items: center;
+        display: flex;
+        gap: 12px;
+        justify-content: space-between;
+    }
+    .cfg-overall {
+        border-radius: var(--radius-sm);
+        font-size: 0.9rem;
+        font-weight: 600;
+        margin: 4px 0 14px;
+        padding: 10px 14px;
+    }
+    .cfg-overall.cfg-ok {
+        background: var(--success-bg);
+        border: 1px solid var(--success-border);
+        color: var(--success-ink);
+    }
+    .cfg-overall.cfg-warn, .cfg-overall.cfg-unknown {
+        background: var(--warning-bg);
+        border: 1px solid var(--warning-border);
+        color: var(--warning-ink);
+    }
+    .cfg-overall.cfg-error {
+        background: var(--danger-bg);
+        border: 1px solid var(--danger-border);
+        color: var(--danger-ink);
+    }
+    .cfg-list { list-style: none; }
+    .cfg-check {
+        border-top: 1px solid var(--panel-border);
+        display: flex;
+        gap: 12px;
+        padding: 14px 0;
+    }
+    .cfg-check:first-child { border-top: none; }
+    .cfg-dot {
+        border-radius: 50%;
+        flex: none;
+        height: 10px;
+        margin-top: 6px;
+        width: 10px;
+    }
+    .cfg-ok .cfg-dot { background: var(--success); }
+    .cfg-warn .cfg-dot, .cfg-unknown .cfg-dot { background: #d97706; }
+    .cfg-error .cfg-dot { background: var(--danger); }
+    .cfg-main { flex: 1; min-width: 0; }
+    .cfg-name {
+        color: var(--heading);
+        font-size: 0.96rem;
+        font-weight: 650;
+    }
+    .cfg-value {
+        background: var(--field-bg);
+        border: 1px solid var(--field-border);
+        border-radius: 999px;
+        color: var(--muted);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 0.76rem;
+        margin-left: 8px;
+        padding: 1px 9px;
+        white-space: nowrap;
+    }
+    .cfg-summary { color: var(--text); font-size: 0.9rem; margin-top: 3px; }
+    .cfg-detail, .cfg-provenance { color: var(--muted); font-size: 0.82rem; margin-top: 3px; }
+    .cfg-fix {
+        background: #eef1f8;
+        border-radius: 6px;
+        color: var(--text);
+        display: inline-block;
+        font-size: 0.82rem;
+        margin-top: 6px;
+        padding: 4px 10px;
+    }
+    .cfg-fix code {
+        background: transparent;
+        padding: 0;
+    }
+</style>
+<div class="search-box">
+    <div class="config-status-head">
+        <h2>Configuration status</h2>
+        <button type="button" id="config-status-refresh" class="btn-secondary">Re-test</button>
+    </div>
+    <p class="panel-hint">
+        Checks that the providers selected below are reachable and their
+        credentials are set. Only the providers you actually use are tested.
+    </p>
+    <div id="config-status-body">
+        <div class="search-loading"><div class="spinner"></div><span>Testing configuration&hellip;</span></div>
+    </div>
+</div>
 <div class="search-box">
     <h2>Model Settings</h2>
     <p class="panel-hint">
@@ -11,6 +104,8 @@
         configuration; connection details such as API keys or a remote Ollama
         server URL still come from the environment
         (e.g. <code>OPENAI_API_KEY</code>, <code>TALKPIPE_OLLAMA_SERVER_URL</code>).
+        After changing a provider, use <strong>Re-test</strong> in Configuration
+        status above to confirm it is reachable.
     </p>
     <form method="post" action="/settings" class="settings-form">
         <fieldset>
@@ -71,4 +166,90 @@
         <button type="submit">Save Settings</button>
     </form>
 </div>
+
+<script>
+(function () {
+    const body = document.getElementById('config-status-body');
+    const refreshBtn = document.getElementById('config-status-refresh');
+    const STATUS_LABEL = { ok: 'OK', warn: 'Attention', error: 'Problem', unknown: 'Unknown' };
+    const OVERALL_TEXT = {
+        ok: 'Everything needed by your current selection is configured and reachable.',
+        warn: 'Your configuration works, but some items need attention.',
+        unknown: 'Configuration could not be fully tested.',
+        error: 'Something needed by your current selection is not configured correctly.',
+    };
+
+    function el(tag, className, text) {
+        const node = document.createElement(tag);
+        if (className) node.className = className;
+        if (text !== undefined) node.textContent = text;
+        return node;
+    }
+
+    function renderCheck(check) {
+        const status = check.status || 'unknown';
+        const row = el('li', 'cfg-check cfg-' + status);
+        row.appendChild(el('span', 'cfg-dot'));
+
+        const main = el('div', 'cfg-main');
+        const name = el('div', 'cfg-name', check.name || '');
+        if (check.value) name.appendChild(el('span', 'cfg-value', check.value));
+        main.appendChild(name);
+        main.appendChild(el('div', 'cfg-summary', check.summary || ''));
+        if (check.detail) main.appendChild(el('div', 'cfg-detail', check.detail));
+        if (check.source) {
+            main.appendChild(el('div', 'cfg-provenance', 'Configured from: ' + check.source));
+        }
+        if (check.fix) {
+            const fix = el('div', 'cfg-fix');
+            fix.appendChild(el('code', null, check.fix));
+            main.appendChild(fix);
+        }
+        row.appendChild(main);
+        return row;
+    }
+
+    function render(report) {
+        body.textContent = '';
+        const overall = report.overall || 'unknown';
+        const banner = el('div', 'cfg-overall cfg-' + overall);
+        banner.textContent = STATUS_LABEL[overall] + ' — ' + (OVERALL_TEXT[overall] || '');
+        body.appendChild(banner);
+
+        const list = el('ul', 'cfg-list');
+        (report.checks || []).forEach(function (check) {
+            list.appendChild(renderCheck(check));
+        });
+        body.appendChild(list);
+    }
+
+    function load() {
+        refreshBtn.disabled = true;
+        body.textContent = '';
+        const loading = el('div', 'search-loading');
+        loading.appendChild(el('div', 'spinner'));
+        loading.appendChild(el('span', null, 'Testing configuration…'));
+        body.appendChild(loading);
+
+        fetch('/api/config-status')
+            .then(function (resp) {
+                if (!resp.ok) throw new Error('HTTP ' + resp.status);
+                return resp.json();
+            })
+            .then(render)
+            .catch(function (err) {
+                body.textContent = '';
+                const banner = el('div', 'cfg-overall cfg-error',
+                    'Could not run configuration checks: ' + err.message);
+                body.appendChild(banner);
+            })
+            .finally(function () {
+                refreshBtn.disabled = false;
+            });
+    }
+
+    refreshBtn.addEventListener('click', load);
+    load();
+})();
+</script>
 {% endblock %}

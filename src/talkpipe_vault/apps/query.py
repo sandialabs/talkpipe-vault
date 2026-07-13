@@ -43,6 +43,7 @@ from talkpipe.search.whoosh import WhooshFullTextIndex
 from talkpipe.util.config import configure_logger
 
 from talkpipe_vault.apps import user_settings
+from talkpipe_vault.pipelines import diagnostics
 from talkpipe_vault.pipelines.config import (
     DEFAULT_VECTOR_TABLE_NAME,
     ensure_supported_vault_layout,
@@ -1157,6 +1158,27 @@ def start_fulltext_index_job(vault_path: str) -> bool:
 async def fulltext_index_status() -> JSONResponse:
     """Report the state of the background full-text index build."""
     return JSONResponse(content=_fulltext_index_job_snapshot())
+
+
+@app.get("/api/config-status")
+def config_status(
+    probe: bool = True, state: AppState = Depends(get_state)
+) -> JSONResponse:
+    """Verify the selected providers are reachable and their credentials set.
+
+    Only the providers referenced by the current embedding/chat selection are
+    tested. Defined as a sync endpoint so its blocking network probes run in a
+    threadpool rather than on the event loop. Pass ``?probe=0`` to skip the
+    live connectivity/credential calls and report only what is known locally.
+    """
+    return JSONResponse(content=_collect_config_status(state, probe=probe))
+
+
+def _collect_config_status(state: AppState, probe: bool = True) -> dict[str, Any]:
+    """Build the config-status report for the effective model selection."""
+    return diagnostics.collect_config_status(
+        _effective_models(state), vault_path=state.vault_path, probe=probe
+    )
 
 
 @app.post("/documents/index", response_class=HTMLResponse)
