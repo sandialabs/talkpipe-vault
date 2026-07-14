@@ -45,7 +45,7 @@ from talkpipe.search.whoosh import WhooshFullTextIndex
 from talkpipe.util.config import configure_logger
 
 from talkpipe_vault.apps import credentials, user_settings
-from talkpipe_vault.pipelines import diagnostics
+from talkpipe_vault.pipelines import diagnostics, vault_metadata
 from talkpipe_vault.pipelines.config import (
     DEFAULT_VECTOR_TABLE_NAME,
     ensure_supported_vault_layout,
@@ -53,6 +53,7 @@ from talkpipe_vault.pipelines.config import (
     get_chat_source,
     get_embedding_model,
     get_embedding_source,
+    get_retrieval_template,
     get_vector_db_path,
     get_whoosh_index_path,
 )
@@ -295,10 +296,33 @@ def init_pipelines(vault_path: str) -> None:
     """
     ensure_supported_vault_layout(vault_path)
     _state.vault_path = vault_path
+    _apply_vault_embedding_config(vault_path)
     _refresh_pipelines()
 
     # Get document counts from storage locations
     _update_document_counts(vault_path)
+
+
+def _apply_vault_embedding_config(vault_path: str) -> None:
+    """Set the active embedder to the one the vault was indexed with.
+
+    Embeddings are only comparable to a query embedded with the same model, so on
+    open we restore the vault's recorded embedder. Legacy vaults with no record
+    keep the user's saved override / default unchanged (the same behavior as
+    before this was tracked) — resolved from the saved overrides rather than from
+    whatever a previously opened vault left behind — and the mismatch is surfaced
+    on the Settings page's configuration status.
+    """
+    recorded = vault_metadata.load_embedding_config(vault_path)
+    saved = user_settings.get_model_overrides()
+    if recorded:
+        _state.embedding_source = recorded.get("source") or saved.get(
+            "embedding_source"
+        )
+        _state.embedding_model = recorded.get("model") or saved.get("embedding_model")
+    else:
+        _state.embedding_source = saved.get("embedding_source")
+        _state.embedding_model = saved.get("embedding_model")
 
 
 def _refresh_pipelines(force: bool = False) -> None:
@@ -915,7 +939,45 @@ def index_documents_into_vault(
             if source:
                 seen_sources.add(source)
             progress(chunk_count, len(seen_sources), source)
+    if chunk_count > 0:
+        _record_vault_embedding_config(vault_path, embedding_source, embedding_model)
     return chunk_count
+
+
+def _record_vault_embedding_config(
+    vault_path: str, embedding_source: str, embedding_model: str
+) -> None:
+    """Record how this vault was indexed so reopening restores the embedder.
+
+    Best effort: metadata problems must never fail an indexing run that already
+    wrote its vectors.
+    """
+    try:
+        retrieval_template = get_retrieval_template()
+    except Exception:  # pragma: no cover - defensive; config read is cheap
+        retrieval_template = None
+    vault_metadata.record_embedding_config(
+        vault_path,
+        source=embedding_source,
+        model=embedding_model,
+        dimension=vault_metadata.probe_embedding_dimension(
+            embedding_source, embedding_model
+        ),
+        retrieval_template=retrieval_template,
+        server_url=_indexing_server_url(embedding_source),
+    )
+
+
+def _indexing_server_url(embedding_source: str) -> str | None:
+    """Non-authoritative breadcrumb for where the embedder ran.
+
+    Only meaningful for a server-backed embedder whose location the user set
+    explicitly (Ollama). It is recorded for traceability and never applied on
+    open — the live URL is always resolved fresh from the environment.
+    """
+    if embedding_source == "ollama":
+        return os.environ.get("TALKPIPE_OLLAMA_SERVER_URL") or None
+    return None
 
 
 @dataclass
@@ -1178,7 +1240,18 @@ def config_status(
 
 def _collect_config_status(state: AppState, probe: bool = True) -> dict[str, Any]:
     """Build the config-status report for the effective model selection."""
-    return diagnostics.collect_config_status(_effective_models(state), probe=probe)
+    vault_selected = bool(state.vault_path)
+    vault_embedding = (
+        vault_metadata.load_embedding_config(state.vault_path)
+        if vault_selected
+        else None
+    )
+    return diagnostics.collect_config_status(
+        _effective_models(state),
+        vault_selected=vault_selected,
+        vault_embedding=vault_embedding,
+        probe=probe,
+    )
 
 
 @app.post("/documents/index", response_class=HTMLResponse)

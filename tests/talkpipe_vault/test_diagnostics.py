@@ -315,6 +315,47 @@ def test_ollama_url_provenance_from_env(monkeypatch, probe_ok):
     assert "TALKPIPE_OLLAMA_SERVER_URL env var" in chat["detail"]
 
 
+def test_no_embedding_match_row_without_vault():
+    report = diagnostics.collect_config_status(_models(), probe=False)
+    names = {check["name"] for check in report["checks"]}
+    assert "Embedding ↔ index" not in names
+
+
+def test_embedding_match_row_ok_when_matching():
+    recorded = {
+        "source": "model2vec",
+        "model": "minishlab/potion-retrieval-32M",
+        "dimension": 512,
+    }
+    report = diagnostics.collect_config_status(
+        _models(), vault_selected=True, vault_embedding=recorded, probe=False
+    )
+    match = _find(report, "Embedding ↔ index")
+    assert match["status"] == "ok"
+    assert "512-dimension" in match["detail"]
+
+
+def test_embedding_match_row_error_on_mismatch():
+    recorded = {"source": "openai", "model": "text-embedding-3-large"}
+    report = diagnostics.collect_config_status(
+        _models(), vault_selected=True, vault_embedding=recorded, probe=False
+    )
+    match = _find(report, "Embedding ↔ index")
+    assert match["status"] == "error"
+    assert "indexed with openai/text-embedding-3-large" in match["summary"]
+    assert "re-index" in match["fix"]
+    assert report["overall"] == "error"
+
+
+def test_embedding_match_row_unknown_for_legacy_vault():
+    report = diagnostics.collect_config_status(
+        _models(), vault_selected=True, vault_embedding=None, probe=False
+    )
+    match = _find(report, "Embedding ↔ index")
+    assert match["status"] == "unknown"
+    assert "no recorded embedding configuration" in match["summary"]
+
+
 def test_api_key_provenance_shows_vault_settings(monkeypatch):
     from talkpipe_vault.apps import credentials
 

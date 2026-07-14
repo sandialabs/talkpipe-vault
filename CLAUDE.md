@@ -72,11 +72,25 @@ State lives in the module-level `_state: AppState` singleton; pipelines are rebu
 Ollama server URL comes from `TALKPIPE_OLLAMA_SERVER_URL` (or `OLLAMA_SERVER_URL` in
 `~/.talkpipe.toml`) — not `OLLAMA_BASE_URL`, which is meaningless to TalkPipe.
 
+**Per-vault embedding restore:** embeddings are only comparable to a query embedded
+with the same model, so the embedder is a property of the indexed data, not just a
+preference. Indexing records `embedding_source`/`model`/`dimension` to
+`vault_metadata.json` (see Vault Layout), and opening a vault applies that recorded
+embedder over the Settings-page override (`init_pipelines` → `_apply_vault_embedding_config`).
+Legacy vaults with no record leave the current setting unchanged and are flagged in the
+Settings configuration status (`diagnostics._check_embedding_index_match`). Only embedding
+config is data-coupled and restored this way — chat config stays a free preference, and
+server URLs / API keys are resolved fresh at run time (a server URL is stored only as a
+non-authoritative `indexed_via_url` breadcrumb).
+
 ## Vault Layout
 
 - LanceDB lives directly at `vault_path` (same semantics as `makevectordatabase --path`);
   the web app reads the `docs` table (`DEFAULT_VECTOR_TABLE_NAME`).
 - Whoosh full-text index lives at `vault_path/fulltext_vault`.
+- `vault_path/vault_metadata.json` records the embedding config the vault was indexed with
+  (`pipelines/vault_metadata.py`); it travels with the vault if copied/moved. Best-effort —
+  a missing or unreadable file is treated as a legacy vault, never an error.
 - A legacy `vault_path/vector_vault` layout is rejected with migration guidance
   (`ensure_supported_vault_layout`).
 - The experimental watcher pipelines in `building_and_watching.py` write different tables

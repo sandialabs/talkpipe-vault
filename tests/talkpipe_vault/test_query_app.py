@@ -906,3 +906,90 @@ def test_indexed_source_paths_reads_references_from_docs_rows(monkeypatch):
         "/indexed/source.pdf",
         "/indexed/other.txt",
     }
+
+
+def test_apply_vault_embedding_config_restores_recorded(tmp_path):
+    """Opening a vault should switch the active embedder to its recorded one."""
+    from talkpipe_vault.pipelines import vault_metadata
+
+    vault_metadata.record_embedding_config(
+        str(tmp_path),
+        source="openai",
+        model="text-embedding-3-large",
+        dimension=3072,
+    )
+    query._state.embedding_source = "leftover"
+    query._state.embedding_model = "leftover"
+
+    query._apply_vault_embedding_config(str(tmp_path))
+
+    assert query._state.embedding_source == "openai"
+    assert query._state.embedding_model == "text-embedding-3-large"
+
+
+def test_apply_vault_embedding_config_legacy_uses_saved_override(tmp_path):
+    """A legacy vault (no record) falls back to the saved override, not leftovers."""
+    from talkpipe_vault.apps import user_settings
+
+    user_settings.save_model_overrides(
+        embedding_source="ollama", embedding_model="nomic-embed-text"
+    )
+    # Simulate a different vault having been opened just before.
+    query._state.embedding_source = "openai"
+    query._state.embedding_model = "text-embedding-3-large"
+
+    query._apply_vault_embedding_config(str(tmp_path))
+
+    assert query._state.embedding_source == "ollama"
+    assert query._state.embedding_model == "nomic-embed-text"
+
+
+def test_apply_vault_embedding_config_legacy_without_override_is_none(tmp_path):
+    """A legacy vault with no saved override leaves the embedder unset (default)."""
+    query._state.embedding_source = "openai"
+    query._state.embedding_model = "text-embedding-3-large"
+
+    query._apply_vault_embedding_config(str(tmp_path))
+
+    assert query._state.embedding_source is None
+    assert query._state.embedding_model is None
+
+
+def test_record_vault_embedding_config_writes_sidecar(tmp_path, monkeypatch):
+    """Recording should persist source/model (and probed dimension) to the vault."""
+    from talkpipe_vault.pipelines import vault_metadata
+
+    monkeypatch.setattr(
+        query.vault_metadata, "probe_embedding_dimension", lambda source, model: 256
+    )
+    query._record_vault_embedding_config(
+        str(tmp_path), "model2vec", "minishlab/potion-retrieval-32M"
+    )
+    embedding = vault_metadata.load_embedding_config(str(tmp_path))
+    assert embedding["source"] == "model2vec"
+    assert embedding["model"] == "minishlab/potion-retrieval-32M"
+    assert embedding["dimension"] == 256
+
+
+def test_config_status_reports_embedding_mismatch(tmp_path, monkeypatch):
+    """The config-status endpoint flags a vault indexed with a different embedder."""
+    from talkpipe_vault.pipelines import diagnostics, vault_metadata
+
+    vault_metadata.record_embedding_config(
+        str(tmp_path), source="openai", model="text-embedding-3-large"
+    )
+    query._state.vault_path = str(tmp_path)
+    # Current embedder differs from what the vault was indexed with.
+    query._state.embedding_source = "model2vec"
+    query._state.embedding_model = "minishlab/potion-retrieval-32M"
+    monkeypatch.setattr(
+        diagnostics,
+        "_functional_probe",
+        lambda role, key, model, timeout: (True, 384),
+    )
+    client = TestClient(query.app)
+
+    body = client.get("/api/config-status").json()
+    match = next(c for c in body["checks"] if c["name"] == "Embedding ↔ index")
+    assert match["status"] == "error"
+    assert "text-embedding-3-large" in match["summary"]

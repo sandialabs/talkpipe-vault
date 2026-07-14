@@ -65,6 +65,8 @@ _SOURCE_ALIASES = {
 def collect_config_status(
     models: dict[str, Any],
     *,
+    vault_selected: bool = False,
+    vault_embedding: dict[str, Any] | None = None,
     probe: bool = True,
     timeout: float = DEFAULT_PROBE_TIMEOUT,
 ) -> dict[str, Any]:
@@ -74,6 +76,11 @@ def collect_config_status(
         models: The effective model config (as produced by the app's
             ``_effective_models``); reads ``embedding_source``/``embedding_model``
             and ``chat_source``/``chat_model``.
+        vault_selected: When True, add a row comparing the current embedder with
+            the one the open vault was indexed with.
+        vault_embedding: The open vault's recorded embedding config
+            (``source``/``model``/``dimension``), or None for a legacy vault that
+            has no record. Only consulted when ``vault_selected`` is True.
         probe: When True, make live connectivity/credential calls. When False,
             report only what can be determined without touching the network.
         timeout: Per-call network timeout, in seconds.
@@ -99,7 +106,67 @@ def collect_config_status(
             timeout=timeout,
         ),
     ]
+    if vault_selected:
+        checks.append(_check_embedding_index_match(models, vault_embedding))
     return {"overall": _rollup(checks), "checks": checks}
+
+
+def _check_embedding_index_match(
+    models: dict[str, Any], recorded: dict[str, Any] | None
+) -> dict[str, Any]:
+    """Compare the current embedder with the one the open vault was indexed with.
+
+    Semantic search only works when the query is embedded with the same model
+    that embedded the documents, so a mismatch is a genuine configuration error.
+    A legacy vault with no record can't be checked, so we say so rather than
+    guess — the current embedder is left in place either way.
+    """
+    current_source = (models.get("embedding_source") or "").strip()
+    current_model = (models.get("embedding_model") or "").strip()
+    base: dict[str, Any] = {
+        "name": "Embedding ↔ index",
+        "value": f"{current_source or '—'} / {current_model or '—'}",
+    }
+
+    if not recorded:
+        base["status"] = "unknown"
+        base["summary"] = (
+            "This vault has no recorded embedding configuration (it was indexed "
+            "before this was tracked). The current embedder is being used as-is; "
+            "if search results look wrong, set it to the model the vault was "
+            "built with, or re-index."
+        )
+        return base
+
+    recorded_source = (recorded.get("source") or "").strip()
+    recorded_model = (recorded.get("model") or "").strip()
+    base["detail"] = f"Indexed with {recorded_source or '—'} / {recorded_model or '—'}"
+    dimension = recorded.get("dimension")
+    if dimension:
+        base["detail"] += f" ({dimension}-dimension vectors)"
+
+    matches = (
+        recorded_source.lower() == current_source.lower()
+        and recorded_model.lower() == current_model.lower()
+    )
+    if matches:
+        base["status"] = "ok"
+        base["summary"] = (
+            "The current embedder matches the one this vault was indexed with."
+        )
+        return base
+
+    base["status"] = "error"
+    base["summary"] = (
+        f"This vault was indexed with {recorded_source}/{recorded_model}, but the "
+        f"current embedder is {current_source}/{current_model}. Semantic search "
+        "will be unreliable until they match."
+    )
+    base["fix"] = (
+        f"Set the embedding model back to {recorded_source}/{recorded_model}, or "
+        "re-index this vault with the current embedder (Add Documents → Overwrite)."
+    )
+    return base
 
 
 def _rollup(checks: list[dict[str, Any]]) -> str:
