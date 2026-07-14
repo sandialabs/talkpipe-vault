@@ -37,6 +37,24 @@
 
 ### Bug Fixes
 
+#### Startup with Stale Saved Settings
+- A saved provider choice that is no longer available (for example a plugin-provided embedder whose package was uninstalled) no longer aborts `vault-server` / `python -m talkpipe_vault.apps.query` startup with a raw `Source '...' is not supported` error. The stale embedding or chat override is now dropped with a warning that names the settings file, the server starts with the configured defaults, and the Settings page's configuration status can flag anything still wrong. The same guard applies to the embedder recorded in a vault's `vault_metadata.json`.
+
+#### Ollama Connection Guidance
+- When Ask cannot reach the Ollama server, the error now also points at the in-app fix — Settings → Connections & credentials — instead of only suggesting the `TALKPIPE_OLLAMA_SERVER_URL` environment variable or `~/.talkpipe.toml`. The configuration-status hint on the Settings page does the same.
+
+#### Tilde Vault Paths Split Across Two Locations
+- Passing a vault path like `~/my-vault` (as the README's pipeline examples do) no longer splits the vault: LanceDB expanded the `~` itself while the Whoosh index path did not, so the vector tables landed in `$HOME/my-vault` but the full-text index in a literal `./~/my-vault/fulltext_vault` directory. The vault path helpers now expand `~` for both stores.
+
+#### Indexing Console Noise
+- The `watchIntoVectorDB` and `listIntoVectorDB` sources no longer print a raw `{'path': ...}` dict to stdout for every file they process (a leftover `Print()` diagnostic stage). The CLI helpers keep their per-chunk progress output.
+
+#### Ask Answers No Longer Cite Absolute Paths
+- The RAG prompt now instructs the model to cite the files behind an answer by file name or title only. Previously answers listed absolute server filesystem paths even though source paths are hidden by default (`--show-source-paths` off).
+
+#### Search Highlighting
+- Semantic and keyword search results no longer highlight common stopwords or the boolean operators AND/OR/NOT from the query (previously e.g. every "and" in every snippet lit up). Quoted phrases are still highlighted verbatim.
+
 #### Form Submissions
 - Submitting any form with an empty field (Open or Create, Search, Keyword Search, Ask, Index Documents) no longer surfaces a raw `422` JSON validation error; empty submissions now land on a friendly page or redirect with a clear message. Inputs that require a value also declare it client-side.
 
@@ -63,12 +81,25 @@
 
 ### Documentation
 
+#### PyPI Installation
+- The Installation section now documents `pip install talkpipe-vault` from PyPI as the standard install path, keeping the editable source install as the contributor/alternative route.
+
+#### Settings Page Coverage
+- Documented the full Settings page: the live Configuration status panel (provider reachability tests with Re-test and fix hints), the chunking/Ask retrieval settings, and the Connections & credentials section for entering API keys, an OpenAI-compatible base URL, and the Ollama server URL in the browser. Noted that these connection values persist to `~/.talkpipe-vault/credentials.json` (owner-only permissions) and apply to the vault process only, and listed the Settings page as a way to point Ollama at a remote server.
+
+#### CLI and Storage Details
+- Added the `--no-browser` flag to the documented `vault-server` usage (skips opening a browser; useful headless).
+- Documented `vault_metadata.json` in the stable vault layout: it records the embedding source/model the vault was indexed with so reopening the vault restores a matching embedder.
+
+#### Developer Tooling
+- Added a `.flake8` configuration matching the black/isort style (line length 88, E203/W503 ignored), so the documented `flake8 src/ tests/` command passes on a clean checkout, and removed three unused imports it flagged in the watchdog tests.
+- Raised mypy's `python_version` to 3.12 so `mypy src/` can parse modern dependency stubs (numpy's `type` statements previously aborted the run before checking any project file), and marked type checking as advisory in the README to match CI.
+
 #### Building Your Own Pipelines examples
 - Fixed the "Using registered components via configuration" example, which imported a non-existent `talkpipe.Pipeline` and a fabricated `Pipeline.from_config` API. It now uses the real config-driven path — a chatterlang script compiled with `talkpipe.compile` — and references the registered source by name with its correct parameter (`source_pattern`).
 - Flagged the "Building Your Own Pipelines" examples as using the experimental watcher/list components, which write the `full_documents`/`shingled_chunks` layout rather than the `docs` table that `vault-server` reads, and clarified that the file-watcher example runs until interrupted.
 
 #### Installation
-- Clarified that TalkPipe Vault is in alpha and not yet published to PyPI, so the editable source install (`pip install -e .`) is the documented path; added a note that `pip install talkpipe-vault` does not work yet and that the section will switch to the PyPI install once the first release is out.
 - Added an explicit virtual-environment step to the Installation and Development Setup instructions, with a note that recent Linux distributions mark the system Python as externally managed (PEP 668), so a bare `pip install` into it fails. Quoted the `.[dev]` extras so the command also works in shells like zsh.
 
 #### Keyword search behavior

@@ -57,6 +57,17 @@ class TestGetVaultPaths:
         assert VECTOR_VAULT_SUBDIR == "vector_vault"
         assert FULLTEXT_VAULT_SUBDIR == "fulltext_vault"
 
+    def test_tilde_paths_are_expanded(self):
+        """A ~/vault path must expand for both stores, not create a literal ./~.
+
+        LanceDB expands ~ itself, so without expansion here the vector tables
+        and the Whoosh index would end up in two different places.
+        """
+        home = os.path.expanduser("~")
+        vectordb_path, whoosh_path = get_vault_paths("~/my-vault")
+        assert vectordb_path == os.path.join(home, "my-vault")
+        assert whoosh_path == os.path.join(home, "my-vault", FULLTEXT_VAULT_SUBDIR)
+
 
 class TestVaultLayoutValidation:
     """Tests for strict vault layout validation."""

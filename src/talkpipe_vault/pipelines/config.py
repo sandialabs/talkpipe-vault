@@ -167,15 +167,23 @@ def get_vault_paths(vault_path: str) -> tuple[str, str]:
 def get_vector_db_path(vault_path: str) -> str:
     """
     Return the LanceDB path expected by makevectordatabase/serverag.
+
+    ``~`` is expanded so a path like ``~/my-vault`` refers to the home
+    directory, matching what LanceDB itself does with the same path.
     """
-    return vault_path
+    return os.path.expanduser(vault_path)
 
 
 def get_whoosh_index_path(vault_path: str) -> str:
     """
     Return the Whoosh index path under the configured vault path.
+
+    ``~`` is expanded so the index lands inside the real vault directory
+    rather than a literal ``./~`` folder (LanceDB expands the same path, so
+    without this the vault's tables and full-text index would split across
+    two locations).
     """
-    return os.path.join(vault_path, FULLTEXT_VAULT_SUBDIR)
+    return os.path.join(os.path.expanduser(vault_path), FULLTEXT_VAULT_SUBDIR)
 
 
 def ensure_supported_vault_layout(vault_path: str) -> None:
@@ -240,8 +248,11 @@ def get_chat_source() -> str:
 # reject with a 400; a system_prompt is sent verbatim as a single system message.
 RAG_SYSTEM_PROMPT = """You are a helpful assistant that answers questions based on provided background information.
 Ground your responses in the background context given. If the background does not contain sufficient information to answer the question, acknowledge this limitation rather than speculating or making up information.
-Be concise and accurate in your responses.  Make it clear which answers are from general knowledge and which are from the provided content. List the files used to inform your answer."""
-RAG_PROMPT_DIRECTIVE = "Remember to list the files you used to inform your answer."
+Be concise and accurate in your responses.  Make it clear which answers are from general knowledge and which are from the provided content. List the files used to inform your answer. Refer to files by their file name or title only; never include directory paths."""
+RAG_PROMPT_DIRECTIVE = (
+    "Remember to list the files you used to inform your answer, "
+    "by file name or title only (no directory paths)."
+)
 
 
 # Default template values (used if not specified in TalkPipe config)

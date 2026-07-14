@@ -195,6 +195,19 @@ document.addEventListener('DOMContentLoaded', function() {
         return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     }
 
+    // Common words (and the boolean operators AND/OR/NOT) that would light up
+    // in nearly every snippet; highlighting them is noise, not signal.
+    // Quoted phrases are always highlighted verbatim.
+    const HIGHLIGHT_STOPWORDS = new Set([
+        'and', 'or', 'not', 'the', 'for', 'are', 'was', 'were', 'with',
+        'that', 'this', 'from', 'have', 'has', 'had', 'can', 'could',
+        'will', 'would', 'into', 'onto', 'when', 'where', 'which', 'what',
+        'how', 'who', 'whom', 'why', 'does', 'did', 'you', 'your', 'they',
+        'them', 'their', 'its', 'about', 'than', 'then', 'there', 'here',
+        'been', 'being', 'but', 'all', 'any', 'each', 'other', 'some',
+        'such', 'only', 'own', 'same', 'more', 'most', 'very', 'just'
+    ]);
+
     function highlightSnippetTerms() {
         if (!resultsRoot) {
             return;
@@ -205,8 +218,16 @@ document.addEventListener('DOMContentLoaded', function() {
             return;
         }
         const normalizedTerms = terms.map(function(term) {
-            return term.replace(/^"|"$/g, '');
-        }).filter(Boolean);
+            const isPhrase = term.charAt(0) === '"';
+            return { text: term.replace(/^"|"$/g, ''), isPhrase: isPhrase };
+        }).filter(function(term) {
+            if (!term.text) {
+                return false;
+            }
+            return term.isPhrase || !HIGHLIGHT_STOPWORDS.has(term.text.toLowerCase());
+        }).map(function(term) {
+            return term.text;
+        });
         if (!normalizedTerms.length) {
             return;
         }

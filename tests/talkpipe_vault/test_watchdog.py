@@ -1,11 +1,8 @@
-import os
-import signal
 import tempfile
 import time
 from pathlib import Path
 from threading import Thread
 
-import pytest
 from talkpipe import compile
 
 from talkpipe_vault.watchdog import file_watcher

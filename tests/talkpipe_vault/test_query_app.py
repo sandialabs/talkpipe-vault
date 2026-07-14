@@ -730,6 +730,30 @@ def test_chat_response_includes_source_citations(monkeypatch):
     assert '"lookup_path": "row-uuid"' in response.text
 
 
+def test_chat_citations_hide_source_paths_by_default(monkeypatch):
+    """The embedded citations JSON must not leak absolute paths when hidden."""
+    query._state.chat_pipeline = lambda _message: "Answer from the vault."
+    query._state.search_pipeline = lambda _message: [
+        {
+            "_distance": 0.2,
+            "_doc_id": "row-uuid",
+            "source": "/original/secret-dir/source.txt",
+            "title": "source.txt",
+            "content": "Relevant source chunk",
+        }
+    ]
+    monkeypatch.setattr(query, "_refresh_pipelines", lambda: None)
+    monkeypatch.setattr(query, "_update_document_counts", lambda vault_path: None)
+    client = TestClient(query.app)
+
+    response = client.post("/chat", data={"message": "What matters?"})
+
+    assert response.status_code == 200
+    assert "/original/secret-dir/source.txt" not in response.text
+    # Chunk lookup still works through the stable row id.
+    assert '"lookup_path": "row-uuid"' in response.text
+
+
 def test_vault_text_search_default_limit_returns_all_whoosh_results(
     tmp_path, monkeypatch
 ):
@@ -948,6 +972,63 @@ def test_apply_vault_embedding_config_legacy_without_override_is_none(tmp_path):
     """A legacy vault with no saved override leaves the embedder unset (default)."""
     query._state.embedding_source = "openai"
     query._state.embedding_model = "text-embedding-3-large"
+
+    query._apply_vault_embedding_config(str(tmp_path))
+
+    assert query._state.embedding_source is None
+    assert query._state.embedding_model is None
+
+
+def test_load_saved_model_overrides_drops_unavailable_source():
+    """A saved provider that is no longer installed must not brick startup.
+
+    The stale source/model pair falls back to None (TalkPipe config/defaults)
+    so init_pipelines can still build pipelines and the server boots.
+    """
+    from talkpipe_vault.apps import user_settings
+
+    user_settings.save_model_overrides(
+        embedding_source="uninstalled-plugin-source",
+        embedding_model="some-model",
+        chat_source="ollama",
+        chat_model="mistral-small",
+    )
+
+    query.load_saved_model_overrides()
+
+    assert query._state.embedding_source is None
+    assert query._state.embedding_model is None
+    # The valid chat override is untouched.
+    assert query._state.chat_source == "ollama"
+    assert query._state.chat_model == "mistral-small"
+
+
+def test_load_saved_model_overrides_keeps_available_source():
+    """Valid saved overrides keep working exactly as before."""
+    from talkpipe_vault.apps import user_settings
+
+    user_settings.save_model_overrides(
+        embedding_source="model2vec",
+        embedding_model="minishlab/potion-retrieval-32M",
+    )
+
+    query.load_saved_model_overrides()
+
+    assert query._state.embedding_source == "model2vec"
+    assert query._state.embedding_model == "minishlab/potion-retrieval-32M"
+
+
+def test_apply_vault_embedding_config_ignores_unavailable_recorded_source(
+    tmp_path, monkeypatch
+):
+    """A vault recorded with a now-missing embedder falls back instead of raising."""
+    monkeypatch.setattr(
+        query.vault_metadata,
+        "load_embedding_config",
+        lambda path: {"source": "uninstalled-plugin-source", "model": "some-model"},
+    )
+    query._state.embedding_source = "leftover"
+    query._state.embedding_model = "leftover"
 
     query._apply_vault_embedding_config(str(tmp_path))
 

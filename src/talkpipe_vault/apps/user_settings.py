@@ -67,6 +67,11 @@ def _settings_path() -> Path:
     return get_vault_home() / SETTINGS_FILENAME
 
 
+def settings_file_path() -> Path:
+    """Return the path of the persisted settings file (for user-facing messages)."""
+    return _settings_path()
+
+
 def load_settings() -> dict:
     """Load persisted settings, returning an empty structure when unavailable."""
     path = _settings_path()

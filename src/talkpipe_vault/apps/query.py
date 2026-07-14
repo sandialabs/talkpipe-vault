@@ -13,9 +13,11 @@ Provides the following via web interface:
 import argparse
 import glob as globlib
 import json
+import logging
 import os
 import shutil
 import socket
+import sys
 import threading
 import time
 import urllib.parse
@@ -65,6 +67,8 @@ from talkpipe_vault.pipelines.searching_and_prompting import (
 )
 
 configure_logger("root:ERROR")
+
+logger = logging.getLogger(__name__)
 
 # Constants
 TEMPLATES_DIR = Path(__file__).parent / "templates"
@@ -144,13 +148,54 @@ def _effective_models(state: AppState) -> dict[str, Any]:
     }
 
 
+def _drop_unavailable_source(
+    source: str | None, model: str | None, role: str, origin: str
+) -> tuple[str | None, str | None]:
+    """Return (source, model), dropping both when the source is unavailable.
+
+    A persisted provider choice can stop being valid — for example a
+    plugin-provided embedder whose package was uninstalled. Building a pipeline
+    with it raises, which used to abort server startup entirely; the fix then
+    lives on a Settings page that never comes up. Dropping the stale pair (the
+    model name is meaningless without its provider) falls back to the TalkPipe
+    configuration/defaults so the server boots and the Settings page can flag
+    the mismatch.
+    """
+    if not source:
+        return source, model
+    available = getEmbeddingSources() if role == "embedding" else getPromptSources()
+    if source in available:
+        return source, model
+    message = (
+        f"Warning: saved {role} source '{source}' ({origin}) is not available "
+        f"(available: {', '.join(available)}). Falling back to the configured "
+        f"default; fix the choice on the Settings page or edit "
+        f"{user_settings.settings_file_path()}."
+    )
+    print(message, file=sys.stderr)
+    logger.warning(message)
+    return None, None
+
+
 def load_saved_model_overrides() -> None:
     """Apply model overrides persisted by the settings page to app state."""
     overrides = user_settings.get_model_overrides()
-    _state.embedding_model = overrides.get("embedding_model")
-    _state.embedding_source = overrides.get("embedding_source")
-    _state.chat_model = overrides.get("chat_model")
-    _state.chat_source = overrides.get("chat_source")
+    embedding_source, embedding_model = _drop_unavailable_source(
+        overrides.get("embedding_source"),
+        overrides.get("embedding_model"),
+        "embedding",
+        "saved settings",
+    )
+    chat_source, chat_model = _drop_unavailable_source(
+        overrides.get("chat_source"),
+        overrides.get("chat_model"),
+        "chat",
+        "saved settings",
+    )
+    _state.embedding_model = embedding_model
+    _state.embedding_source = embedding_source
+    _state.chat_model = chat_model
+    _state.chat_source = chat_source
     _state.chunk_size = overrides.get("chunk_size")
     _state.shingle_size = overrides.get("shingle_size")
     _state.shingle_overlap = overrides.get("shingle_overlap")
@@ -323,14 +368,27 @@ def _apply_vault_embedding_config(vault_path: str) -> None:
     """
     recorded = vault_metadata.load_embedding_config(vault_path)
     saved = user_settings.get_model_overrides()
-    if recorded:
-        _state.embedding_source = recorded.get("source") or saved.get(
-            "embedding_source"
+    saved_source, saved_model = _drop_unavailable_source(
+        saved.get("embedding_source"),
+        saved.get("embedding_model"),
+        "embedding",
+        "saved settings",
+    )
+    recorded_source = recorded.get("source") if recorded else None
+    recorded_model = recorded.get("model") if recorded else None
+    if recorded_source:
+        recorded_source, recorded_model = _drop_unavailable_source(
+            recorded_source,
+            recorded_model,
+            "embedding",
+            "recorded in the vault's vault_metadata.json",
         )
-        _state.embedding_model = recorded.get("model") or saved.get("embedding_model")
+    if recorded_source or recorded_model:
+        _state.embedding_source = recorded_source or saved_source
+        _state.embedding_model = recorded_model or saved_model
     else:
-        _state.embedding_source = saved.get("embedding_source")
-        _state.embedding_model = saved.get("embedding_model")
+        _state.embedding_source = saved_source
+        _state.embedding_model = saved_model
 
 
 def _refresh_pipelines(force: bool = False) -> None:
@@ -1748,6 +1806,22 @@ async def chat_response(
             messages.append({"role": "assistant", "content": response})
         except Exception as e:
             error = str(e)
+            if "ollama" in error.lower() and (
+                "connect" in error.lower() or "refused" in error.lower()
+            ):
+                error += (
+                    " Tip: you can also set the Ollama server URL in this app "
+                    "under Settings > Connections & credentials."
+                )
+
+    if not state.show_source_paths:
+        # The citations list is embedded in the page as JSON; keep absolute
+        # filesystem paths out of it unless --show-source-paths was given.
+        # The UI resolves chunk content through lookup_path, not path.
+        citations = [
+            {key: value for key, value in citation.items() if key != "path"}
+            for citation in citations
+        ]
 
     return templates.TemplateResponse(
         request=request,

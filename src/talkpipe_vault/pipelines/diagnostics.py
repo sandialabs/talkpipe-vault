@@ -666,8 +666,9 @@ def _check_ollama(
         base["summary"] = f"Can't reach Ollama at {url}."
         base["detail"] = f"{base['detail']} — {error}"
         base["fix"] = (
-            "Start Ollama, or point TALKPIPE_OLLAMA_SERVER_URL at your server "
-            "(e.g. http://your-ollama-host:11434)."
+            "Start Ollama, set the Ollama server URL under Connections & "
+            "credentials below, or point TALKPIPE_OLLAMA_SERVER_URL at your "
+            "server (e.g. http://your-ollama-host:11434)."
         )
         return base
 

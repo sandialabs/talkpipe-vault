@@ -56,7 +56,7 @@ TalkPipe Vault includes a web application for building, searching, and querying 
 
 - **Vaults**: Create a new vault or choose an existing one with a built-in folder browser; recently used vaults are remembered
 - **Add Documents**: Index a folder (pickable with the folder browser) or glob pattern of documents into the current vault
-- **Settings**: Configure the provider (source) and model for both embeddings and chat
+- **Settings**: Configure the provider (source) and model for both embeddings and chat, plus chunking and Ask retrieval sizes. The page also shows a live **Configuration status** panel that tests whether the selected providers are reachable (with a Re-test button and concrete fix hints), and a **Connections & credentials** section where you can enter API keys (OpenAI, Anthropic), an OpenAI-compatible base URL, and the Ollama server URL directly in the browser — no environment variables required
 - **Semantic Search**: Find documents by meaning using AI-powered vector similarity search
 - **Keyword Search**: Traditional full-text search with boolean operators (AND, OR, NOT) and phrase matching. Matching is case-insensitive but on exact word tokens (no stemming), so `apple` will not match `apples` — use semantic search for meaning-based lookups, or search the exact word form.
 - **Ask a Question**: Get AI-generated answers based on your vault's contents (single-turn Q&A)
@@ -78,30 +78,34 @@ vault-server ~/my-vault --host 127.0.0.1 --port 8002
 
 ### Installation
 
-TalkPipe Vault is in **alpha and is not yet published to PyPI**, so install it
-from source by cloning the repository and doing an editable install:
+Install TalkPipe Vault from PyPI:
 
 ```bash
-git clone https://github.com/sandialabs/talkpipe-vault.git
-cd talkpipe-vault
-
 # Create and activate a virtual environment first. Recent Linux distributions
 # (Debian/Ubuntu/Fedora) mark the system Python as "externally managed" (PEP 668),
 # so installing into it fails; a venv avoids that.
 python -m venv .venv
 source .venv/bin/activate      # Windows: .venv\Scripts\activate
 
-pip install -e .
+pip install talkpipe-vault
 ```
 
 This installs the `vault-server` command along with TalkPipe and its
 `makevectordatabase` command, so you're ready to jump to [Basic Usage](#basic-usage).
+
+Alternatively, to work from source (for example to contribute), clone the
+repository and do an editable install:
+
+```bash
+git clone https://github.com/sandialabs/talkpipe-vault.git
+cd talkpipe-vault
+python -m venv .venv
+source .venv/bin/activate      # Windows: .venv\Scripts\activate
+pip install -e .
+```
+
 (Add the `[dev]` extra — `pip install -e ".[dev]"` — if you also want the test and
 lint tools; see [Development Setup](#development-setup) for the full workflow.)
-
-> **Note:** `pip install talkpipe-vault` from PyPI does not work yet — the package
-> has not been published. This section will switch to the PyPI install once the
-> first release is out.
 
 ### Basic Usage
 
@@ -203,7 +207,7 @@ makevectordatabase "/path/to/documents/**/*.txt" \
 Launches the web interface. The vault path is optional; without it, create or choose a vault on the Vaults page.
 
 ```bash
-vault-server [~/my-vault] [--host 0.0.0.0] [--port 8002] [--show-source-paths]
+vault-server [~/my-vault] [--host 0.0.0.0] [--port 8002] [--show-source-paths] [--no-browser]
 ```
 
 The web interface provides:
@@ -214,7 +218,7 @@ The web interface provides:
 - **Keyword Search**: Full-text search when a Whoosh index is available
 - **Ask**: Single-turn Q&A that retrieves relevant context and generates AI responses
 
-`--show-source-paths` shows source file paths in search results and serves the files over HTTP; they are hidden by default.
+`--show-source-paths` shows source file paths in search results and serves the files over HTTP; they are hidden by default. `--no-browser` skips opening the interface in a web browser on startup (useful for headless servers and services).
 
 #### Python Module Entry Point
 
@@ -350,6 +354,9 @@ by TalkPipe's `makevectordatabase`:
 
 - `docs`: LanceDB table of document/chunk embeddings (TalkPipe's `DEFAULT_VECTOR_TABLE_NAME`)
 - `fulltext_vault`: Whoosh full-text index, created on demand from the **Keyword Search** page
+- `vault_metadata.json`: records the embedding source/model (and vector dimension) the vault
+  was indexed with, so reopening the vault automatically uses a matching embedder; it travels
+  with the vault if the folder is copied or moved
 
 **Experimental watcher layout** — produced by the in-development pipelines in
 [src/talkpipe_vault/pipelines/building_and_watching.py](src/talkpipe_vault/pipelines/building_and_watching.py)
@@ -388,7 +395,8 @@ isort src/ tests/
 # Linting
 flake8 src/ tests/
 
-# Type checking
+# Type checking (advisory: CI runs it but allows failures; strict mode still
+# reports pre-existing issues)
 mypy src/
 
 # Security scanning
@@ -404,6 +412,11 @@ TalkPipe Vault supports flexible model configuration through multiple methods, w
 2. **Web interface Settings page** (persisted under `~/.talkpipe-vault/settings.json`; override the location with `TALKPIPE_VAULT_HOME`)
 3. **TalkPipe configuration** (from `~/.talkpipe.toml` or `TALKPIPE_*` environment variables)
 4. **Default values** in `config.py` (fallback)
+
+API keys and connection URLs entered under **Settings → Connections & credentials**
+are persisted separately to `~/.talkpipe-vault/credentials.json` (created with
+owner-only permissions) and applied to the vault process only — your shell
+environment and `~/.talkpipe.toml` are left untouched.
 
 #### Configuration Methods
 
@@ -479,7 +492,7 @@ Keys can be specified:
 
 **Ollama:**
 - Set `embedding_source="ollama"` and/or `chat_source="ollama"`
-- Customize the server URL with the `TALKPIPE_OLLAMA_SERVER_URL` environment variable or `OLLAMA_SERVER_URL` in `~/.talkpipe.toml` (default: `http://localhost:11434`). The model must already be pulled on that server.
+- Customize the server URL in the web interface (**Settings → Connections & credentials**), with the `TALKPIPE_OLLAMA_SERVER_URL` environment variable, or with `OLLAMA_SERVER_URL` in `~/.talkpipe.toml` (default: `http://localhost:11434`). The model must already be pulled on that server.
 
 #### Example: Switching to OpenAI
 
@@ -581,7 +594,7 @@ Contributions are welcome! Please ensure:
 1. Tests pass: `pytest`
 2. Code is formatted: `black src/ tests/ && isort src/ tests/`
 3. Linting passes: `flake8 src/ tests/`
-4. Type hints are complete: `mypy src/`
+4. Type checking is advisory: run `mypy src/` and avoid introducing new errors (CI allows it to fail)
 
 ## License
 

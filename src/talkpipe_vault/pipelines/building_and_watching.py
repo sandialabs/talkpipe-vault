@@ -11,7 +11,7 @@ from talkpipe.pipe.basic import (
     fillTemplate,
     setAs,
 )
-from talkpipe.pipe.io import DeleteFile, FileExistsFilter, Print
+from talkpipe.pipe.io import DeleteFile, FileExistsFilter
 from talkpipe.pipelines.vector_databases import MakeVectorDatabaseSegment
 from talkpipe.search.whoosh import indexWhoosh
 
@@ -243,18 +243,14 @@ def watch_into_vector_db(
         pipeline = pipeline | Debounce(
             key_field="path", debounce_seconds=debounce_seconds
         )
-    pipeline = (
-        pipeline
-        | Print()
-        | build_vector_db_from_paths(
-            vault_path=vault_path,
-            overwrite=overwrite,
-            delete_after_reading=delete_after_reading,
-            batch_size=1,
-            commit_seconds=0,
-            embedding_model=embedding_model,
-            embedding_source=embedding_source,
-        )
+    pipeline = pipeline | build_vector_db_from_paths(
+        vault_path=vault_path,
+        overwrite=overwrite,
+        delete_after_reading=delete_after_reading,
+        batch_size=1,
+        commit_seconds=0,
+        embedding_model=embedding_model,
+        embedding_source=embedding_source,
     )
     yield from pipeline()
 
@@ -303,7 +299,6 @@ def list_into_vector_db(
     pipeline = (
         listFiles(full_path=True, files_only=True)
         | ToDict(field_list="_:path")
-        | Print()
         | build_vector_db_from_paths(
             vault_path=vault_path,
             overwrite=overwrite,

@@ -127,7 +127,9 @@ line_length = 88
 known_first_party = ["talkpipe_vault"]
 
 [tool.mypy]
-python_version = "3.11"
+# 3.12+ so mypy can parse modern dependency stubs (e.g. numpy uses `type`
+# statements); the package itself still supports Python 3.11.
+python_version = "3.12"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true

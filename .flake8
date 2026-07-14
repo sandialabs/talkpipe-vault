@@ -1,0 +1,13 @@
+[flake8]
+# black is the source of truth for formatting: E203/W503 conflict with its
+# style, and E501 is left to black (it enforces 88 for code but deliberately
+# does not reflow long strings, comments, or docstrings).
+max-line-length = 88
+extend-ignore = E203, W503, E501
+exclude =
+    .git,
+    __pycache__,
+    build,
+    dist,
+    .venv,
+    .eggs
