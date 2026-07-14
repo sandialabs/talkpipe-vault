@@ -54,7 +54,7 @@ Directory monitoring is still under development. The watcher sources and helper 
 
 TalkPipe Vault includes a web application for building, searching, and querying your document collection:
 
-- **Vaults**: Create a new vault or choose an existing one with a built-in folder browser; recently used vaults are remembered
+- **Vaults**: Create a new vault or choose an existing one with a built-in folder browser; recently used vaults are listed on the Vaults page at the next start so they can be reopened with one click
 - **Add Documents**: Index a folder (pickable with the folder browser) or glob pattern of documents into the current vault
 - **Settings**: Configure the provider (source) and model for both embeddings and chat, plus chunking and Ask retrieval sizes. The page also shows a live **Configuration status** panel that tests whether the selected providers are reachable (with a Re-test button and concrete fix hints), and a **Connections & credentials** section where you can enter API keys (OpenAI, Anthropic), an OpenAI-compatible base URL, and the Ollama server URL directly in the browser — no environment variables required
 - **Semantic Search**: Find documents by meaning using AI-powered vector similarity search
@@ -149,6 +149,12 @@ python -c "from talkpipe_vault.pipelines.cli import watch_vectordb_main; watch_v
 ```
 
 The watcher pipeline writes LanceDB content directly under `~/watched-vault` and Whoosh data under `~/watched-vault/fulltext_vault`.
+
+Two expectations to set before trying it: the watcher reacts only to filesystem
+events that happen **after** it starts — files already in the directory are not
+indexed (use the `list_vectordb_main` helper below for an existing set of files) —
+and it currently prints nothing per processed file, so verify results by
+inspecting the vault's LanceDB tables.
 
 ---
 
@@ -285,6 +291,10 @@ for event in pipeline():
 
 **Example 2: Complete document processing (from TalkPipe Vault source)**
 
+Note that `ReadFile` stores an `ExtractionResult` object (with `.content`,
+`.source`, `.title` fields) in the target field, not a plain string — filter
+expressions must go through `.content` to reach the text:
+
 ```python
 from talkpipe_vault.watchdog import file_watcher
 from talkpipe.data.extraction import ReadFile
@@ -296,7 +306,7 @@ pipeline = \
     file_watcher(path="/path/to/watch") | \
     FilterExpression(expression="item['event'] != 'deleted'") | \
     ReadFile(field="path", set_as="full_content") | \
-    FilterExpression(expression="len(item.get('full_content', '').strip()) > 0") | \
+    FilterExpression(expression="len(item['full_content'].content.strip()) > 0") | \
     MakeVectorDatabaseSegment(
         path="~/my-vault",
         embedding_model="mxbai-embed-large:latest",
@@ -356,7 +366,10 @@ by TalkPipe's `makevectordatabase`:
 - `fulltext_vault`: Whoosh full-text index, created on demand from the **Keyword Search** page
 - `vault_metadata.json`: records the embedding source/model (and vector dimension) the vault
   was indexed with, so reopening the vault automatically uses a matching embedder; it travels
-  with the vault if the folder is copied or moved
+  with the vault if the folder is copied or moved. This file is written by the **Add
+  Documents** page — vaults built with `makevectordatabase` alone don't have it and are
+  treated as legacy vaults (the Settings page flags them when the current embedder may not
+  match the index)
 
 **Experimental watcher layout** — produced by the in-development pipelines in
 [src/talkpipe_vault/pipelines/building_and_watching.py](src/talkpipe_vault/pipelines/building_and_watching.py)
@@ -467,7 +480,7 @@ The following keys are recognized (checked in order):
 | `embedding_model` | `EMBEDDING_MODEL`, `default_embedding_model_name` | Model name for generating embeddings | `minishlab/potion-retrieval-32M` |
 | `embedding_source` | `EMBEDDING_SOURCE`, `default_embedding_model_source` | Provider for embedding model (`model2vec`, `ollama`, `openai`) | `model2vec` |
 | `chat_model` | `CHAT_MODEL`, `default_model_name` | Model name for chat/completion | `mistral-small` |
-| `chat_source` | `CHAT_SOURCE`, `default_model_source` | Provider for chat model (`ollama`, `openai`, etc.) | `ollama` |
+| `chat_source` | `CHAT_SOURCE`, `default_model_source` | Provider for chat model (`ollama`, `openai`, `anthropic`, `eliza`) | `ollama` |
 | `document_template` | `DOCUMENT_TEMPLATE` | Template for formatting full documents before embedding. Placeholders: `{title}`, `{content}` | `"title: {title} \| text: {content}"` |
 | `shingle_template` | `SHINGLE_TEMPLATE` | Template for formatting shingled chunks before embedding. Placeholders: `{title}`, `{shingle}` | `"title: {title} \| text: {shingle}"` |
 | `retrieval_template` | `RETRIEVAL_TEMPLATE` | Template for formatting search queries before embedding. Placeholders: `{query}` | `"task: search result \| query: {query}"` |
@@ -493,6 +506,15 @@ Keys can be specified:
 **Ollama:**
 - Set `embedding_source="ollama"` and/or `chat_source="ollama"`
 - Customize the server URL in the web interface (**Settings → Connections & credentials**), with the `TALKPIPE_OLLAMA_SERVER_URL` environment variable, or with `OLLAMA_SERVER_URL` in `~/.talkpipe.toml` (default: `http://localhost:11434`). The model must already be pulled on that server.
+
+**Anthropic (chat only):**
+- Set `chat_source="anthropic"` and a model name such as `claude-sonnet-4-5`
+- Enter the API key in the web interface (**Settings → Connections & credentials**) or set `ANTHROPIC_API_KEY` in your environment
+
+**eliza (chat only, built-in):**
+- Set `chat_source="eliza"` for a rule-based responder that needs no server or
+  API key — useful for smoke-testing the Ask page and retrieval wiring before a
+  real chat provider is configured (it does not use the retrieved context)
 
 #### Example: Switching to OpenAI
 

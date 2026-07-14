@@ -829,6 +829,18 @@ async def open_vault(
         )
 
     created = not vault_path.is_dir()
+
+    # A folder of ordinary files (e.g. the user's documents folder) is easy to
+    # confuse with a vault folder. Detect that case before index scaffolding is
+    # written into it, so the user is told what is about to happen.
+    non_empty_non_vault = False
+    if not created:
+        vault_markers = ("docs.lance", "vault_metadata.json", "fulltext_vault")
+        looks_like_vault = any(
+            (vault_path / marker).exists() for marker in vault_markers
+        )
+        non_empty_non_vault = not looks_like_vault and any(vault_path.iterdir())
+
     try:
         vault_path.mkdir(parents=True, exist_ok=True)
         init_pipelines(str(vault_path))
@@ -842,6 +854,17 @@ async def open_vault(
             message=(
                 f"Created new vault at {vault_path}. "
                 "Add documents to make it searchable."
+            ),
+        )
+    if non_empty_non_vault:
+        return _redirect_with_message(
+            "/documents",
+            message=(
+                f"Started a new vault at {vault_path}. Note: this folder "
+                "already contains files that are not vault data, and index "
+                "files will be created alongside them. If you meant to search "
+                "those documents, keep the vault elsewhere and index this "
+                "folder from this page instead."
             ),
         )
     return _redirect_with_message("/", message=f"Opened vault at {vault_path}.")
@@ -1806,11 +1829,17 @@ async def chat_response(
             messages.append({"role": "assistant", "content": response})
         except Exception as e:
             error = str(e)
-            if "ollama" in error.lower() and (
-                "connect" in error.lower() or "refused" in error.lower()
-            ):
+            lowered = error.lower()
+            if "ollama" in lowered and ("connect" in lowered or "refused" in lowered):
                 error += (
                     " Tip: you can also set the Ollama server URL in this app "
+                    "under Settings > Connections & credentials."
+                )
+            elif ("openai" in lowered or "anthropic" in lowered) and (
+                "api key" in lowered or "api_key" in lowered or "credential" in lowered
+            ):
+                error += (
+                    " Tip: you can also enter the API key in this app "
                     "under Settings > Connections & credentials."
                 )
 

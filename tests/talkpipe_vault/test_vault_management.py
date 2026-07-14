@@ -141,6 +141,37 @@ class TestVaultSelection:
         assert response.headers["location"].startswith("/?")
         assert query._state.vault_path == str(existing)
 
+    def test_open_non_empty_non_vault_folder_warns(self, client, tmp_path):
+        """Opening a folder of ordinary files must say index files will be added.
+
+        Confusing a documents folder with a vault folder is an easy newcomer
+        mistake; the app writes index scaffolding into whatever folder it opens,
+        so the user should be told that is about to happen.
+        """
+        docs_folder = tmp_path / "my-documents"
+        docs_folder.mkdir()
+        (docs_folder / "notes.txt").write_text("Plain user document.")
+
+        response = client.post(
+            "/vaults/open", data={"new_vault_path": str(docs_folder)}
+        )
+
+        assert response.status_code == 303
+        location = response.headers["location"]
+        assert location.startswith("/documents")
+        assert "not+vault+data" in location
+        assert query._state.vault_path == str(docs_folder)
+
+    def test_open_existing_vault_folder_gets_no_warning(self, client, tmp_path):
+        """A folder with vault data opens quietly, even with other files in it."""
+        vault = tmp_path / "real-vault"
+        (vault / "docs.lance").mkdir(parents=True)
+
+        response = client.post("/vaults/open", data={"new_vault_path": str(vault)})
+
+        assert response.status_code == 303
+        assert response.headers["location"].startswith("/?")
+
     def test_open_rejects_file_path(self, client, tmp_path):
         file_path = tmp_path / "not-a-vault.txt"
         file_path.write_text("hello")
