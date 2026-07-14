@@ -19,6 +19,7 @@ import socket
 import threading
 import time
 import urllib.parse
+import uuid
 import webbrowser
 from dataclasses import dataclass
 from pathlib import Path
@@ -275,13 +276,20 @@ def _build_whoosh_index(
 
     total = len(documents)
     with WhooshFullTextIndex(whoosh_index_path, fields=WHOOSH_INDEX_FIELDS) as ix:
-        for done, document in enumerate(documents, start=1):
-            ix.add_document(
-                {field: document.get(field, "") for field in WHOOSH_INDEX_FIELDS},
-                doc_id=document.get("doc_id") or None,
-            )
-            if progress is not None:
-                progress(done, total)
+        # One writer committed once for the whole rebuild: add_document commits
+        # per call, which makes Whoosh re-merge its segments on every document
+        # and degrades quadratically with vault size.
+        with ix.ix.writer() as writer:
+            for done, document in enumerate(documents, start=1):
+                writer.update_document(
+                    doc_id=document.get("doc_id") or str(uuid.uuid4()),
+                    **{
+                        field: str(document.get(field, ""))
+                        for field in WHOOSH_INDEX_FIELDS
+                    },
+                )
+                if progress is not None:
+                    progress(done, total)
 
 
 def init_pipelines(vault_path: str) -> None:

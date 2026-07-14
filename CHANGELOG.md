@@ -47,6 +47,11 @@
 - The Ask/RAG pipeline no longer dumps the full query embedding vector and assembled RAG prompt to the server console on every question (a leftover `diagPrintOutput="stdout"` diagnostic), so the server log stays readable.
 
 #### Keyword Index Creation
+- Building the full-text index no longer commits the Whoosh writer once per
+  document, which made Whoosh re-merge its segments on every add and degraded
+  quadratically with vault size (a 20k-chunk rebuild took ~6.5 minutes; it now
+  takes ~14 seconds). The rebuild holds a single writer and commits once at the
+  end.
 - Fixed "Create Full-Text Index" failing with `Schema() got multiple values for keyword argument 'doc_id'`: TalkPipe 0.12.4 reserves the Whoosh `doc_id` schema field, so the index is now built through `WhooshFullTextIndex` directly, keeping LanceDB row ids as stable document ids so results can be resolved back to stored chunks. Rebuilding replaces the previous index contents, and the success notice reports how many documents were indexed. The regression tests build a real index instead of mocking the builder, which is what had hidden this incompatibility.
 
 #### Ollama Server Configuration
