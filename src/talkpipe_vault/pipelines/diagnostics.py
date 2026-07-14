@@ -38,6 +38,15 @@ logger = logging.getLogger(__name__)
 DEFAULT_OLLAMA_URL = "http://localhost:11434"
 DEFAULT_PROBE_TIMEOUT = 3.0
 
+# A functional probe generates an embedding or runs a chat turn, which
+# legitimately takes longer than a reachability ping; give it more headroom
+# than DEFAULT_PROBE_TIMEOUT (but never less than the caller's own timeout).
+FUNCTIONAL_PROBE_TIMEOUT = 20.0
+
+# Short, harmless inputs used when actually exercising a provider.
+_PROBE_TEXT = "TalkPipe configuration self-test."
+_PROBE_PROMPT = "Reply with the single word: ok."
+
 # Status values, worst first. Used both as row status and for the roll-up.
 _STATUS_ORDER = ("error", "warn", "unknown", "ok")
 
@@ -55,7 +64,6 @@ _SOURCE_ALIASES = {
 
 def collect_config_status(
     models: dict[str, Any],
-    vault_path: str | None = None,
     *,
     probe: bool = True,
     timeout: float = DEFAULT_PROBE_TIMEOUT,
@@ -66,7 +74,6 @@ def collect_config_status(
         models: The effective model config (as produced by the app's
             ``_effective_models``); reads ``embedding_source``/``embedding_model``
             and ``chat_source``/``chat_model``.
-        vault_path: Currently selected vault path, or empty/None if none.
         probe: When True, make live connectivity/credential calls. When False,
             report only what can be determined without touching the network.
         timeout: Per-call network timeout, in seconds.
@@ -91,7 +98,6 @@ def collect_config_status(
             probe=probe,
             timeout=timeout,
         ),
-        _check_vault(vault_path),
     ]
     return {"overall": _rollup(checks), "checks": checks}
 
@@ -126,9 +132,10 @@ def _check_provider(
         "source": _source_provenance(source_setting_key),
     }
     normalized = (source or "").strip().lower()
+    role = _role_for_setting(source_setting_key)
 
     if normalized == "model2vec":
-        return _check_model2vec(base, model, probe=probe)
+        return _check_model2vec(base, model, probe=probe, timeout=timeout)
 
     if normalized == "eliza":
         base["status"] = "ok"
@@ -138,11 +145,18 @@ def _check_provider(
         return base
 
     if normalized == "ollama":
-        return _check_ollama(base, model, probe=probe, timeout=timeout)
+        return _check_ollama(base, model, role=role, probe=probe, timeout=timeout)
 
     if normalized == "openai":
         return _check_api_key(
-            base, "OpenAI", "OPENAI_API_KEY", "openai", probe=probe, timeout=timeout
+            base,
+            "OpenAI",
+            "OPENAI_API_KEY",
+            "openai",
+            role=role,
+            model=model,
+            probe=probe,
+            timeout=timeout,
         )
 
     if normalized == "anthropic":
@@ -151,19 +165,267 @@ def _check_provider(
             "Anthropic",
             "ANTHROPIC_API_KEY",
             "anthropic",
+            role=role,
+            model=model,
             probe=probe,
             timeout=timeout,
         )
 
-    base["status"] = "warn"
-    base["summary"] = f"Can't automatically verify provider '{source}'."
+    return _check_unrecognized_provider(
+        base,
+        role,
+        source,
+        model,
+        probe=probe,
+        timeout=timeout,
+    )
+
+
+def _role_for_setting(source_setting_key: str) -> str:
+    """Map a source setting key to a functional-probe role."""
+    return "embedding" if source_setting_key == "embedding_source" else "chat"
+
+
+def _check_unrecognized_provider(
+    base: dict[str, Any],
+    role: str,
+    source: str,
+    model: str,
+    *,
+    probe: bool,
+    timeout: float,
+) -> dict[str, Any]:
+    """Verify a provider with no bespoke check by actually using it once.
+
+    Diagnostics has no tailored check or setup advice for this source, but
+    TalkPipe may still have a registered adapter for it. Rather than give up
+    with a bare "can't verify", exercise the provider end to end: embed a short
+    string (embeddings) or run a one-shot chat turn (chat). If that succeeds the
+    configuration is functionally correct even though we can't offer guidance;
+    if it fails we can at least say so and surface the error.
+
+    Sources with no registered adapter (e.g. a typo'd provider name) stay a
+    plain warning, since there is nothing to exercise.
+    """
+    registered_key = _registered_provider_key(role, source)
+    if registered_key is None:
+        base["status"] = "warn"
+        base["summary"] = f"Can't automatically verify provider '{source}'."
+        return base
+
+    if not probe:
+        base["status"] = "unknown"
+        base["summary"] = (
+            f"Provider '{source}' has no built-in check and was not exercised "
+            "(live probing is disabled)."
+        )
+        return base
+
+    ok, result = _functional_probe(role, registered_key, model, timeout)
+    if ok:
+        base["status"] = "ok"
+        if role == "embedding":
+            base["summary"] = (
+                f"No built-in check for '{source}', but a test embedding "
+                f"succeeded ({result}-dimension vector), so it is working."
+            )
+        else:
+            base["summary"] = (
+                f"No built-in check for '{source}', but a test chat exchange "
+                "succeeded, so it is working."
+            )
+        return base
+
+    base["status"] = "error"
+    action = (
+        "make a test embedding" if role == "embedding" else "hold a test chat exchange"
+    )
+    base["summary"] = (
+        f"Provider '{source}' is selected, but the attempt to {action} failed."
+    )
+    base["detail"] = _short_error(result)
     return base
 
 
-def _check_model2vec(
-    base: dict[str, Any], model: str, *, probe: bool
+def _registered_provider_key(role: str, source: str) -> str | None:
+    """Return the registry key for a source, matched case-insensitively.
+
+    Returns None when TalkPipe has no adapter registered for the source, so the
+    caller can fall back to a plain "can't verify" instead of trying to build
+    an adapter that does not exist.
+    """
+    from talkpipe.llm.config import getEmbeddingSources, getPromptSources
+
+    try:
+        names = getEmbeddingSources() if role == "embedding" else getPromptSources()
+    except Exception:  # pragma: no cover - defensive; registry access is cheap
+        return None
+    target = (source or "").strip().lower()
+    for name in names:
+        if name.lower() == target:
+            return name
+    return None
+
+
+def _functional_probe(
+    role: str, registered_key: str, model: str, timeout: float
+) -> tuple[bool, Any]:
+    """Actually exercise a provider once, bounded by a timeout.
+
+    Returns ``(True, dimension_or_reply)`` on success or ``(False, error)`` on
+    any failure (including timeout). The work runs in a daemon thread so a
+    provider that hangs cannot block the Settings page indefinitely.
+    """
+    bound = max(timeout, FUNCTIONAL_PROBE_TIMEOUT)
+    if role == "embedding":
+        return _run_bounded(lambda: _embedding_probe(registered_key, model), bound)
+    return _run_bounded(lambda: _chat_probe(registered_key, model), bound)
+
+
+def _embedding_probe(registered_key: str, model: str) -> int:
+    """Build the embedding adapter and embed one probe string.
+
+    Returns the vector dimension on success; raises on any failure.
+    """
+    from talkpipe.llm.config import getEmbeddingAdapter
+
+    adapter = getEmbeddingAdapter(registered_key)(model=model)
+    vector = adapter.execute_one(_PROBE_TEXT)
+    if vector is None or len(vector) == 0:
+        raise ValueError("provider returned an empty embedding vector")
+    return len(vector)
+
+
+def _chat_probe(registered_key: str, model: str) -> str:
+    """Build the chat adapter and run one probe turn.
+
+    Returns the (stripped) reply text on success; raises on any failure.
+    """
+    from talkpipe.llm.config import getPromptAdapter
+
+    adapter = getPromptAdapter(registered_key)(model=model)
+    reply = adapter.execute(_PROBE_PROMPT)
+    text = "" if reply is None else str(reply).strip()
+    if not text:
+        raise ValueError("provider returned an empty chat response")
+    return text
+
+
+def _run_bounded(func: Any, timeout: float) -> tuple[bool, Any]:
+    """Run ``func()`` in a daemon thread, capping how long we wait.
+
+    On timeout the worker is abandoned rather than joined, so the report still
+    returns promptly; the daemon thread cannot keep the process alive.
+    """
+    import threading
+
+    outcome: dict[str, Any] = {}
+
+    def worker() -> None:
+        try:
+            outcome["value"] = func()
+        except BaseException as exc:  # noqa: BLE001 - surface any failure as text
+            outcome["error"] = exc
+
+    thread = threading.Thread(target=worker, daemon=True)
+    thread.start()
+    thread.join(timeout)
+    if thread.is_alive():
+        return False, TimeoutError(f"probe did not finish within {timeout:.0f}s")
+    if "error" in outcome:
+        return False, outcome["error"]
+    return True, outcome.get("value")
+
+
+def _short_error(exc: Any) -> str:
+    """Render an exception as a short, single-line detail string."""
+    message = str(exc).strip() or exc.__class__.__name__
+    return message[:200]
+
+
+def _probe_word(role: str) -> str:
+    """Human phrase for the action a functional probe performs."""
+    return "embedding" if role == "embedding" else "chat exchange"
+
+
+def _model2vec_finalize(
+    base: dict[str, Any], model: str, timeout: float, *, ready_summary: str
 ) -> dict[str, Any]:
-    """Check that a model2vec model is available locally.
+    """Confirm a loadable model2vec model by embedding a test string.
+
+    Called only when the model is known to be loadable without a download (a
+    local directory or a ready cache entry), so this never reaches out to the
+    network. Success reports ``ready_summary``; failure means the model is
+    present but broken (e.g. a corrupt cache or a directory that is not a real
+    model), which is an error the user needs to see.
+    """
+    ok, result = _functional_probe("embedding", "model2vec", model, timeout)
+    if ok:
+        base["status"] = "ok"
+        base["summary"] = ready_summary
+        return base
+    base["status"] = "error"
+    base["summary"] = (
+        f"model2vec model '{model}' is present locally but failed to produce a "
+        "test embedding."
+    )
+    base["fix"] = (
+        "The local model may be incomplete or corrupt — re-download it, or point "
+        "the embedding model at a known-good local model directory."
+    )
+    base["detail"] = _short_error(result)
+    return base
+
+
+def _sdk_auth_error_type(package: str) -> type | None:
+    """Return a cloud SDK's AuthenticationError type, if the SDK is importable."""
+    try:
+        module = __import__(package)
+    except ImportError:
+        return None
+    error_type = getattr(module, "AuthenticationError", None)
+    return error_type if isinstance(error_type, type) else None
+
+
+_AUTH_KEYWORDS = (
+    "authentication",
+    "unauthorized",
+    "invalid api key",
+    "invalid_api_key",
+    "invalid x-api-key",
+    "incorrect api key",
+    "could not resolve authentication",
+    "401",
+)
+
+
+def _is_auth_failure(package: str, exc: BaseException) -> bool:
+    """Decide whether a failed cloud probe was caused by a bad/rejected key.
+
+    Walks the exception's cause/context chain, matching both the SDK's own
+    ``AuthenticationError`` type and common auth-failure phrasing, so a wrapped
+    exception is still recognized. Distinguishing this from a transient network
+    error is what lets the report say "the key was rejected" (an error the user
+    must fix) versus "couldn't validate right now" (a warning).
+    """
+    sdk_auth = _sdk_auth_error_type(package)
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if sdk_auth is not None and isinstance(current, sdk_auth):
+            return True
+        text = str(current).lower()
+        if any(keyword in text for keyword in _AUTH_KEYWORDS):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
+def _check_model2vec(
+    base: dict[str, Any], model: str, *, probe: bool, timeout: float
+) -> dict[str, Any]:
+    """Check that a model2vec model is available locally, then embed a test string.
 
     model2vec runs in-process but resolves its model through Hugging Face,
     which downloads on first use. Two firewall realities shape this check:
@@ -175,18 +437,21 @@ def _check_model2vec(
       that can stall for the full timeout before falling back to the cache.
 
     So the reliable firewall setup is ``HF_HUB_OFFLINE=1`` plus a pre-populated
-    cache (or a local model directory). This check reports against that: it
-    inspects the local cache rather than loading the model (never triggering a
-    download just by opening Settings) and factors in whether offline mode is
-    on.
+    cache (or a local model directory). We first inspect the local cache rather
+    than loading the model (so opening Settings never triggers a download), and
+    only once the model is known to be loadable — a local directory, or a ready
+    cache entry — do we actually make a test embedding to confirm it works.
     """
     if _is_local_model_dir(model):
-        base["status"] = "ok"
-        base["summary"] = (
-            f"Local model directory '{model}' — runs in-process, no download "
-            "and no network access."
+        return _model2vec_finalize(
+            base,
+            model,
+            timeout,
+            ready_summary=(
+                f"Local model directory '{model}' embeds a test string — runs "
+                "in-process, no download and no network access."
+            ),
         )
-        return base
 
     if not probe:
         base["status"] = "unknown"
@@ -197,23 +462,24 @@ def _check_model2vec(
     state, detail = _model2vec_cache_state(model)
 
     if state == "ready":
-        base["status"] = "ok"
         if offline:
-            base["summary"] = (
+            summary = (
                 f"model2vec model '{model}' loads from the local cache and "
-                "Hugging Face offline mode is on, so it needs no network access."
+                "embedded a test string; Hugging Face offline mode is on, so it "
+                "needs no network access."
             )
             base["detail"] = f"Cached at {detail}"
         else:
-            base["summary"] = (
+            summary = (
                 f"model2vec model '{model}' is available locally and ready — "
-                "runs in-process, no server or API key needed."
+                "embedded a test string, runs in-process, no server or API key "
+                "needed."
             )
             base["detail"] = (
                 f"Cached at {detail}. Behind a firewall, start the app with "
                 "HF_HUB_OFFLINE=1 so loading never waits on the network."
             )
-        return base
+        return _model2vec_finalize(base, model, timeout, ready_summary=summary)
 
     if state == "missing_package":
         base["status"] = "error"
@@ -310,9 +576,15 @@ def _model2vec_cache_state(model: str) -> tuple[str, str | None]:
 
 
 def _check_ollama(
-    base: dict[str, Any], model: str, *, probe: bool, timeout: float
+    base: dict[str, Any], model: str, *, role: str, probe: bool, timeout: float
 ) -> dict[str, Any]:
-    """Check that the configured Ollama server is reachable and has the model."""
+    """Check the configured Ollama server is reachable, has the model, and works.
+
+    Reachability and model-presence come first so their specific fixes (set the
+    server URL / ``ollama pull``) are reported even when nothing works yet. Once
+    both pass, a real embedding or chat turn confirms the server URL and model
+    actually function for the role they are configured for.
+    """
     url, url_source = _ollama_url_and_source()
     base["detail"] = f"Ollama server: {url} ({url_source})"
 
@@ -332,16 +604,29 @@ def _check_ollama(
         )
         return base
 
-    if _model_present(model, names):
+    if not _model_present(model, names):
+        base["status"] = "error"
+        base["summary"] = (
+            f"Ollama is reachable at {url}, but model '{model}' is not pulled."
+        )
+        base["fix"] = f"Run: ollama pull {model}"
+        return base
+
+    ok, result = _functional_probe(role, "ollama", model, timeout)
+    if ok:
         base["status"] = "ok"
-        base["summary"] = f"Ollama reachable at {url}; model '{model}' is available."
+        base["summary"] = (
+            f"Ollama at {url} completed a test {_probe_word(role)} with model "
+            f"'{model}'."
+        )
         return base
 
     base["status"] = "error"
     base["summary"] = (
-        f"Ollama is reachable at {url}, but model '{model}' is not pulled."
+        f"Ollama at {url} has model '{model}', but a test {_probe_word(role)} "
+        "failed."
     )
-    base["fix"] = f"Run: ollama pull {model}"
+    base["detail"] = f"{base['detail']} — {_short_error(result)}"
     return base
 
 
@@ -351,13 +636,18 @@ def _check_api_key(
     env_var: str,
     package: str,
     *,
+    role: str,
+    model: str,
     probe: bool,
     timeout: float,
 ) -> dict[str, Any]:
-    """Check that a cloud provider's API key is set (and optionally valid).
+    """Check a cloud provider's key is set and actually works for its model.
 
     The vendor SDKs read these keys directly from the environment, not from
-    TalkPipe config, so this checks the environment variable specifically.
+    TalkPipe config, so the presence check targets the environment variable.
+    When probing is enabled, the key is validated by actually making a test
+    embedding or chat exchange with the configured model — proving not just that
+    the key is present, but that it is accepted and grants access to that model.
     """
     key = os.environ.get(env_var)
     if not key:
@@ -378,53 +668,27 @@ def _check_api_key(
         base["summary"] = f"{env_var} is set (not validated)."
         return base
 
-    result = _probe_api_key(package, timeout)
-    if result is None:
+    ok, result = _functional_probe(role, package, model, timeout)
+    if ok:
         base["status"] = "ok"
-        base["summary"] = f"{display} key is set and validated."
+        base["summary"] = (
+            f"{display} key works — a test {_probe_word(role)} with model "
+            f"'{model}' succeeded."
+        )
         return base
-    if result == "auth":
+
+    if _is_auth_failure(package, result):
         base["status"] = "error"
         base["summary"] = f"{env_var} is set but {display} rejected it."
         base["fix"] = f"Check that {env_var} is a valid, active {display} API key."
         return base
 
-    # Present but unverifiable (network error, unexpected SDK shape, etc.).
+    # Present but unverifiable (network error, model access, unexpected SDK, …).
     base["status"] = "warn"
-    base["summary"] = f"{env_var} is set, but the key could not be validated."
-    base["detail"] = f"{base['detail']} — {result}"
-    return base
-
-
-# --------------------------------------------------------------------------
-# Vault check
-# --------------------------------------------------------------------------
-
-
-def _check_vault(vault_path: str | None) -> dict[str, Any]:
-    """Check that a vault is selected, present, and writable."""
-    base: dict[str, Any] = {"name": "Vault", "value": vault_path or "—"}
-    if not vault_path:
-        base["status"] = "warn"
-        base["summary"] = "No vault selected."
-        base["fix"] = "Choose or create a vault on the Vaults page."
-        return base
-
-    path = Path(vault_path)
-    if not path.exists():
-        base["status"] = "error"
-        base["summary"] = f"Vault path does not exist: {vault_path}."
-        base["fix"] = "Create the vault, or pick an existing one on the Vaults page."
-        return base
-
-    if not os.access(vault_path, os.W_OK):
-        base["status"] = "warn"
-        base["summary"] = f"Vault path is not writable: {vault_path}."
-        base["fix"] = "Indexing needs write access — check the folder's permissions."
-        return base
-
-    base["status"] = "ok"
-    base["summary"] = f"Vault is ready at {vault_path}."
+    base["summary"] = (
+        f"{env_var} is set, but a test {_probe_word(role)} could not be completed."
+    )
+    base["detail"] = f"{base['detail']} — {_short_error(result)}"
     return base
 
 
@@ -509,36 +773,6 @@ def _model_present(model: str, names: list[str]) -> bool:
         if name == model or name.split(":", 1)[0] == wanted_base:
             return True
     return False
-
-
-def _probe_api_key(package: str, timeout: float) -> str | None:
-    """Validate a cloud key with a cheap authenticated call.
-
-    Returns None when the key works, ``"auth"`` when the provider rejects it,
-    or a short error string when the key is present but validation could not
-    be completed (network error, unexpected SDK, etc.).
-    """
-    try:
-        module = __import__(package)
-    except ImportError:
-        return f"{package} package is not installed"
-
-    try:
-        if package == "openai":
-            client = module.OpenAI(timeout=timeout)
-            client.models.list()
-        elif package == "anthropic":
-            client = module.Anthropic()
-            client.models.list(timeout=timeout)
-        else:  # pragma: no cover - only known cloud providers reach here
-            return "unsupported provider"
-        return None
-    except Exception as exc:  # noqa: BLE001 - classify by SDK exception name
-        auth_error = getattr(module, "AuthenticationError", None)
-        if auth_error is not None and isinstance(exc, auth_error):
-            return "auth"
-        message = str(exc).strip() or exc.__class__.__name__
-        return message[:160]
 
 
 def _mask(secret: str) -> str:

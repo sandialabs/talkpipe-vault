@@ -105,6 +105,11 @@ def test_config_status_endpoint_returns_report(monkeypatch):
         "_ollama_tags",
         lambda url, timeout: (["mistral-small:latest"], None),
     )
+    monkeypatch.setattr(
+        diagnostics,
+        "_functional_probe",
+        lambda role, key, model, timeout: (True, 384),
+    )
     client = TestClient(query.app)
 
     response = client.get("/api/config-status")
@@ -113,7 +118,7 @@ def test_config_status_endpoint_returns_report(monkeypatch):
     body = response.json()
     assert body["overall"] in {"ok", "warn", "error", "unknown"}
     names = {check["name"] for check in body["checks"]}
-    assert {"Embeddings provider", "Chat (Ask) provider", "Vault"} <= names
+    assert {"Embeddings provider", "Chat (Ask) provider"} <= names
 
 
 def test_config_status_endpoint_skips_probe(monkeypatch):

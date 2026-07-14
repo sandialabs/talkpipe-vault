@@ -1178,9 +1178,7 @@ def config_status(
 
 def _collect_config_status(state: AppState, probe: bool = True) -> dict[str, Any]:
     """Build the config-status report for the effective model selection."""
-    return diagnostics.collect_config_status(
-        _effective_models(state), vault_path=state.vault_path, probe=probe
-    )
+    return diagnostics.collect_config_status(_effective_models(state), probe=probe)
 
 
 @app.post("/documents/index", response_class=HTMLResponse)
