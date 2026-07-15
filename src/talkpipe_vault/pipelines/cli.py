@@ -1,6 +1,7 @@
 """CLI entry points for building and watching pipelines."""
 
 import argparse
+import os
 
 from talkpipe.pipe.basic import ToDict
 from talkpipe.pipe.io import Print
@@ -81,6 +82,15 @@ def watch_vectordb_main() -> None:
     )
 
     args = parser.parse_args()
+
+    # Validate the watch directory before the pipeline is built, so a bad path
+    # fails cleanly instead of leaving vault scaffolding behind and dying with
+    # a low-level filesystem traceback.
+    if not os.path.isdir(os.path.expanduser(args.source_path)):
+        parser.error(
+            f"source path '{args.source_path}' does not exist or is not a "
+            "directory. Pass an existing directory to watch."
+        )
 
     # Run the pipeline
     pipeline = (

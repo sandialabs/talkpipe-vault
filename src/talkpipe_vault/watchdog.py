@@ -81,6 +81,18 @@ def file_watcher(
                     extracted_patterns.append(pattern)
                 break
 
+    # Fail fast with a clear message; otherwise watchdog surfaces a bare
+    # "FileNotFoundError: [Errno 2] No such file or directory" from inotify
+    # that never names the offending path.
+    expanded_watch_path = os.path.expanduser(watch_path)
+    if not os.path.isdir(expanded_watch_path):
+        raise FileNotFoundError(
+            f"file_watcher: watch path '{watch_path}' does not exist or is not "
+            "a directory. Create it first, or pass an existing directory "
+            "(optionally with a glob pattern such as '/path/to/dir/*.txt')."
+        )
+    watch_path = expanded_watch_path
+
     # Combine extracted patterns with provided patterns
     if extracted_patterns:
         if patterns:

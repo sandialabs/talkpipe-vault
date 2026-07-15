@@ -718,3 +718,35 @@ class TestFileWatcher:
             assert ".watchdog_ready" not in results[0]["path"]
             # Should be the new file we created
             assert "new_file.txt" in results[0]["path"]
+
+    def test_missing_watch_path_raises_clear_error(self):
+        """A nonexistent watch path must name itself in the error.
+
+        Without validation, watchdog surfaces a bare inotify FileNotFoundError
+        that never says which path was the problem.
+        """
+        import pytest
+
+        pipeline = file_watcher(path="/path/that/does/not/exist")
+        with pytest.raises(FileNotFoundError, match="/path/that/does/not/exist"):
+            list(pipeline())
+
+    def test_tilde_watch_path_is_expanded(self, tmp_path, monkeypatch):
+        """A ~/... watch path should refer to the home directory, not ./~."""
+        monkeypatch.setenv("HOME", str(tmp_path))
+        (tmp_path / "watched").mkdir()
+
+        results = []
+
+        def run_pipeline():
+            pipeline = file_watcher(path="~/watched", max_events=1)
+            results.extend(list(pipeline()))
+
+        thread = Thread(target=run_pipeline, daemon=True)
+        thread.start()
+        time.sleep(0.5)
+        (tmp_path / "watched" / "hello.txt").write_text("hi")
+        thread.join(timeout=3.0)
+
+        assert len(results) == 1
+        assert results[0]["event"] == "created"

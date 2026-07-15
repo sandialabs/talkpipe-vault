@@ -43,6 +43,22 @@
 #### Ollama Connection Guidance
 - When Ask cannot reach the Ollama server, the error now also points at the in-app fix — Settings → Connections & credentials — instead of only suggesting the `TALKPIPE_OLLAMA_SERVER_URL` environment variable or `~/.talkpipe.toml`. The configuration-status hint on the Settings page does the same.
 
+#### API Key Error Guidance
+- Missing OpenAI/Anthropic credential errors on the Ask page now also point at the in-app fix — Settings → Connections & credentials — matching the Ollama connection guidance, instead of only suggesting the `OPENAI_API_KEY`/`ANTHROPIC_API_KEY` environment variables.
+
+#### Watcher Path Validation
+- `fileWatcher` (`file_watcher`) now fails fast with an error that names a nonexistent watch path. Previously a bad path (for example the README's `/path/to/watch` placeholder) surfaced as a bare `FileNotFoundError: [Errno 2] No such file or directory` from inotify that never said which path was the problem. The watch path also expands `~` now.
+- The experimental `watch_vectordb_main` helper validates the watch directory before building its pipeline, so a bad path exits with a clean CLI error instead of writing vault scaffolding to disk and then dying with a filesystem traceback.
+
+#### Opening a Documents Folder as a Vault
+- Opening a non-empty folder that contains no vault data (an easy mix-up between a documents folder and a vault folder) now lands on Add Documents with a notice that index files will be created alongside the folder's existing contents, instead of silently starting to write vault scaffolding next to the user's files.
+
+#### Consistent Page Titles
+- Browser-tab titles now follow one `<page> - Talkpipe Vault` pattern on every page; the home page previously titled itself "Vault Query - Home" (a leftover internal name) and the search/ask pages used assorted "Vault ..." titles.
+
+#### Offline Markdown Rendering
+- The web interface now serves its Markdown renderer (`marked.min.js`) from the app's own static files instead of loading it from the jsDelivr CDN. On firewalled or offline machines (the same deployments the `HF_HUB_OFFLINE` guidance targets), Ask answers previously fell back to unrendered plain text because the CDN request failed.
+
 #### Tilde Vault Paths Split Across Two Locations
 - Passing a vault path like `~/my-vault` (as the README's pipeline examples do) no longer splits the vault: LanceDB expanded the `~` itself while the Whoosh index path did not, so the vector tables landed in `$HOME/my-vault` but the full-text index in a literal `./~/my-vault/fulltext_vault` directory. The vault path helpers now expand `~` for both stores.
 
@@ -90,12 +106,19 @@
 #### CLI and Storage Details
 - Added the `--no-browser` flag to the documented `vault-server` usage (skips opening a browser; useful headless).
 - Documented `vault_metadata.json` in the stable vault layout: it records the embedding source/model the vault was indexed with so reopening the vault restores a matching embedder.
+- Clarified that `vault_metadata.json` is written by the Add Documents page: vaults built with `makevectordatabase` alone don't carry it and are treated as legacy vaults (flagged on the Settings page when the current embedder may not match the index). The layout section previously implied both tools produced the file.
+- Set expectations for the experimental directory-monitoring helper: it only reacts to filesystem events after it starts (existing files are indexed with the list helper instead) and currently prints nothing per processed file.
+- Clarified that "recently used vaults are remembered" means they are listed on the Vaults page at the next start for one-click reopening — the last vault is not reopened automatically.
+
+#### Provider Coverage
+- Documented the remaining chat providers selectable in the web interface: Anthropic (key via Settings → Connections & credentials or `ANTHROPIC_API_KEY`) and the built-in keyless `eliza` responder for smoke-testing the Ask page, and listed both in the `chat_source` configuration table row.
 
 #### Developer Tooling
 - Added a `.flake8` configuration matching the black/isort style (line length 88, E203/W503 ignored), so the documented `flake8 src/ tests/` command passes on a clean checkout, and removed three unused imports it flagged in the watchdog tests.
 - Raised mypy's `python_version` to 3.12 so `mypy src/` can parse modern dependency stubs (numpy's `type` statements previously aborted the run before checking any project file), and marked type checking as advisory in the README to match CI.
 
 #### Building Your Own Pipelines examples
+- Fixed the "Complete document processing" example, which crashed on the first file event with `'ExtractionResult' object has no attribute 'strip'`: TalkPipe's `ReadFile` stores an `ExtractionResult` object rather than a plain string, so the example's filter expression now goes through `.content`, and the example notes the object's fields.
 - Fixed the "Using registered components via configuration" example, which imported a non-existent `talkpipe.Pipeline` and a fabricated `Pipeline.from_config` API. It now uses the real config-driven path — a chatterlang script compiled with `talkpipe.compile` — and references the registered source by name with its correct parameter (`source_pattern`).
 - Flagged the "Building Your Own Pipelines" examples as using the experimental watcher/list components, which write the `full_documents`/`shingled_chunks` layout rather than the `docs` table that `vault-server` reads, and clarified that the file-watcher example runs until interrupted.
 

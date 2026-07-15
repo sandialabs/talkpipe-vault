@@ -754,6 +754,57 @@ def test_chat_citations_hide_source_paths_by_default(monkeypatch):
     assert '"lookup_path": "row-uuid"' in response.text
 
 
+def _chat_error_response(monkeypatch, exc: Exception) -> str:
+    """Post a chat message whose pipeline raises exc; return the page text."""
+
+    def failing_pipeline(_message):
+        raise exc
+
+    query._state.chat_pipeline = failing_pipeline
+    query._state.search_pipeline = lambda _message: []
+    monkeypatch.setattr(query, "_refresh_pipelines", lambda: None)
+    monkeypatch.setattr(query, "_update_document_counts", lambda vault_path: None)
+    client = TestClient(query.app)
+    response = client.post("/chat", data={"message": "What matters?"})
+    assert response.status_code == 200
+    return response.text
+
+
+def test_chat_ollama_connection_error_points_at_settings(monkeypatch):
+    """Ollama connection failures should mention the in-app Settings fix."""
+    body = _chat_error_response(
+        monkeypatch,
+        RuntimeError("Failed to connect to Ollama at 'http://localhost:11434'."),
+    )
+    assert "set the Ollama server URL in this app" in body
+    assert "Settings &gt; Connections &amp; credentials" in body
+
+
+def test_chat_missing_openai_key_error_points_at_settings(monkeypatch):
+    """Missing OpenAI credentials should mention the in-app Settings fix."""
+    body = _chat_error_response(
+        monkeypatch,
+        RuntimeError(
+            "Could not initialize the OpenAI client: Missing credentials. "
+            "Set the OPENAI_API_KEY environment variable."
+        ),
+    )
+    assert "enter the API key in this app" in body
+    assert "Settings &gt; Connections &amp; credentials" in body
+
+
+def test_chat_missing_anthropic_key_error_points_at_settings(monkeypatch):
+    """Missing Anthropic credentials should mention the in-app Settings fix."""
+    body = _chat_error_response(
+        monkeypatch,
+        RuntimeError(
+            "Could not initialize the Anthropic client: no API key provided. "
+            "Set the ANTHROPIC_API_KEY environment variable."
+        ),
+    )
+    assert "enter the API key in this app" in body
+
+
 def test_vault_text_search_default_limit_returns_all_whoosh_results(
     tmp_path, monkeypatch
 ):
