@@ -16,6 +16,9 @@
 {% if error %}
 <div id="server-error" data-content="{{ error | e }}" style="display:none;"></div>
 {% endif %}
+{% if answered_by %}
+<div id="server-answered-by" data-content="{{ answered_by | e }}" style="display:none;"></div>
+{% endif %}
 {% if citations %}
 <script id="server-citations" type="application/json">{{ citations | tojson }}</script>
 {% endif %}
@@ -41,6 +44,7 @@
             <button type="button" id="copy-btn" class="copy-btn" title="Copy to clipboard">&#128203; Copy</button>
         </div>
         <div class="answer-content markdown-content" id="answer-content"></div>
+        <div class="answer-meta" id="answer-meta" style="display: none;"></div>
         <div class="sources-section" id="sources-section" style="display: none;">
             <h3>Source Chunks</h3>
             <div id="sources-list"></div>
@@ -177,6 +181,12 @@
         background: #fce8e6;
         color: #d93025;
     }
+    .answer-meta {
+        color: #64748b;
+        font-size: 0.82rem;
+        margin-top: 8px;
+        text-align: right;
+    }
     .sources-section {
         border-top: 1px solid #e2e8f0;
         margin-top: 22px;
@@ -256,6 +266,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const copyBtn = document.getElementById('copy-btn');
     const sourcesSection = document.getElementById('sources-section');
     const sourcesList = document.getElementById('sources-list');
+    const answerMeta = document.getElementById('answer-meta');
 
     let currentAnswer = '';
 
@@ -404,7 +415,7 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
-    function showAnswer(content, isError = false, citations = []) {
+    function showAnswer(content, isError = false, citations = [], answeredBy = '') {
         currentAnswer = content;
         answerContent.classList.toggle('error', isError);
 
@@ -412,6 +423,14 @@ document.addEventListener('DOMContentLoaded', function() {
             answerContent.innerHTML = marked.parse(content);
         } else {
             answerContent.textContent = content;
+        }
+
+        if (!isError && answeredBy) {
+            answerMeta.textContent = 'Answered by ' + answeredBy;
+            answerMeta.style.display = 'block';
+        } else {
+            answerMeta.textContent = '';
+            answerMeta.style.display = 'none';
         }
 
         renderSources(isError ? [] : citations);
@@ -460,13 +479,15 @@ document.addEventListener('DOMContentLoaded', function() {
             const serverResponse = doc.getElementById('server-response');
             const serverError = doc.getElementById('server-error');
             const serverCitations = getServerCitations(doc);
+            const serverAnsweredBy = doc.getElementById('server-answered-by');
+            const answeredBy = serverAnsweredBy ? serverAnsweredBy.getAttribute('data-content') : '';
 
             hideLoading();
 
             if (serverError) {
                 showAnswer('Error: ' + serverError.getAttribute('data-content'), true);
             } else if (serverResponse) {
-                showAnswer(serverResponse.getAttribute('data-content'), false, serverCitations);
+                showAnswer(serverResponse.getAttribute('data-content'), false, serverCitations, answeredBy);
             } else {
                 console.warn('No server-response or server-error found in HTML');
                 showAnswer('No response from server.', true);

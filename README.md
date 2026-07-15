@@ -62,7 +62,8 @@ TalkPipe Vault includes a web application for building, searching, and querying 
 - **Ask a Question**: Get AI-generated answers based on your vault's contents (single-turn Q&A)
 - **Copy Results**: Easily copy search results or answers to clipboard
 
-**Launch the web interface:**
+**Launch the web interface** (after installing the package — see
+[Installation](#installation) below):
 
 ```bash
 vault-server
@@ -150,11 +151,11 @@ python -c "from talkpipe_vault.pipelines.cli import watch_vectordb_main; watch_v
 
 The watcher pipeline writes LanceDB content directly under `~/watched-vault` and Whoosh data under `~/watched-vault/fulltext_vault`.
 
-Two expectations to set before trying it: the watcher reacts only to filesystem
+One expectation to set before trying it: the watcher reacts only to filesystem
 events that happen **after** it starts — files already in the directory are not
-indexed (use the `list_vectordb_main` helper below for an existing set of files) —
-and it currently prints nothing per processed file, so verify results by
-inspecting the vault's LanceDB tables.
+indexed (use the `list_vectordb_main` helper below for an existing set of files).
+Each indexed chunk is printed as a `{'shingle_id': ...}` line, so you can watch
+files being processed; the results land in the vault's LanceDB tables.
 
 ---
 
@@ -320,6 +321,15 @@ pipeline = \
 for result in pipeline():
     print(f"Processed: {result['path']}")
 ```
+
+Two practical notes on this example: Ollama components read the server URL from
+`TALKPIPE_OLLAMA_SERVER_URL` (or `OLLAMA_SERVER_URL` in `~/.talkpipe.toml`,
+default `http://localhost:11434`) — see
+[Provider-Specific Configuration](#provider-specific-configuration) if your
+server is remote. Also expect a single file save to produce more than one event
+(typically `created` followed by `modified`), so a file can be processed twice
+in a row; the vector database deduplicates by `doc_id_field`, so the end state
+is still one record per file.
 
 **Example 3: Using registered components via configuration**
 
@@ -566,17 +576,25 @@ retrieval_template = "Search for: {query}"
 
 #### Overriding in Code
 
-You can still override configuration explicitly when calling segments/sources:
+You can still override configuration explicitly when calling segments/sources.
+Note that calling a segment factory like `build_vector_db_from_paths(...)` only
+*constructs* a pipeline segment — nothing is indexed until you feed items
+through it and consume the results:
 
 ```python
 from talkpipe_vault.pipelines.building_and_watching import build_vector_db_from_paths
 
 # Explicit override (takes precedence over all config)
-build_vector_db_from_paths(
+indexer = build_vector_db_from_paths(
     vault_path="/path/to/vault",
-    embedding_model="custom-model",
-    embedding_source="custom-source"
+    embedding_model="minishlab/potion-retrieval-32M",
+    embedding_source="model2vec",
 )
+
+# Feed file paths through the segment and consume it to run the indexing.
+items = [{"path": "/path/to/documents/notes.txt"}]
+for chunk in indexer(items):
+    print(f"Indexed chunk: {chunk['shingle_id']}")
 ```
 
 ### Project Structure

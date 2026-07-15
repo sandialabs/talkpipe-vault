@@ -122,6 +122,42 @@ class TestBuildVectorDbFromPaths:
             # Verify result has expected attributes
             assert hasattr(results[0], "doc_id") or hasattr(results[0], "document")
 
+    def test_shingles_flush_per_document_on_open_streams(self):
+        """Shingles must be emitted as soon as each document is processed.
+
+        Watcher streams never end, so shingling must not hold a document's
+        chunks while waiting for the next document or for end-of-stream —
+        otherwise short documents never reach the shingled_chunks table
+        (they lag one file-event behind forever).
+        """
+        from talkpipe.search.lancedb import LanceDBDocumentStore
+
+        with tempfile.TemporaryDirectory() as vault_path:
+            segment = build_vector_db_from_paths(
+                vault_path=vault_path,
+                overwrite=True,
+            )
+
+            pulled: list[str] = []
+
+            def open_stream():
+                pulled.append(PDF_FILE)
+                yield {"path": PDF_FILE, "event": "created"}
+                pulled.append(HTML_FILE)
+                yield {"path": HTML_FILE, "event": "created"}
+
+            results = segment(open_stream())
+            first = next(iter(results))
+
+            # The first document's shingle arrives before the stream advances
+            # to the second document.
+            assert first["source"] == PDF_FILE
+            assert pulled == [PDF_FILE]
+
+            # And the shingle is already persisted, not just yielded.
+            db = LanceDBDocumentStore(path=vault_path, table_name="shingled_chunks")
+            assert db.count() == 1
+
     def test_build_vector_db_rejects_legacy_nested_vector_layout(self):
         """Legacy vector_vault layout should fail with a migration error."""
         with tempfile.TemporaryDirectory() as vault_path:

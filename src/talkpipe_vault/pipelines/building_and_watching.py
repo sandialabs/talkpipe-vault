@@ -2,10 +2,9 @@ from typing import Annotated, Any
 
 from talkpipe import register_segment, register_source, segment, source
 from talkpipe.data.extraction import ReadFile, listFiles
-from talkpipe.data.text.chunking_units import ShingleText, splitText
+from talkpipe.data.text.operations import shingle_generator
 from talkpipe.pipe.basic import (
     Debounce,
-    EvalExpression,
     FilterExpression,
     ToDict,
     fillTemplate,
@@ -32,6 +31,60 @@ def _non_empty_filter(field: str) -> FilterExpression:
     return FilterExpression(
         expression=f"item.get('{field}') and len(item.get('{field}', '').strip()) > 0"
     )
+
+
+@segment()
+def _shingle_documents(
+    items: Any,
+    chunk_criteria: Annotated[int, "Character length of each text chunk"] = 500,
+    shingle_size: Annotated[int, "Number of chunks per shingle"] = 3,
+    overlap: Annotated[
+        int, "Number of chunks that overlap between consecutive shingles"
+    ] = 1,
+):
+    """
+    Segment that splits documents into chunks and emits overlapping shingles.
+
+    Expects input items as dicts with the following structure:
+        - "content": str - Full document text
+        - "source": str - Source file path
+        - "title": str - Source file name
+
+    Chunking and shingling are self-contained per document, so every shingle
+    for a document is emitted as soon as that document has been processed.
+    This matters on never-ending streams (e.g. the file watcher): a
+    stream-scoped shingler would hold a short document's chunks until the next
+    document arrived or the stream ended, which never happens for a watcher.
+
+    Yields dicts with the following structure:
+        - "shingle_id": str - Unique chunk identifier (paragraph range + source path)
+        - "shingle": str - Raw text chunk content (not yet templated)
+        - "source": str - Source file path
+        - "title": str - Source file name
+    """
+    for item in items:
+        content = item.get("content") or ""
+        chunk_items = (
+            {"chunk": content[i : i + chunk_criteria]}
+            for i in range(0, len(content), chunk_criteria)
+            if content[i : i + chunk_criteria].strip()
+        )
+        for _, text, first, last in shingle_generator(
+            chunk_items,
+            "chunk",
+            None,
+            shingle_size,
+            overlap,
+            " ",
+            "count",
+            include_paragraph_numbers=True,
+        ):
+            yield {
+                "shingle_id": f"{first}-{last}-{item.get('source')}",
+                "shingle": text,
+                "source": item.get("source"),
+                "title": item.get("title"),
+            }
 
 
 @register_segment("buildVectorDBFromPaths")
@@ -132,23 +185,8 @@ def build_vector_db_from_paths(
     )
 
     shingle_stage = (
-        splitText(field="content", criteria=500, set_as="chunk")
-        | _non_empty_filter("chunk")
-        | ShingleText(
-            field="chunk",
-            shingle_size=3,
-            overlap=1,
-            set_as="shingle_detail",
-            key="id",
-            emit_detail=True,
-        )
-        | setAs(field_list="shingle_detail.text:shingle")
-        | EvalExpression(
-            set_as="shingle_id",
-            expression="str(item['shingle_detail']['first_paragraph'])+'-'+str(item['shingle_detail']['last_paragraph'])+'-'+str(item['source'])",
-        )
+        _shingle_documents()
         | _non_empty_filter("shingle")
-        | ToDict(field_list="shingle_id,shingle,source,title")
         | fillTemplate(template=shingle_template, set_as="shingle")
         | MakeVectorDatabaseSegment(
             path=vectordb_path,

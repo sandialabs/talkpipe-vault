@@ -37,6 +37,25 @@
 
 ### Bug Fixes
 
+#### Watcher Shingle Indexing
+- The experimental watcher pipelines (`watchIntoVectorDB`, `watch_vectordb_main`) now write each document's shingles to the `shingled_chunks` table as soon as the document is processed. Previously shingling was scoped to the whole stream, so a short document's chunks waited for the next file event or for the stream to end — which never happens for a watcher — and `shingled_chunks` was never populated. The watch helper also prints a `{'shingle_id': ...}` line per indexed chunk now, so processing is visible.
+
+#### Ask Page Source Paths
+- The Ask answer's "Sources:" list now shows only file names unless the server was started with `--show-source-paths`, matching the search pages, which already hid absolute filesystem paths by default.
+
+#### Ask Answer Attribution
+- Ask answers now say which provider and model generated them. When the built-in `eliza` smoke-test responder is selected, the attribution says so explicitly (including that it does not use your documents) — previously eliza's greeting quoted the configured model name (e.g. "I am mistral-small"), which made a scripted canned reply easy to mistake for a real model's answer.
+
+#### Keyword Search No-Results Hint
+- The keyword-search empty state now explains that matching is on exact word forms (no stemming, so "apple" will not match "apples") and points at Semantic Search for meaning-based matches, instead of only suggesting a shorter or broader query.
+
+### Documentation
+
+- The first `vault-server` launch snippet now points readers to the Installation section, so skimmers don't run the command before anything is installed.
+- The "Overriding in Code" example is now complete and runnable: it shows that `build_vector_db_from_paths(...)` only constructs a pipeline segment and demonstrates feeding items through it, instead of a bare constructor call that silently indexes nothing.
+- The "Building Your Own Pipelines" watcher example now notes where Ollama components get their server URL (with a link to Provider-Specific Configuration) and warns that a single file save typically produces both `created` and `modified` events, so a file can be processed twice in a row (the vector database deduplicates by document id).
+- The experimental directory-monitoring section reflects the watcher fix above: each indexed chunk is printed as it is processed, rather than the watcher printing nothing per file.
+
 #### Startup with Stale Saved Settings
 - A saved provider choice that is no longer available (for example a plugin-provided embedder whose package was uninstalled) no longer aborts `vault-server` / `python -m talkpipe_vault.apps.query` startup with a raw `Source '...' is not supported` error. The stale embedding or chat override is now dropped with a warning that names the settings file, the server starts with the configured defaults, and the Settings page's configuration status can flag anything still wrong. The same guard applies to the embedder recorded in a vault's `vault_metadata.json`.
 

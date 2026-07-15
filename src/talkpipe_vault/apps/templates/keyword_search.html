@@ -43,7 +43,7 @@
 
 {% set results_note = "Keyword matches are ranked by the Whoosh full-text index." %}
 {% set score_help = "Whoosh relevance score for the keyword query." %}
-{% set no_results_hint = "Keyword search works best with exact terms, quoted phrases, or boolean operators." %}
+{% set no_results_hint = "Keyword search matches exact word forms only (no stemming), so \"apple\" will not match \"apples\". Try the exact form that appears in your documents, or use Semantic Search for meaning-based matches." %}
 {% include "_search_results.html" %}
 
 <script>

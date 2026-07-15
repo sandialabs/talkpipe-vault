@@ -571,6 +571,39 @@ def _chat_citations(state: AppState, message: str) -> list[dict[str, Any]]:
     ]
 
 
+def _strip_answer_source_paths(answer: str) -> str:
+    """Replace absolute paths in the answer's trailing Sources list with basenames.
+
+    The RAG pipeline appends a "Sources:" section listing the retrieved files
+    by absolute path. Search pages hide filesystem paths unless the server was
+    started with --show-source-paths, so the Ask answer must do the same.
+    """
+    marker = "\n\nSources:\n"
+    index = answer.rfind(marker)
+    if index == -1:
+        return answer
+
+    head = answer[: index + len(marker)]
+    lines = []
+    for line in answer[index + len(marker) :].splitlines():
+        if line.startswith("- "):
+            lines.append("- " + os.path.basename(line[2:].strip()))
+        else:
+            lines.append(line)
+    return head + "\n".join(lines)
+
+
+def _answered_by(state: AppState) -> str:
+    """Describe the chat provider/model that generates Ask answers."""
+    models = _effective_models(state)
+    if models["chat_source"] == "eliza":
+        return (
+            "eliza (built-in scripted responder for smoke tests — "
+            "it does not use your documents)"
+        )
+    return f"{models['chat_source']} / {models['chat_model']}"
+
+
 def _process_keyword_results(raw_results: list[Any]) -> list[dict[str, Any]]:
     """
     Process raw keyword search results into display-ready format.
@@ -1826,6 +1859,11 @@ async def chat_response(
             citations = _chat_citations(state, message)
             # Perform chat with refreshed pipeline
             response = state.chat_pipeline(message)
+            if not state.show_source_paths:
+                # The RAG answer text ends with a "Sources:" list of absolute
+                # paths; hide them unless --show-source-paths was given, to
+                # match the search pages.
+                response = _strip_answer_source_paths(response)
             messages.append({"role": "assistant", "content": response})
         except Exception as e:
             error = str(e)
@@ -1861,6 +1899,7 @@ async def chat_response(
             messages=messages,
             citations=citations,
             error=error,
+            answered_by=_answered_by(state),
         ),
     )
 
