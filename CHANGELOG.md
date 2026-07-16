@@ -46,6 +46,12 @@
 #### Ask Answer Attribution
 - Ask answers now say which provider and model generated them. When the built-in `eliza` smoke-test responder is selected, the attribution says so explicitly (including that it does not use your documents) — previously eliza's greeting quoted the configured model name (e.g. "I am mistral-small"), which made a scripted canned reply easy to mistake for a real model's answer.
 
+#### Copy Buttons over Plain HTTP
+- Every copy button (Copy All Results, Copy Chunk on search results and Ask sources, and the Ask answer's Copy) now works when the app is reached over plain http from another machine (e.g. `http://server:8002` on a LAN). The buttons called the asynchronous Clipboard API, which browsers only expose on secure origins (https or localhost), so outside those contexts every copy failed silently. A shared helper now falls back to the classic hidden-textarea `execCommand('copy')` path, and the buttons flash "Copy failed" instead of doing nothing when even the fallback is refused.
+
+#### Full Chunk Viewer on the Ask Page
+- Ask source chunks can now be opened in full: each source's file name is a link that shows the complete stored chunk in the same viewer the search pages use (the modal was extracted into a shared partial). The viewer's title now shows the file name instead of the internal row id on all pages.
+
 #### Keyword Search No-Results Hint
 - The keyword-search empty state now explains that matching is on exact word forms (no stemming, so "apple" will not match "apples") and points at Semantic Search for meaning-based matches, instead of only suggesting a shorter or broader query.
 

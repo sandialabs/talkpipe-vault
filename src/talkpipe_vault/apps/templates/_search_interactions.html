@@ -63,57 +63,6 @@
     .result-title-link:focus {
         text-decoration: underline;
     }
-    .document-modal {
-        align-items: center;
-        background: rgba(0, 0, 0, 0.55);
-        bottom: 0;
-        display: flex;
-        justify-content: center;
-        left: 0;
-        position: fixed;
-        right: 0;
-        top: 0;
-        z-index: 9999;
-    }
-    .document-modal-content {
-        background: #fff;
-        border-radius: 12px;
-        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
-        display: flex;
-        flex-direction: column;
-        max-height: 80vh;
-        max-width: 920px;
-        width: 92%;
-    }
-    .document-modal-header {
-        align-items: center;
-        border-bottom: 1px solid #ddd;
-        display: flex;
-        justify-content: space-between;
-        padding: 12px 16px;
-    }
-    #document-modal-title {
-        font-size: 1rem;
-        margin: 0;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-    }
-    #document-modal-close {
-        background: transparent;
-        border: none;
-        cursor: pointer;
-        font-size: 1.35rem;
-        line-height: 1;
-        padding: 4px 8px;
-    }
-    #document-modal-body {
-        margin: 0;
-        overflow: auto;
-        padding: 16px;
-        white-space: pre-wrap;
-        word-break: break-word;
-    }
     .search-loading {
         align-items: center;
         color: #666;
@@ -161,34 +110,18 @@ document.addEventListener('DOMContentLoaded', function() {
     const btn = document.getElementById('search-btn');
     const loading = document.getElementById('loading-overlay');
     const copyBtn = document.getElementById('copy-results-btn');
-    const modal = document.getElementById('document-modal');
-    const modalTitle = document.getElementById('document-modal-title');
-    const modalBody = document.getElementById('document-modal-body');
-    const modalClose = document.getElementById('document-modal-close');
     const resultsRoot = document.getElementById('search-results');
-    let lastFocusedElement = null;
 
-    function setCopied(button, label) {
+    function setCopied(button, ok) {
         const original = button.textContent;
-        button.textContent = label;
-        button.classList.add('copied');
+        button.textContent = ok ? 'Copied' : 'Copy failed';
+        if (ok) {
+            button.classList.add('copied');
+        }
         setTimeout(function() {
             button.textContent = original;
             button.classList.remove('copied');
         }, 2000);
-    }
-
-    async function fetchChunkContent(path, snippet) {
-        if (!path) {
-            return '';
-        }
-
-        const response = await fetch('/chunk-content?path=' + encodeURIComponent(path) + '&snippet=' + encodeURIComponent(snippet || ''));
-        const payload = await response.json();
-        if (!response.ok) {
-            throw new Error(payload.error || 'Failed to load document content.');
-        }
-        return payload.content || '';
     }
 
     function escapeRegExp(value) {
@@ -238,16 +171,6 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
-    function closeModal() {
-        if (!modal) {
-            return;
-        }
-        modal.style.display = 'none';
-        if (lastFocusedElement) {
-            lastFocusedElement.focus();
-        }
-    }
-
     if (form) {
         form.addEventListener('submit', function(e) {
             if (btn.disabled || !input.value.trim()) {
@@ -281,8 +204,8 @@ document.addEventListener('DOMContentLoaded', function() {
                 text += '   ' + snippet + '\n\n';
             });
 
-            navigator.clipboard.writeText(text.trim()).then(function() {
-                setCopied(copyBtn, 'Copied');
+            copyTextToClipboard(text.trim()).then(function(ok) {
+                setCopied(copyBtn, ok);
             });
         });
     }
@@ -292,57 +215,23 @@ document.addEventListener('DOMContentLoaded', function() {
             const path = button.getAttribute('data-path');
             const snippet = button.getAttribute('data-snippet') || '';
 
+            let content = '';
             try {
-                const content = await fetchChunkContent(path, snippet);
-                await navigator.clipboard.writeText(content || snippet);
-                setCopied(button, 'Copied');
+                content = await fetchChunkContent(path, snippet);
             } catch (err) {
-                navigator.clipboard.writeText(snippet).then(function() {
-                    setCopied(button, 'Copied');
-                });
+                content = '';
             }
+            const ok = await copyTextToClipboard(content || snippet);
+            setCopied(button, ok);
         });
     });
 
     document.querySelectorAll('.result-title-link').forEach(function(link) {
-        link.addEventListener('click', async function() {
+        link.addEventListener('click', function() {
             const path = link.getAttribute('data-path');
             const snippet = link.getAttribute('data-snippet') || '';
-            if (!path) {
-                return;
-            }
-
-            lastFocusedElement = link;
-            modal.style.display = 'flex';
-            modalTitle.textContent = path;
-            modalBody.textContent = 'Loading full text...';
-            modalClose.focus();
-
-            try {
-                const content = await fetchChunkContent(path, snippet);
-                modalBody.textContent = content || '(No content)';
-            } catch (err) {
-                modalBody.textContent = err.message || 'Failed to load document content.';
-            }
+            openDocumentModal(path, snippet, link, link.textContent.trim());
         });
-    });
-
-    if (modalClose) {
-        modalClose.addEventListener('click', closeModal);
-    }
-
-    if (modal) {
-        modal.addEventListener('click', function(e) {
-            if (e.target === modal) {
-                closeModal();
-            }
-        });
-    }
-
-    document.addEventListener('keydown', function(e) {
-        if (e.key === 'Escape' && modal && modal.style.display !== 'none') {
-            closeModal();
-        }
     });
 
     highlightSnippetTerms();

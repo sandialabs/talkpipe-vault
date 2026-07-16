@@ -815,6 +815,38 @@
             input.addEventListener('input', update);
             update();
         }
+
+        // Copy text to the clipboard. The async Clipboard API only exists in
+        // secure contexts (https or localhost), so plain-http access from
+        // another machine needs the hidden-textarea/execCommand fallback.
+        // Resolves to true when the copy succeeded.
+        function copyTextToClipboard(text) {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                return navigator.clipboard.writeText(text).then(
+                    function () { return true; },
+                    function () { return copyTextViaExecCommand(text); }
+                );
+            }
+            return Promise.resolve(copyTextViaExecCommand(text));
+        }
+
+        function copyTextViaExecCommand(text) {
+            const textarea = document.createElement('textarea');
+            textarea.value = text;
+            textarea.setAttribute('readonly', '');
+            textarea.style.position = 'fixed';
+            textarea.style.top = '-1000px';
+            document.body.appendChild(textarea);
+            textarea.select();
+            let copied = false;
+            try {
+                copied = document.execCommand('copy');
+            } catch (err) {
+                copied = false;
+            }
+            document.body.removeChild(textarea);
+            return copied;
+        }
     </script>
 </head>
 <body>

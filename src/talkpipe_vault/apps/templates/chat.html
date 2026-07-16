@@ -57,6 +57,8 @@
     </div>
 </div>
 
+{% include "_document_modal.html" %}
+
 <style>
     .ask-container {
         background: rgba(255, 255, 255, 0.96);
@@ -214,8 +216,19 @@
         margin-bottom: 6px;
     }
     .source-card-title {
+        background: transparent;
+        border: 0;
         color: #1e293b;
+        cursor: pointer;
+        font: inherit;
         font-weight: 700;
+        padding: 0;
+        text-align: left;
+    }
+    .source-card-title:hover,
+    .source-card-title:focus {
+        color: var(--primary-dark);
+        text-decoration: underline;
     }
     .source-copy-btn {
         flex-shrink: 0;
@@ -270,51 +283,37 @@ document.addEventListener('DOMContentLoaded', function() {
 
     let currentAnswer = '';
 
-    function setCopied(button, copiedLabel, originalLabel) {
-        button.textContent = copiedLabel;
-        button.classList.add('copied');
+    function flashCopy(button, ok, copiedLabel, originalLabel) {
+        button.textContent = ok ? copiedLabel : 'Copy failed';
+        button.classList.toggle('copied', ok);
         setTimeout(function() {
             button.textContent = originalLabel;
             button.classList.remove('copied');
         }, 2000);
     }
 
-    async function fetchChunkContent(path, snippet) {
-        if (!path) {
-            return '';
-        }
-
-        const response = await fetch('/chunk-content?path=' + encodeURIComponent(path) + '&snippet=' + encodeURIComponent(snippet || ''));
-        const payload = await response.json();
-        if (!response.ok) {
-            throw new Error(payload.error || 'Failed to load document content.');
-        }
-        return payload.content || '';
-    }
-
-    // Handle copy button click
-    function handleCopy() {
+    // Prefer a rich-text copy so pasting into a document keeps formatting.
+    // ClipboardItem only exists in secure contexts; otherwise fall back to
+    // the plain-text helper (which handles insecure origins itself).
+    async function handleCopy() {
         if (!currentAnswer) return;
 
-        // Render markdown to HTML
-        const html = typeof marked !== 'undefined' ? marked.parse(currentAnswer) : currentAnswer;
-
-        // Create clipboard item with both HTML and plain text formats
-        try {
-            const clipboardItem = new ClipboardItem({
-                'text/html': new Blob([html], { type: 'text/html' }),
-                'text/plain': new Blob([currentAnswer], { type: 'text/plain' })
-            });
-
-            navigator.clipboard.write([clipboardItem]).then(function() {
-                setCopied(copyBtn, '✓ Copied', '📋 Copy');
-            });
-        } catch (err) {
-            // Fallback to plain text if ClipboardItem not supported
-            navigator.clipboard.writeText(currentAnswer).then(function() {
-                setCopied(copyBtn, '✓ Copied', '📋 Copy');
-            });
+        if (navigator.clipboard && navigator.clipboard.write && window.ClipboardItem) {
+            const html = typeof marked !== 'undefined' ? marked.parse(currentAnswer) : currentAnswer;
+            try {
+                const clipboardItem = new ClipboardItem({
+                    'text/html': new Blob([html], { type: 'text/html' }),
+                    'text/plain': new Blob([currentAnswer], { type: 'text/plain' })
+                });
+                await navigator.clipboard.write([clipboardItem]);
+                flashCopy(copyBtn, true, '✓ Copied', '📋 Copy');
+                return;
+            } catch (err) {
+                // Fall through to the plain-text path.
+            }
         }
+        const ok = await copyTextToClipboard(currentAnswer);
+        flashCopy(copyBtn, ok, '✓ Copied', '📋 Copy');
     }
 
     copyBtn.addEventListener('click', handleCopy);
@@ -357,29 +356,32 @@ document.addEventListener('DOMContentLoaded', function() {
             const header = document.createElement('div');
             header.className = 'source-card-header';
 
-            const title = document.createElement('div');
+            const lookupPath = citation.lookup_path || citation.path || '';
+
+            const title = document.createElement('button');
+            title.type = 'button';
             title.className = 'source-card-title';
             title.textContent = (index + 1) + '. ' + citation.filename;
+            title.title = 'View full chunk';
+            title.addEventListener('click', function() {
+                openDocumentModal(lookupPath, citation.snippet || '', title, citation.filename);
+            });
 
             const copyChunkBtn = document.createElement('button');
             copyChunkBtn.type = 'button';
             copyChunkBtn.className = 'copy-btn source-copy-btn';
             copyChunkBtn.textContent = 'Copy Chunk';
-            copyChunkBtn.dataset.path = citation.lookup_path || citation.path || '';
-            copyChunkBtn.dataset.snippet = citation.snippet || '';
             copyChunkBtn.addEventListener('click', async function() {
-                const path = copyChunkBtn.dataset.path || '';
-                const snippetText = copyChunkBtn.dataset.snippet || '';
+                const snippetText = citation.snippet || '';
 
+                let content = '';
                 try {
-                    const content = await fetchChunkContent(path, snippetText);
-                    await navigator.clipboard.writeText(content || snippetText);
-                    setCopied(copyChunkBtn, 'Copied', 'Copy Chunk');
+                    content = await fetchChunkContent(lookupPath, snippetText);
                 } catch (err) {
-                    navigator.clipboard.writeText(snippetText).then(function() {
-                        setCopied(copyChunkBtn, 'Copied', 'Copy Chunk');
-                    });
+                    content = '';
                 }
+                const ok = await copyTextToClipboard(content || snippetText);
+                flashCopy(copyChunkBtn, ok, 'Copied', 'Copy Chunk');
             });
 
             header.appendChild(title);

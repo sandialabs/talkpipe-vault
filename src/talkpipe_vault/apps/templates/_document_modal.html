@@ -1,0 +1,142 @@
+<style>
+    .document-modal {
+        align-items: center;
+        background: rgba(0, 0, 0, 0.55);
+        bottom: 0;
+        display: flex;
+        justify-content: center;
+        left: 0;
+        position: fixed;
+        right: 0;
+        top: 0;
+        z-index: 9999;
+    }
+    .document-modal-content {
+        background: #fff;
+        border-radius: 12px;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+        display: flex;
+        flex-direction: column;
+        max-height: 80vh;
+        max-width: 920px;
+        width: 92%;
+    }
+    .document-modal-header {
+        align-items: center;
+        border-bottom: 1px solid #ddd;
+        display: flex;
+        justify-content: space-between;
+        padding: 12px 16px;
+    }
+    #document-modal-title {
+        font-size: 1rem;
+        margin: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    #document-modal-close {
+        background: transparent;
+        border: none;
+        cursor: pointer;
+        font-size: 1.35rem;
+        line-height: 1;
+        padding: 4px 8px;
+    }
+    #document-modal-body {
+        margin: 0;
+        overflow: auto;
+        padding: 16px;
+        white-space: pre-wrap;
+        word-break: break-word;
+    }
+</style>
+
+<div id="document-modal" class="document-modal" role="dialog" aria-modal="true" aria-labelledby="document-modal-title" style="display: none;">
+    <div class="document-modal-content">
+        <div class="document-modal-header">
+            <h3 id="document-modal-title">Document</h3>
+            <button type="button" id="document-modal-close" aria-label="Close">&times;</button>
+        </div>
+        <pre id="document-modal-body" tabindex="0"></pre>
+    </div>
+</div>
+
+<script>
+// Shared full-chunk viewer for pages that display chunk results (search,
+// keyword search, Ask). Fetches the stored chunk text from /chunk-content
+// and shows it in the modal above.
+async function fetchChunkContent(path, snippet) {
+    if (!path) {
+        return '';
+    }
+
+    const response = await fetch('/chunk-content?path=' + encodeURIComponent(path) + '&snippet=' + encodeURIComponent(snippet || ''));
+    const payload = await response.json();
+    if (!response.ok) {
+        throw new Error(payload.error || 'Failed to load document content.');
+    }
+    return payload.content || '';
+}
+
+(function () {
+    let lastFocusedElement = null;
+
+    function closeDocumentModal() {
+        const modal = document.getElementById('document-modal');
+        if (!modal) {
+            return;
+        }
+        modal.style.display = 'none';
+        if (lastFocusedElement) {
+            lastFocusedElement.focus();
+        }
+    }
+
+    window.openDocumentModal = async function (path, snippet, triggerEl, displayTitle) {
+        const modal = document.getElementById('document-modal');
+        const modalTitle = document.getElementById('document-modal-title');
+        const modalBody = document.getElementById('document-modal-body');
+        const modalClose = document.getElementById('document-modal-close');
+        if (!modal || !path) {
+            return;
+        }
+
+        lastFocusedElement = triggerEl || document.activeElement;
+        modal.style.display = 'flex';
+        modalTitle.textContent = displayTitle || path;
+        modalBody.textContent = 'Loading full text...';
+        modalClose.focus();
+
+        try {
+            const content = await fetchChunkContent(path, snippet);
+            modalBody.textContent = content || '(No content)';
+        } catch (err) {
+            modalBody.textContent = err.message || 'Failed to load document content.';
+        }
+    };
+
+    document.addEventListener('DOMContentLoaded', function () {
+        const modal = document.getElementById('document-modal');
+        const modalClose = document.getElementById('document-modal-close');
+
+        if (modalClose) {
+            modalClose.addEventListener('click', closeDocumentModal);
+        }
+
+        if (modal) {
+            modal.addEventListener('click', function (e) {
+                if (e.target === modal) {
+                    closeDocumentModal();
+                }
+            });
+        }
+
+        document.addEventListener('keydown', function (e) {
+            if (e.key === 'Escape' && modal && modal.style.display !== 'none') {
+                closeDocumentModal();
+            }
+        });
+    });
+})();
+</script>

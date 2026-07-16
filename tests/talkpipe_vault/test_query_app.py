@@ -754,6 +754,48 @@ def test_chat_citations_hide_source_paths_by_default(monkeypatch):
     assert '"lookup_path": "row-uuid"' in response.text
 
 
+def test_chat_page_includes_full_chunk_modal():
+    """Ask sources should offer the same full-chunk viewer as search pages."""
+    client = TestClient(query.app)
+
+    response = client.get("/chat")
+
+    assert response.status_code == 200
+    assert 'id="document-modal"' in response.text
+    assert "openDocumentModal" in response.text
+    assert "View full chunk" in response.text
+
+
+def test_search_pages_include_full_chunk_modal():
+    """The shared chunk modal must stay present on both search pages."""
+    client = TestClient(query.app)
+
+    for path in ("/search", "/keyword-search"):
+        response = client.get(path)
+
+        assert response.status_code == 200
+        assert 'id="document-modal"' in response.text
+        assert "openDocumentModal" in response.text
+
+
+def test_copy_buttons_work_without_secure_context():
+    """Copying must not depend on the secure-context-only Clipboard API.
+
+    navigator.clipboard is undefined on plain-http origins other than
+    localhost (e.g. browsing to another machine), so every page needs the
+    execCommand fallback helper available."""
+    client = TestClient(query.app)
+
+    response = client.get("/chat")
+
+    assert response.status_code == 200
+    assert "function copyTextToClipboard" in response.text
+    assert "document.execCommand('copy')" in response.text
+    # The page's copy handlers go through the fallback-aware helper.
+    assert "copyTextToClipboard(currentAnswer)" in response.text
+    assert "copyTextToClipboard(content || snippetText)" in response.text
+
+
 def _chat_error_response(monkeypatch, exc: Exception) -> str:
     """Post a chat message whose pipeline raises exc; return the page text."""
 
