@@ -47,7 +47,7 @@ from talkpipe.search.lancedb import LanceDBDocumentStore
 from talkpipe.search.whoosh import WhooshFullTextIndex
 from talkpipe.util.config import configure_logger
 
-from talkpipe_vault.apps import credentials, user_settings
+from talkpipe_vault.apps import access_control, credentials, user_settings
 from talkpipe_vault.pipelines import diagnostics, vault_metadata
 from talkpipe_vault.pipelines.config import (
     DEFAULT_VECTOR_TABLE_NAME,
@@ -756,14 +756,39 @@ def _require_vault(state: AppState) -> RedirectResponse | None:
 async def list_directories(path: str = "") -> JSONResponse:
     """List subdirectories of a path for the folder-picker dialog.
 
-    Returns the resolved path, its parent (null at the filesystem root), and
-    the visible (non-hidden) subdirectories. Falls back to the user's home
-    directory when no path is given; unreadable or nonexistent paths return
-    a 400 with an error message the dialog can display.
+    Returns the resolved path, its parent (null when there is nothing above
+    left to browse), and the visible (non-hidden) subdirectories. Falls back
+    to the first allowed root — the user's home directory when browsing is
+    unrestricted — when no path is given; with several allowed roots the
+    virtual top level "" lists the roots themselves as absolute paths.
+    Unreadable, nonexistent, or out-of-bounds paths return a 400 with an
+    error message the dialog can display.
     """
-    base = Path(path).expanduser() if path.strip() else Path.home()
+    roots = access_control.browse_roots()
+    if path.strip():
+        base = Path(path).expanduser()
+    elif len(roots) > 1:
+        return JSONResponse(
+            content={
+                "path": "",
+                "parent": None,
+                "home": "",
+                "sep": os.sep,
+                "directories": [str(root) for root in roots],
+            }
+        )
+    else:
+        base = roots[0] if roots else Path.home()
     try:
         base = base.resolve()
+        if not access_control.is_allowed(base, roots):
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": "Browsing on this server is limited to "
+                    f"{access_control.describe(roots)}."
+                },
+            )
         if not base.is_dir():
             return JSONResponse(
                 status_code=400,
@@ -785,12 +810,21 @@ async def list_directories(path: str = "") -> JSONResponse:
     except OSError as exc:
         return JSONResponse(status_code=400, content={"error": str(exc)})
 
-    parent = str(base.parent) if base.parent != base else None
+    if base in roots:
+        # At an allowed root: "up" goes to the virtual root listing when
+        # there are several roots, and nowhere when there is only one.
+        parent = "" if len(roots) > 1 else None
+    else:
+        parent = str(base.parent) if base.parent != base else None
+    if roots:
+        home = str(roots[0]) if len(roots) == 1 else ""
+    else:
+        home = str(Path.home())
     return JSONResponse(
         content={
             "path": str(base),
             "parent": parent,
-            "home": str(Path.home()),
+            "home": home,
             "sep": os.sep,
             "directories": directories,
         }
@@ -855,6 +889,12 @@ async def open_vault(
         return _redirect_with_message("/vaults", error="Enter a vault path.")
 
     vault_path = Path(raw_path).expanduser()
+    root = access_control.vault_root()
+    if root is not None and not access_control.is_allowed(vault_path, [root]):
+        return _redirect_with_message(
+            "/vaults",
+            error=f"Vaults on this server must live under {root}.",
+        )
     if vault_path.is_file():
         return _redirect_with_message(
             "/vaults",
@@ -965,6 +1005,20 @@ async def delete_vault(
             error=f"Refusing to delete {resolved}: path is too broad to be a vault.",
         )
 
+    # Vaults outside the configured root (e.g. remembered before the
+    # restriction existed) can be forgotten, but their files are never
+    # touched.
+    root = access_control.vault_root()
+    if root is not None and not access_control.is_allowed(resolved, [root]):
+        user_settings.forget_vault(resolved)
+        return _redirect_with_message(
+            "/vaults",
+            message=(
+                f"Removed {resolved} from the list. It is outside {root}, "
+                "so its files were left untouched."
+            ),
+        )
+
     existed = os.path.isdir(resolved)
     try:
         if existed:
@@ -1015,6 +1069,22 @@ def _resolve_source_pattern(raw_source: str) -> str:
     if os.path.isdir(source):
         return os.path.join(source, "**", "*")
     return source
+
+
+def _nonglob_prefix(pattern: str) -> str:
+    """Return the leading part of a glob pattern up to the first wildcard.
+
+    This is the concrete directory a pattern walks from, which is what the
+    document-root restriction is checked against.
+    """
+    prefix_parts: list[str] = []
+    for part in Path(pattern).parts:
+        if any(char in part for char in "*?["):
+            break
+        prefix_parts.append(part)
+    if not prefix_parts:
+        return "."
+    return str(Path(*prefix_parts))
 
 
 def index_documents_into_vault(
@@ -1398,6 +1468,13 @@ async def index_documents(
         )
 
     pattern = _resolve_source_pattern(source_path)
+    doc_roots = access_control.document_roots()
+    if doc_roots and not access_control.is_allowed(_nonglob_prefix(pattern), doc_roots):
+        return _redirect_with_message(
+            "/documents",
+            error="Indexing on this server is limited to documents under "
+            f"{access_control.describe(doc_roots)}.",
+        )
     if not globlib.glob(pattern, recursive=True):
         return _redirect_with_message(
             "/documents",
@@ -1924,6 +2001,32 @@ def run_app(
         open_browser: If True, open the app in a web browser once the server is
             accepting connections. No-op in headless environments.
     """
+    problems = access_control.startup_errors()
+    if problems:
+        raise ValueError(" ".join(problems))
+    root = access_control.vault_root()
+    if (
+        vault_path
+        and root is not None
+        and not access_control.is_allowed(vault_path, [root])
+    ):
+        raise ValueError(
+            f"Vault path {vault_path} is outside "
+            f"{access_control.VAULT_ROOT_ENV} ({root})."
+        )
+    if not access_control.browse_roots() and host not in (
+        "127.0.0.1",
+        "localhost",
+        "::1",
+    ):
+        print(
+            f"Warning: binding to {host} with unrestricted filesystem "
+            f"browsing; set {access_control.VAULT_ROOT_ENV} and "
+            f"{access_control.DOCUMENT_ROOTS_ENV} to restrict what the web "
+            "interface can reach.",
+            file=sys.stderr,
+        )
+
     _state.show_source_paths = show_source_paths
     # Apply persisted credentials before building any pipeline so the LLM SDKs
     # and Ollama connection see the vault-scoped values.

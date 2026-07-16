@@ -1,5 +1,5 @@
-version: "3.8"
-
+# Works with Docker Compose and Podman. For Podman, install a compose provider
+# (e.g. `pip install podman-compose`) and run `podman compose up`.
 services:
   vault:
     build:
@@ -11,6 +11,10 @@ services:
       - "${VAULT_PORT:-8002}:8002"
     volumes:
       - talkpipe_vault_data:/app/data
+      # Host documents to index, visible in the folder picker at /documents.
+      # Point VAULT_DOCUMENTS_DIR at any host folder (must exist).
+      # On SELinux hosts (e.g. Fedora) append :z, e.g. ".../documents:ro,z".
+      - ${VAULT_DOCUMENTS_DIR:-~/Documents}:/documents:ro
     environment:
       - VAULT_HOST=0.0.0.0
       - VAULT_PORT=8002
@@ -20,6 +24,14 @@ services:
       # Persist web-interface settings (recent vaults, model choices) in the data volume
       - TALKPIPE_VAULT_HOME=/app/data/vault-home
       - TALKPIPE_OLLAMA_SERVER_URL=${TALKPIPE_OLLAMA_SERVER_URL:-http://host.containers.internal:11434}
+      # Set to 1 (e.g. in .env) once the embedding model is cached: skips
+      # Hugging Face etag checks that hang startup and vault creation when
+      # huggingface.co is slow or unreachable (see .env.example).
+      - HF_HUB_OFFLINE=${HF_HUB_OFFLINE:-0}
+      # Path fences (defaults baked into the image); override in .env to
+      # relax (empty = unrestricted) or move them.
+      - TALKPIPE_VAULT_ROOT=${TALKPIPE_VAULT_ROOT-/app/data}
+      - TALKPIPE_DOCUMENT_ROOTS=${TALKPIPE_DOCUMENT_ROOTS-/documents}
       - PYTHONUNBUFFERED=1
     restart: unless-stopped
     healthcheck:
@@ -45,6 +57,7 @@ services:
       - .:/workspace:Z
       - talkpipe_vault_dev_data:/app/data
       - talkpipe_vault_dev_cache:/home/vault/.cache
+      - ${VAULT_DOCUMENTS_DIR:-~/Documents}:/documents:ro
     environment:
       - VAULT_HOST=0.0.0.0
       - VAULT_PORT=8002
@@ -54,12 +67,18 @@ services:
       # Persist web-interface settings (recent vaults, model choices) in the data volume
       - TALKPIPE_VAULT_HOME=/app/data/vault-home
       - TALKPIPE_OLLAMA_SERVER_URL=${TALKPIPE_OLLAMA_SERVER_URL:-http://host.containers.internal:11434}
+      - HF_HUB_OFFLINE=${HF_HUB_OFFLINE:-0}
+      - TALKPIPE_VAULT_ROOT=${TALKPIPE_VAULT_ROOT-/app/data}
+      - TALKPIPE_DOCUMENT_ROOTS=${TALKPIPE_DOCUMENT_ROOTS-/documents}
       - PYTHONUNBUFFERED=1
     working_dir: /workspace
     entrypoint: ["/bin/bash", "-lc"]
-    command: >
-      python3 -m pip install --user -e '.[dev]' &&
-      vault-server "$${VAULT_PATH}" --host "$${VAULT_HOST}" --port "$${VAULT_PORT}" --no-browser
+    # Single-element list so the whole script reaches `bash -lc` as one argument
+    # (a plain string would be word-split by compose).
+    command:
+      - >-
+        python3 -m pip install --user -e '.[dev]' &&
+        vault-server "$${VAULT_PATH}" --host "$${VAULT_HOST}" --port "$${VAULT_PORT}" --no-browser
     extra_hosts:
       - "host.containers.internal:host-gateway"
     networks:

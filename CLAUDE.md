@@ -72,6 +72,16 @@ State lives in the module-level `_state: AppState` singleton; pipelines are rebu
 Ollama server URL comes from `TALKPIPE_OLLAMA_SERVER_URL` (or `OLLAMA_SERVER_URL` in
 `~/.talkpipe.toml`) — not `OLLAMA_BASE_URL`, which is meaningless to TalkPipe.
 
+**Path fences** (`apps/access_control.py`): `TALKPIPE_VAULT_ROOT` confines vault
+create/open/delete to one directory; `TALKPIPE_DOCUMENT_ROOTS` (os.pathsep-separated)
+confines the folder picker and indexing. Unset/empty = unrestricted (the desktop
+default); the container image sets `/app/data` and `/documents`. Enforced server-side
+in `/api/directories`, `/vaults/open`, `/vaults/delete`, and `/documents/index`
+(resolve-then-`is_relative_to`, so symlink escapes are caught); a configured root that
+doesn't exist fails startup loudly, and `run_app` warns when binding non-loopback with
+no fences set. Deleting a remembered vault that lies outside the root only forgets it —
+files outside the fence are never touched.
+
 **Per-vault embedding restore:** embeddings are only comparable to a query embedded
 with the same model, so the embedder is a property of the indexed data, not just a
 preference. Indexing records `embedding_source`/`model`/`dimension` to
@@ -145,7 +155,24 @@ podman run --rm -p 8002:8002 --userns=keep-id \
 
 Default CMD serves `/app/data/vault` on port 8002. Mount documents somewhere readable
 (e.g. `/documents`) and index them from the Add Documents page. Compose services (`vault`,
-`vault-dev`) exist in docker-compose.yml.
+`vault-dev`) exist in docker-compose.yml; with podman, install a compose provider
+(`pip install podman-compose`) and run `podman compose up -d`.
+
+Podman notes:
+- With rootless podman (pasta networking), browse to `http://127.0.0.1:8002`, not
+  `localhost` — ports publish IPv4-only and pasta resets `::1` connections instead
+  of refusing them, so name resolution to `::1` fails without fallback.
+- The compose services mount `$VAULT_DOCUMENTS_DIR` (default `~/Documents`)
+  read-only at `/documents` — the folder picker browses the *container*
+  filesystem, so host files are only visible through this mount.
+- If huggingface.co is slow/unreachable, startup and vault creation hang on
+  model etag checks even with a cached model; set `HF_HUB_OFFLINE=1` in `.env`
+  once the model is in the data volume (this host's `.env` already does).
+- The image sets `HF_HOME=/app/data/hf-cache`, so the embedding model downloaded on
+  first start persists in the data volume across container recreations. On an
+  offline host, pre-seed `<volume>/hf-cache/hub/` from a machine that has
+  `~/.cache/huggingface/hub/models--minishlab--potion-retrieval-32M`
+  (`podman unshare cp -r ... && podman unshare chown -R 1000:1000 ...`).
 
 ## CI/CD
 

@@ -167,6 +167,11 @@
     .dir-picker-select:hover {
         filter: brightness(1.05);
     }
+    .dir-picker-select:disabled {
+        cursor: default;
+        filter: none;
+        opacity: 0.5;
+    }
 </style>
 
 <script>
@@ -208,11 +213,14 @@
         currentParent = data.parent;
         homePath = data.home;
         pathSep = data.sep;
-        pathEl.textContent = currentPath;
+        // currentPath is '' at the virtual root shown when browsing is
+        // restricted to several locations; only a real folder is selectable.
+        pathEl.textContent = currentPath || 'Allowed locations';
         pathEl.title = currentPath;
+        document.getElementById('dir-picker-select').disabled = !currentPath;
 
         listEl.innerHTML = '';
-        if (currentParent) {
+        if (currentParent !== null && currentParent !== undefined) {
             const up = document.createElement('li');
             const btn = document.createElement('button');
             btn.type = 'button';
@@ -234,6 +242,11 @@
             btn.type = 'button';
             btn.textContent = '📁 ' + name;
             btn.addEventListener('click', function () {
+                if (!currentPath) {
+                    // Virtual-root entries are already absolute paths.
+                    load(name);
+                    return;
+                }
                 load(currentPath === pathSep ? currentPath + name : currentPath + pathSep + name);
             });
             item.appendChild(btn);

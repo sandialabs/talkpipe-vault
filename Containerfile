@@ -15,8 +15,9 @@ RUN useradd -m -u 1000 -s /bin/bash vault
 # Set working directory
 WORKDIR /app
 
-# Create application data directory
-RUN mkdir -p /app/data/vault && chown -R vault:vault /app/data
+# Create application data directory and the documents mountpoint (empty
+# unless a host folder is mounted over it)
+RUN mkdir -p /app/data/vault /documents && chown -R vault:vault /app/data
 
 # Define volumes
 VOLUME ["/app/data"]
@@ -39,6 +40,14 @@ ENV VAULT_HOST=0.0.0.0
 ENV VAULT_PORT=8002
 # Persist web-interface settings (recent vaults, model choices) in the data volume
 ENV TALKPIPE_VAULT_HOME=/app/data/vault-home
+# Keep the Hugging Face model cache in the data volume so downloaded embedding
+# models survive container recreation (and can be pre-seeded for offline hosts)
+ENV HF_HOME=/app/data/hf-cache
+# Fence the web interface into container-appropriate paths: vaults may only
+# live in the persistent data volume, and only the mounted documents tree can
+# be browsed or indexed. Unset (empty) means unrestricted.
+ENV TALKPIPE_VAULT_ROOT=/app/data
+ENV TALKPIPE_DOCUMENT_ROOTS=/documents
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PATH=/home/vault/.local/bin:$PATH
