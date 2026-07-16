@@ -211,18 +211,17 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     document.querySelectorAll('.copy-snippet-btn').forEach(function(button) {
-        button.addEventListener('click', async function() {
+        button.addEventListener('click', function() {
             const path = button.getAttribute('data-path');
             const snippet = button.getAttribute('data-snippet') || '';
 
-            let content = '';
-            try {
-                content = await fetchChunkContent(path, snippet);
-            } catch (err) {
-                content = '';
-            }
-            const ok = await copyTextToClipboard(content || snippet);
-            setCopied(button, ok);
+            const textPromise = fetchChunkContent(path, snippet).then(
+                function(content) { return content || snippet; },
+                function() { return snippet; }
+            );
+            copyPendingTextToClipboard(textPromise).then(function(ok) {
+                setCopied(button, ok);
+            });
         });
     });
 

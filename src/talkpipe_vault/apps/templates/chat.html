@@ -371,17 +371,16 @@ document.addEventListener('DOMContentLoaded', function() {
             copyChunkBtn.type = 'button';
             copyChunkBtn.className = 'copy-btn source-copy-btn';
             copyChunkBtn.textContent = 'Copy Chunk';
-            copyChunkBtn.addEventListener('click', async function() {
+            copyChunkBtn.addEventListener('click', function() {
                 const snippetText = citation.snippet || '';
 
-                let content = '';
-                try {
-                    content = await fetchChunkContent(lookupPath, snippetText);
-                } catch (err) {
-                    content = '';
-                }
-                const ok = await copyTextToClipboard(content || snippetText);
-                flashCopy(copyChunkBtn, ok, 'Copied', 'Copy Chunk');
+                const textPromise = fetchChunkContent(lookupPath, snippetText).then(
+                    function(content) { return content || snippetText; },
+                    function() { return snippetText; }
+                );
+                copyPendingTextToClipboard(textPromise).then(function(ok) {
+                    flashCopy(copyChunkBtn, ok, 'Copied', 'Copy Chunk');
+                });
             });
 
             header.appendChild(title);

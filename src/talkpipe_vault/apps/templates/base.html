@@ -830,6 +830,26 @@
             return Promise.resolve(copyTextViaExecCommand(text));
         }
 
+        // Copy text that is still being fetched. Firefox only honors
+        // clipboard writes backed by the click's transient user activation,
+        // which an awaited fetch can forfeit — so start the write
+        // synchronously and give ClipboardItem a promise for the data.
+        // Resolves to true when the copy succeeded.
+        function copyPendingTextToClipboard(textPromise) {
+            if (navigator.clipboard && navigator.clipboard.write && window.ClipboardItem) {
+                const item = new ClipboardItem({
+                    'text/plain': textPromise.then(function (text) {
+                        return new Blob([text], { type: 'text/plain' });
+                    })
+                });
+                return navigator.clipboard.write([item]).then(
+                    function () { return true; },
+                    function () { return textPromise.then(copyTextToClipboard); }
+                );
+            }
+            return textPromise.then(copyTextToClipboard);
+        }
+
         function copyTextViaExecCommand(text) {
             const textarea = document.createElement('textarea');
             textarea.value = text;

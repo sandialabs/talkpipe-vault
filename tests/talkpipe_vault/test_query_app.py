@@ -791,9 +791,13 @@ def test_copy_buttons_work_without_secure_context():
     assert response.status_code == 200
     assert "function copyTextToClipboard" in response.text
     assert "document.execCommand('copy')" in response.text
-    # The page's copy handlers go through the fallback-aware helper.
+    # Chunk copies must start the clipboard write synchronously in the click
+    # handler (Firefox drops writes once the click's transient user
+    # activation is spent, e.g. after an awaited fetch).
+    assert "function copyPendingTextToClipboard" in response.text
+    assert "copyPendingTextToClipboard(textPromise)" in response.text
+    # The page's copy handlers go through the fallback-aware helpers.
     assert "copyTextToClipboard(currentAnswer)" in response.text
-    assert "copyTextToClipboard(content || snippetText)" in response.text
 
 
 def _chat_error_response(monkeypatch, exc: Exception) -> str:
