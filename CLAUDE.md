@@ -50,8 +50,9 @@ Routes in `apps/query.py`:
 - `/vaults` (+ `/vaults/open`): create or choose a vault; recents persisted via
   `user_settings.py` in `$TALKPIPE_VAULT_HOME` (default `~/.talkpipe-vault`).
 - `/documents` (+ `/documents/index`): index a folder/glob into the current vault using
-  TalkPipe's `ProcessDocumentsSegment | MakeVectorDatabaseSegment` (writes the `docs`
-  table — same layout as TalkPipe's `makevectordatabase`).
+  TalkPipe's `build_rag_database()` driver (requires talkpipe >= 0.13.0b2; writes the
+  `docs` table — the same driver behind TalkPipe's `makevectordatabase` CLI, with
+  embedder preflight, dimension checking, overflow truncation, and skip counting).
 - `/settings`: embedding + chat source/model overrides, persisted and applied immediately.
 - `/`, `/search`, `/keyword-search` (+ index creation), `/chat`, `/chunk-content`,
   `/source-file`, `/refresh`.

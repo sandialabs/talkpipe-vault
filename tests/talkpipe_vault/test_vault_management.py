@@ -14,6 +14,7 @@ def isolated_app(tmp_path, monkeypatch):
         query._index_job.running = False
         query._index_job.source = ""
         query._index_job.vault_path = ""
+        query._index_job.embedding = ""
         query._index_job.total_files = 0
         query._index_job.files_done = 0
         query._index_job.current_file = ""
@@ -503,36 +504,24 @@ class TestDocumentIndexing:
     def test_index_documents_passes_configured_chunking_settings(
         self, monkeypatch, tmp_path
     ):
+        from talkpipe.pipelines.vector_databases import RagIngestResult
+
         captured = {}
 
-        class _FakeProcessDocumentsSegment:
-            def __init__(self, chunk_size=300, shingle_size=3, overlap=1):
-                captured.update(
-                    {
-                        "chunk_size": chunk_size,
-                        "shingle_size": shingle_size,
-                        "overlap": overlap,
-                    }
-                )
+        def fake_build(source_pattern, **kwargs):
+            captured.update(kwargs, source_pattern=source_pattern)
+            return RagIngestResult(
+                chunks_indexed=0,
+                chunks_skipped=0,
+                files_indexed=0,
+                embedding_source=kwargs["embedding_source"],
+                embedding_model=kwargs["embedding_model"],
+                dimension=3,
+            )
 
-            def __or__(self, _rhs):
-                return self
+        monkeypatch.setattr(query, "build_rag_database", fake_build)
 
-            def transform(self, _patterns):
-                return iter([])
-
-        class _FakeMakeVectorDatabaseSegment:
-            def __init__(self, **kwargs):
-                pass
-
-        monkeypatch.setattr(
-            query, "ProcessDocumentsSegment", _FakeProcessDocumentsSegment
-        )
-        monkeypatch.setattr(
-            query, "MakeVectorDatabaseSegment", _FakeMakeVectorDatabaseSegment
-        )
-
-        query.index_documents_into_vault(
+        indexed, skipped = query.index_documents_into_vault(
             vault_path=str(tmp_path),
             source_pattern="/tmp/*.txt",
             embedding_model="test-model",
@@ -542,7 +531,12 @@ class TestDocumentIndexing:
             shingle_overlap=2,
         )
 
-        assert captured == {"chunk_size": 400, "shingle_size": 4, "overlap": 2}
+        assert (indexed, skipped) == (0, 0)
+        assert captured["chunk_size"] == 400
+        assert captured["shingle_size"] == 4
+        assert captured["overlap"] == 2
+        assert captured["batch_size"] == 25
+        assert captured["source_pattern"] == "/tmp/*.txt"
 
     def test_index_requires_source_path(self, client, tmp_path):
         client.post("/vaults/open", data={"new_vault_path": str(tmp_path / "v")})
@@ -633,7 +627,7 @@ class TestDocumentIndexing:
             progress(3, 1, "/somewhere/a.txt")
             started.set()
             release.wait(timeout=30)
-            return 3
+            return 3, 0
 
         monkeypatch.setattr(query, "index_documents_into_vault", fake_index)
         monkeypatch.setattr(query, "_refresh_pipelines", lambda force=False: None)

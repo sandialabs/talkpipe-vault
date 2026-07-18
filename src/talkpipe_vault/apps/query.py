@@ -40,8 +40,10 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from talkpipe.llm.config import getEmbeddingSources, getPromptSources
 from talkpipe.pipelines.vector_databases import (
-    MakeVectorDatabaseSegment,
-    ProcessDocumentsSegment,
+    EmbedderPreflightError,
+    EmbeddingDimensionMismatchError,
+    RagIngestError,
+    build_rag_database,
 )
 from talkpipe.search.lancedb import LanceDBDocumentStore
 from talkpipe.search.whoosh import WhooshFullTextIndex
@@ -1097,47 +1099,68 @@ def index_documents_into_vault(
     shingle_overlap: int = DEFAULT_SHINGLE_OVERLAP,
     overwrite: bool = False,
     progress: Callable[[int, int, str], None] | None = None,
-) -> int:
+) -> tuple[int, int]:
     """Index documents matching a glob into the vault's docs table.
 
-    Uses TalkPipe's document pipeline (the same one behind the
-    makevectordatabase CLI) so the resulting table matches what the
-    search/chat pipelines expect. Returns the number of indexed chunks.
-    The optional progress callback receives (chunks_done, files_done,
-    current_source_path) as chunks flow through the pipeline.
+    Thin wrapper over TalkPipe's build_rag_database (the same driver behind
+    the makevectordatabase CLI) so the resulting table matches what the
+    search/chat pipelines expect: the driver preflights the embedder,
+    truncates over-long chunks instead of aborting, and counts chunks whose
+    embedding failed. This wrapper adds the vault specifics — the recorded
+    per-vault embedding dimension is passed as the expected dimension, driver
+    errors are reworded against the web UI (Settings page, Overwrite
+    checkbox), and the embedding config is recorded to vault_metadata.json.
+    Returns (indexed_chunks, skipped_chunks). The optional progress callback
+    receives (chunks_done, files_done, current_source_path) as chunks flow
+    through the pipeline.
     """
     ensure_supported_vault_layout(vault_path)
-    pipeline = ProcessDocumentsSegment(
-        chunk_size=chunk_size,
-        shingle_size=shingle_size,
-        overlap=shingle_overlap,
-    ) | MakeVectorDatabaseSegment(
-        embedding_field="shingle_text",
-        embedding_model=embedding_model,
-        embedding_source=embedding_source,
-        path=get_vector_db_path(vault_path),
-        table_name=DEFAULT_VECTOR_TABLE_NAME,
-        doc_id_field=None,
-        overwrite=overwrite,
-        batch_size=25,
-        fail_on_error=False,
-    )
-    chunk_count = 0
-    seen_sources: set[str] = set()
-    for item in pipeline.transform([source_pattern]):
-        chunk_count += 1
-        if progress is not None:
-            source = str(_get_field(item, "source", "") or "")
-            if source:
-                seen_sources.add(source)
-            progress(chunk_count, len(seen_sources), source)
-    if chunk_count > 0:
-        _record_vault_embedding_config(vault_path, embedding_source, embedding_model)
-    return chunk_count
+    recorded = None if overwrite else vault_metadata.load_embedding_config(vault_path)
+    try:
+        result = build_rag_database(
+            source_pattern,
+            path=get_vector_db_path(vault_path),
+            embedding_model=embedding_model,
+            embedding_source=embedding_source,
+            table_name=DEFAULT_VECTOR_TABLE_NAME,
+            chunk_size=chunk_size,
+            shingle_size=shingle_size,
+            overlap=shingle_overlap,
+            overwrite=overwrite,
+            batch_size=25,
+            expected_dimension=(recorded or {}).get("dimension"),
+            progress=progress,
+        )
+    except EmbeddingDimensionMismatchError as exc:
+        recorded = recorded or {}
+        raise RuntimeError(
+            f"Nothing was indexed: this vault was indexed with "
+            f"{recorded.get('source')}/{recorded.get('model')} "
+            f"({exc.expected}-dimensional vectors), but "
+            f"{embedding_source}/{embedding_model} produces "
+            f"{exc.actual}-dimensional vectors, so adding to the existing "
+            f"index would fail. Check Overwrite to rebuild the vault with the "
+            f"new embedder, or restore the original embedding settings."
+        ) from exc
+    except EmbedderPreflightError as exc:
+        raise RuntimeError(
+            f"Nothing was indexed: {exc} Embedding settings can be changed "
+            f"under Settings."
+        ) from exc
+    except RagIngestError as exc:
+        raise RuntimeError(f"Nothing was indexed: {exc}") from exc
+    if result.chunks_indexed > 0:
+        _record_vault_embedding_config(
+            vault_path, embedding_source, embedding_model, result.dimension
+        )
+    return result.chunks_indexed, result.chunks_skipped
 
 
 def _record_vault_embedding_config(
-    vault_path: str, embedding_source: str, embedding_model: str
+    vault_path: str,
+    embedding_source: str,
+    embedding_model: str,
+    dimension: int | None = None,
 ) -> None:
     """Record how this vault was indexed so reopening restores the embedder.
 
@@ -1152,8 +1175,12 @@ def _record_vault_embedding_config(
         vault_path,
         source=embedding_source,
         model=embedding_model,
-        dimension=vault_metadata.probe_embedding_dimension(
-            embedding_source, embedding_model
+        dimension=(
+            dimension
+            if dimension is not None
+            else vault_metadata.probe_embedding_dimension(
+                embedding_source, embedding_model
+            )
         ),
         retrieval_template=retrieval_template,
         server_url=_indexing_server_url(embedding_source),
@@ -1179,6 +1206,7 @@ class IndexJob:
     running: bool = False
     source: str = ""
     vault_path: str = ""
+    embedding: str = ""
     total_files: int = 0
     files_done: int = 0
     current_file: str = ""
@@ -1197,6 +1225,7 @@ def _index_job_snapshot() -> dict[str, Any]:
             "running": _index_job.running,
             "source": _index_job.source,
             "vault_path": _index_job.vault_path,
+            "embedding": _index_job.embedding,
             "total_files": _index_job.total_files,
             "files_done": _index_job.files_done,
             "current_file": _index_job.current_file,
@@ -1226,7 +1255,7 @@ def _run_index_job(
             _index_job.current_file = Path(current).name if current else ""
 
     try:
-        chunk_count = index_documents_into_vault(
+        chunk_count, skipped = index_documents_into_vault(
             vault_path=vault_path,
             source_pattern=pattern,
             embedding_model=embedding_model,
@@ -1251,6 +1280,11 @@ def _run_index_job(
                     f"{_index_job.files_done} file(s) using "
                     f"{embedding_source}/{embedding_model}."
                 )
+                if skipped:
+                    _index_job.message += (
+                        f" Skipped {skipped} chunk(s) that failed to embed "
+                        "— check the server log for details."
+                    )
     except Exception as exc:
         with _index_job_lock:
             _index_job.error = str(exc)
@@ -1281,6 +1315,7 @@ def start_index_job(
         _index_job.running = True
         _index_job.source = source
         _index_job.vault_path = vault_path
+        _index_job.embedding = f"{embedding_source}/{embedding_model}"
         _index_job.total_files = total_files
         _index_job.files_done = 0
         _index_job.current_file = ""

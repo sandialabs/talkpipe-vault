@@ -94,6 +94,7 @@
         function render(status) {
             panel.style.display = 'block';
             indexBtn.disabled = true;
+            const embedder = status.embedding ? ' via ' + status.embedding : '';
             if (status.total_files > 0) {
                 const done = Math.min(status.files_done, status.total_files);
                 const pct = Math.round((done / status.total_files) * 100);
@@ -104,11 +105,11 @@
                 if (status.current_file) {
                     detail += ' — ' + status.current_file;
                 }
-                detail += ' · ' + status.chunks + ' chunk(s) embedded';
+                detail += ' · ' + status.chunks + ' chunk(s) embedded' + embedder;
                 text.textContent = detail;
             } else {
                 fill.classList.add('indeterminate');
-                text.textContent = status.chunks + ' chunk(s) embedded';
+                text.textContent = status.chunks + ' chunk(s) embedded' + embedder;
             }
         }
 
