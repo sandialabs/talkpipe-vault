@@ -20,6 +20,7 @@ import json
 import logging
 import os
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -815,9 +816,14 @@ def _ollama_url_and_source() -> tuple[str, str]:
 
 def _ollama_tags(url: str, timeout: float) -> tuple[list[str] | None, str | None]:
     """Return (model names, None) on success or (None, error message) on failure."""
+    scheme = urllib.parse.urlparse(url).scheme
+    if scheme not in ("http", "https"):
+        return None, f"unsupported URL scheme {scheme!r} (expected http or https)"
     try:
         request = urllib.request.Request(f"{url}/api/tags", method="GET")
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with urllib.request.urlopen(  # nosec B310 - scheme validated above
+            request, timeout=timeout
+        ) as response:
             payload = json.load(response)
     except urllib.error.URLError as exc:
         return None, str(getattr(exc, "reason", exc))

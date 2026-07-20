@@ -2075,14 +2075,20 @@ def run_app(
     uvicorn.run(app, host=host, port=port)
 
 
-def _browser_url(host: str, port: int) -> str:
-    """Build the URL to open in a browser for the given bind host and port.
+def _reachable_host(host: str) -> str:
+    """Map a bind host to an address a client can actually reach.
 
-    A wildcard bind address (0.0.0.0 / ::) isn't a routable target, so open the
-    loopback address instead; any concrete host is used as-is.
+    A wildcard bind address (0.0.0.0 / ::) isn't a routable target, so use the
+    loopback address instead; any concrete host is used as-is. The wildcard
+    literal here is only compared against, never bound to.
     """
-    browser_host = "127.0.0.1" if host in ("", "0.0.0.0", "::") else host
-    return f"http://{browser_host}:{port}/"
+    wildcard_hosts = ("", "0.0.0.0", "::")  # nosec B104 - comparison, not a bind
+    return "127.0.0.1" if host in wildcard_hosts else host
+
+
+def _browser_url(host: str, port: int) -> str:
+    """Build the URL to open in a browser for the given bind host and port."""
+    return f"http://{_reachable_host(host)}:{port}/"
 
 
 def _launch_browser_when_ready(host: str, port: int, timeout: float = 15.0) -> None:
@@ -2093,7 +2099,7 @@ def _launch_browser_when_ready(host: str, port: int, timeout: float = 15.0) -> N
     headless container with no browser) are ignored.
     """
     url = _browser_url(host, port)
-    connect_host = "127.0.0.1" if host in ("", "0.0.0.0", "::") else host
+    connect_host = _reachable_host(host)
 
     def _wait_and_open() -> None:
         deadline = time.monotonic() + timeout
@@ -2107,8 +2113,8 @@ def _launch_browser_when_ready(host: str, port: int, timeout: float = 15.0) -> N
             return  # server never came up; nothing to open
         try:
             webbrowser.open(url)
-        except Exception:  # noqa: BLE001 - headless / no browser available
-            pass
+        except Exception as exc:  # noqa: BLE001 - headless / no browser available
+            logger.debug("Could not open a browser for %s: %s", url, exc)
 
     threading.Thread(target=_wait_and_open, daemon=True).start()
 
