@@ -4,7 +4,7 @@
 
 # TalkPipe Vault
 
-> AI-powered personal information assistant for building and searching document vaults
+> AI-powered personal information assistant for building and searching document vaults in locally hosted vector databases.
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
@@ -19,7 +19,7 @@
 
 ## What is TalkPipe Vault?
 
-NOTE: TalkPipe Vault is still under development (in alpha) and is not intended for production use.
+NOTE: TalkPipe Vault is still under development and testing.
 
 **TalkPipe Vault** is a set of practical tools and reusable components for turning folders of files into a searchable "vault" you can explore with semantic search, keyword search, and retrieval-augmented Q&A. It is a production-oriented example built on the **[TalkPipe](https://github.com/sandialabs/talkpipe)** framework, demonstrating how to assemble document processing, vector search, and RAG with clean, composable pipelines.
 
