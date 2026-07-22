@@ -892,13 +892,12 @@
                 </div>
             </div>
             <nav>
-                <a href="/" {% if request.url.path == '/' %}class="active"{% endif %}>Home</a>
-                <a href="/search" {% if request.url.path == '/search' %}class="active"{% endif %}>Semantic Search</a>
-                <a href="/keyword-search" {% if request.url.path == '/keyword-search' %}class="active"{% endif %}>Keyword Search</a>
-                <a href="/chat" {% if request.url.path == '/chat' %}class="active"{% endif %}>Ask</a>
-                <a href="/documents" {% if request.url.path == '/documents' %}class="active"{% endif %}>Add Documents</a>
-                <a href="/vaults" {% if request.url.path == '/vaults' %}class="active"{% endif %}>Vaults</a>
-                <a href="/settings" {% if request.url.path == '/settings' %}class="active"{% endif %}>Settings</a>
+                {% for href, label in [('/', 'Home'), ('/search', 'Semantic Search'),
+                                       ('/keyword-search', 'Keyword Search'), ('/chat', 'Ask'),
+                                       ('/documents', 'Add Documents'), ('/vaults', 'Vaults'),
+                                       ('/settings', 'Settings')] -%}
+                <a href="{{ href }}" {% if request.url.path == href %}class="active"{% endif %}>{{ label }}</a>
+                {% endfor -%}
                 <form method="post" action="/refresh">
                     <input type="hidden" name="return_to" value="{{ request.url.path }}">
                     <button type="submit" title="Refresh vault connections and counts">&#8635; Refresh</button>

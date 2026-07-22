@@ -33,6 +33,10 @@ logger = logging.getLogger(__name__)
 
 CREDENTIALS_FILENAME = "credentials.json"
 
+# Canonical env var for the Ollama server URL; other modules should reference
+# this rather than re-spelling the literal.
+OLLAMA_URL_ENV = "TALKPIPE_OLLAMA_SERVER_URL"
+
 
 @dataclass(frozen=True)
 class _Field:
@@ -49,9 +53,7 @@ FIELDS: tuple[_Field, ...] = (
     _Field("openai_api_key", "OPENAI_API_KEY", True, "OpenAI API key"),
     _Field("openai_base_url", "OPENAI_BASE_URL", False, "OpenAI base URL"),
     _Field("anthropic_api_key", "ANTHROPIC_API_KEY", True, "Anthropic API key"),
-    _Field(
-        "ollama_server_url", "TALKPIPE_OLLAMA_SERVER_URL", False, "Ollama server URL"
-    ),
+    _Field("ollama_server_url", OLLAMA_URL_ENV, False, "Ollama server URL"),
 )
 
 _FIELDS_BY_KEY = {field.key: field for field in FIELDS}
@@ -61,18 +63,14 @@ _FIELDS_BY_KEY = {field.key: field for field in FIELDS}
 _managed_env: set[str] = set()
 
 
-def _path() -> Path:
-    return user_settings.get_vault_home() / CREDENTIALS_FILENAME
-
-
 def store_path() -> Path:
     """Absolute path to the credentials file (whether or not it exists yet)."""
-    return _path()
+    return user_settings.get_vault_home() / CREDENTIALS_FILENAME
 
 
 def load() -> dict[str, str]:
     """Load stored credentials, keeping only known non-empty string values."""
-    path = _path()
+    path = store_path()
     try:
         with open(path, encoding="utf-8") as handle:
             data = json.load(handle)
@@ -94,7 +92,7 @@ def load() -> dict[str, str]:
 
 def _write(values: dict[str, str]) -> None:
     """Persist credentials as JSON with owner-only (0600) permissions."""
-    path = _path()
+    path = store_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_suffix(".json.tmp")
     # Create with 0600 from the start so the secret is never briefly world-readable.
@@ -121,18 +119,21 @@ def set_values(changes: dict[str, str | None]) -> None:
         else:
             data.pop(key, None)
     _write(data)
-    apply()
+    apply(data)
 
 
-def apply() -> None:
+def apply(data: dict[str, str] | None = None) -> None:
     """Apply stored credentials to the process environment.
 
     Sets each configured value's env var, unsets any var we previously set but
     is now cleared, and refreshes TalkPipe's cached config so a changed Ollama
     URL takes effect. Leaves untouched any env var the vault never set.
+    ``data`` lets a caller that just loaded/saved the values skip re-reading
+    the file.
     """
     global _managed_env
-    data = load()
+    if data is None:
+        data = load()
     now_managed: set[str] = set()
     for field in FIELDS:
         value = data.get(field.key)
@@ -156,11 +157,11 @@ def source_for(env_var: str) -> str:
     return "unset"
 
 
-def _mask(secret: str) -> str:
+def mask_secret(secret: str, *, short: str = "••••", prefix: str = "••••") -> str:
     """Mask a secret, revealing only the last few characters."""
     if len(secret) <= 8:
-        return "••••"
-    return f"••••{secret[-4:]}"
+        return short
+    return f"{prefix}{secret[-4:]}"
 
 
 def describe() -> list[dict[str, object]]:
@@ -186,7 +187,7 @@ def describe() -> list[dict[str, object]]:
                 "secret": field.secret,
                 "env_var": field.env_var,
                 "present": bool(value),
-                "masked": _mask(value) if value else "",
+                "masked": mask_secret(value) if value else "",
                 # Only non-secret values are safe to send back to the browser.
                 "value": "" if field.secret else value,
                 "active": active,

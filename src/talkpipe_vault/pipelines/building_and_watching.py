@@ -20,8 +20,8 @@ from .config import (
     ensure_supported_vault_layout,
     get_document_template,
     get_shingle_template,
-    get_vault_paths,
     get_vector_db_path,
+    get_whoosh_index_path,
     resolve_embedding_config,
 )
 
@@ -148,7 +148,7 @@ def build_vector_db_from_paths(
     document_template = get_document_template()
     shingle_template = get_shingle_template()
     vectordb_path = get_vector_db_path(vault_path)
-    _, whoosh_index_path = get_vault_paths(vault_path)
+    whoosh_index_path = get_whoosh_index_path(vault_path)
 
     base_pipeline = (
         FilterExpression(expression="'event' not in item or item['event'] != 'deleted'")

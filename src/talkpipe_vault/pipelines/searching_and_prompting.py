@@ -25,14 +25,26 @@ from .config import (
     ensure_supported_vault_layout,
     get_chat_model,
     get_chat_source,
-    get_embedding_model,
-    get_embedding_source,
     get_retrieval_template,
     get_vector_db_path,
     get_whoosh_index_path,
+    resolve_embedding_config,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def normalize_document_cell(raw: Any) -> Any:
+    """Normalize a LanceDB ``document`` cell (JSON text, dict, or other) for use
+    as a dict-like document."""
+    if isinstance(raw, str):
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            return {"content": raw}
+    if isinstance(raw, dict):
+        return raw
+    return {"content": str(raw)}
 
 
 def _has_document_fts_index(table: Any, field_name: str) -> bool:
@@ -108,26 +120,14 @@ def searchLance(
         query = extract_property(item, field, fail_on_missing=True)
         try:
             rows = _run_fts_search(table, str(query), limit)
-            results: list[dict[str, Any]] = []
-            for row in rows:
-                raw_document = row.get("document", "{}")
-                if isinstance(raw_document, str):
-                    try:
-                        document = json.loads(raw_document)
-                    except json.JSONDecodeError:
-                        document = {"content": raw_document}
-                elif isinstance(raw_document, dict):
-                    document = raw_document
-                else:
-                    document = {"content": str(raw_document)}
-
-                results.append(
-                    {
-                        "doc_id": row.get("id", ""),
-                        "score": float(row.get("_score", 0.0)),
-                        "document": document,
-                    }
-                )
+            results = [
+                {
+                    "doc_id": row.get("id", ""),
+                    "score": float(row.get("_score", 0.0)),
+                    "document": normalize_document_cell(row.get("document", "{}")),
+                }
+                for row in rows
+            ]
 
             if all_results_at_once:
                 if set_as:
@@ -136,10 +136,6 @@ def searchLance(
                 else:
                     yield results
             else:
-                if set_as:
-                    raise ValueError(
-                        "set_as only works with this segment if all_results_at_once is True."
-                    )
                 for result in results:
                     yield result
         except Exception:
@@ -179,15 +175,10 @@ class VaultSearch(AbstractFieldSegment):
         ] = None,
     ):
         super().__init__(field=field, set_as=set_as, multi_emit=multi_emit)
-        # Resolve model configuration: use provided value, or TalkPipe config, or default
-        embedding_model = (
-            embedding_model if embedding_model is not None else get_embedding_model()
-        )
-        embedding_source = (
-            embedding_source if embedding_source is not None else get_embedding_source()
+        embedding_model, embedding_source = resolve_embedding_config(
+            embedding_model, embedding_source
         )
 
-        # Get retrieval template from TalkPipe config or default
         retrieval_template = get_retrieval_template()
         ensure_supported_vault_layout(vault_path)
 
@@ -253,17 +244,12 @@ class VaultChat(AbstractFieldSegment):
         ] = None,
     ):
         super().__init__(field=field, set_as=set_as, multi_emit=multi_emit)
-        # Resolve model configuration: use provided value, or TalkPipe config, or default
-        embedding_model = (
-            embedding_model if embedding_model is not None else get_embedding_model()
-        )
-        embedding_source = (
-            embedding_source if embedding_source is not None else get_embedding_source()
+        embedding_model, embedding_source = resolve_embedding_config(
+            embedding_model, embedding_source
         )
         chat_model = chat_model if chat_model is not None else get_chat_model()
         chat_source = chat_source if chat_source is not None else get_chat_source()
 
-        # Get retrieval template from TalkPipe config or default
         retrieval_template = get_retrieval_template()
         ensure_supported_vault_layout(vault_path)
 

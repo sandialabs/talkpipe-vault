@@ -62,6 +62,12 @@ def browse_roots() -> list[Path]:
     return roots
 
 
+def vault_path_allowed(path: str | Path) -> bool:
+    """True when the path lies inside the vault root (unset root = anywhere)."""
+    root = vault_root()
+    return is_allowed(path, [root] if root is not None else [])
+
+
 def is_allowed(path: str | Path, roots: list[Path]) -> bool:
     """True when the fully-resolved path lies inside one of the roots.
 

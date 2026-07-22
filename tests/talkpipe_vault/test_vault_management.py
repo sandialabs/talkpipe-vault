@@ -33,7 +33,6 @@ def isolated_app(tmp_path, monkeypatch):
     query._state.chat_pipeline = None
     query._state.keyword_search_pipeline = None
     query._state.shingled_chunks_count = 0
-    query._state.fulltext_documents_count = 0
     query._state.keyword_search_enabled = False
     query._state.show_source_paths = False
     query._state.last_refresh_time = 0.0

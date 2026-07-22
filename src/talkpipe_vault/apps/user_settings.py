@@ -63,18 +63,14 @@ def get_vault_home() -> Path:
     return Path(configured or DEFAULT_VAULT_HOME).expanduser()
 
 
-def _settings_path() -> Path:
-    return get_vault_home() / SETTINGS_FILENAME
-
-
 def settings_file_path() -> Path:
     """Return the path of the persisted settings file (for user-facing messages)."""
-    return _settings_path()
+    return get_vault_home() / SETTINGS_FILENAME
 
 
 def load_settings() -> dict:
     """Load persisted settings, returning an empty structure when unavailable."""
-    path = _settings_path()
+    path = settings_file_path()
     try:
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
@@ -94,7 +90,7 @@ def load_settings() -> dict:
 
 def save_settings(settings: dict) -> None:
     """Persist settings as JSON, creating the vault home directory if needed."""
-    path = _settings_path()
+    path = settings_file_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_suffix(".json.tmp")
     with open(tmp_path, "w", encoding="utf-8") as f:

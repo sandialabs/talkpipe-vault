@@ -12,7 +12,6 @@ Provides the following via web interface:
 
 import argparse
 import glob as globlib
-import json
 import logging
 import os
 import shutil
@@ -23,7 +22,7 @@ import time
 import urllib.parse
 import uuid
 import webbrowser
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Annotated, Any, Callable
 
@@ -53,6 +52,7 @@ from talkpipe_vault.apps import access_control, credentials, user_settings
 from talkpipe_vault.pipelines import diagnostics, vault_metadata
 from talkpipe_vault.pipelines.config import (
     DEFAULT_VECTOR_TABLE_NAME,
+    FULLTEXT_VAULT_SUBDIR,
     ensure_supported_vault_layout,
     get_chat_model,
     get_chat_source,
@@ -66,6 +66,7 @@ from talkpipe_vault.pipelines.searching_and_prompting import (
     VaultChat,
     VaultSearch,
     VaultTextSearch,
+    normalize_document_cell,
 )
 
 configure_logger("root:ERROR")
@@ -76,11 +77,10 @@ logger = logging.getLogger(__name__)
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 STATIC_DIR = Path(__file__).parent / "static"
 SNIPPET_MAX_LENGTH = 300
-CHAT_CITATION_LIMIT = 5
 DEFAULT_CHUNK_SIZE = 300
 DEFAULT_SHINGLE_SIZE = 3
 DEFAULT_SHINGLE_OVERLAP = 1
-DEFAULT_RAG_RESULT_LIMIT = CHAT_CITATION_LIMIT
+DEFAULT_RAG_RESULT_LIMIT = 5
 
 
 @dataclass
@@ -92,7 +92,6 @@ class AppState:
     chat_pipeline: Callable[[str], str] | None = None
     keyword_search_pipeline: Callable[[str], list[Any]] | None = None
     shingled_chunks_count: int = 0
-    fulltext_documents_count: int = 0
     keyword_search_enabled: bool = False
     show_source_paths: bool = False
     last_refresh_time: float = 0.0
@@ -246,36 +245,9 @@ def _iter_lancedb_docs_for_whoosh(vault_path: str) -> list[dict[str, str]]:
 
     Expects rows where `document` is either JSON text or a dict containing content/path/title.
     """
-    vectordb_path = get_vector_db_path(vault_path)
-    ensure_supported_vault_layout(vault_path)
-    rows: list[dict[str, Any]] = []
-    doc_store = LanceDBDocumentStore(
-        path=vectordb_path,
-        table_name=DEFAULT_VECTOR_TABLE_NAME,
-    )
-    table, _ = doc_store._get_table()
-    if hasattr(table, "to_arrow"):
-        rows = table.to_arrow().to_pylist()
-    elif hasattr(table, "to_pandas"):
-        rows = table.to_pandas().to_dict(orient="records")
-    else:
-        raise RuntimeError(
-            "Unsupported LanceDB table reader: expected to_arrow() or to_pandas()."
-        )
-
     documents: list[dict[str, str]] = []
-    for row in rows:
-        raw_doc = row.get("document", {})
-        if isinstance(raw_doc, str):
-            try:
-                parsed_doc = json.loads(raw_doc)
-            except json.JSONDecodeError:
-                parsed_doc = {"content": raw_doc}
-        elif isinstance(raw_doc, dict):
-            parsed_doc = raw_doc
-        else:
-            parsed_doc = {"content": str(raw_doc)}
-
+    for row in _load_docs_rows(vault_path):
+        parsed_doc = _extract_document_record(row)
         path = str(
             parsed_doc.get("path")
             or parsed_doc.get("source")
@@ -403,17 +375,9 @@ def _refresh_pipelines(force: bool = False) -> None:
     Args:
         force: If True, always refresh. If False, refresh only if more than
             5 seconds have passed since last refresh (to avoid excessive refreshes).
-            Set to False to disable automatic refresh (for testing).
     """
-    import time
-
     vault_path = _state.vault_path
     if not vault_path:
-        return
-
-    # For testing: can disable refresh by setting environment variable
-    # This allows us to verify the problem exists without the fix
-    if os.environ.get("DISABLE_PIPELINE_REFRESH", "").lower() == "true":
         return
 
     current_time = time.time()
@@ -432,7 +396,7 @@ def _refresh_pipelines(force: bool = False) -> None:
         embedding_source=_state.embedding_source,
         chat_model=_state.chat_model,
         chat_source=_state.chat_source,
-        limit=_effective_models(_state)["rag_result_limit"],
+        limit=_state.rag_result_limit or DEFAULT_RAG_RESULT_LIMIT,
     ).as_function(single_in=True, single_out=True)
     _state.keyword_search_enabled = _keyword_search_enabled(vault_path)
     if _state.keyword_search_enabled:
@@ -455,13 +419,11 @@ def _update_document_counts(vault_path: str) -> None:
             path=vectordb_path,
             table_name=DEFAULT_VECTOR_TABLE_NAME,
         )
-        docs_count = doc_store.count()
-        _state.keyword_search_enabled = _keyword_search_enabled(vault_path)
-        _state.shingled_chunks_count = docs_count
-        _state.fulltext_documents_count = 0
+        # keyword_search_enabled is owned by _refresh_pipelines, which every
+        # caller runs first; only the failure path below overrides it.
+        _state.shingled_chunks_count = doc_store.count()
     except Exception:
         _state.shingled_chunks_count = 0
-        _state.fulltext_documents_count = 0
         _state.keyword_search_enabled = False
 
 
@@ -568,9 +530,8 @@ def _chat_citations(state: AppState, message: str) -> list[dict[str, Any]]:
         return []
 
     raw_results = state.search_pipeline(message)
-    return _process_semantic_results(raw_results)[
-        : _effective_models(state)["rag_result_limit"]
-    ]
+    limit = state.rag_result_limit or DEFAULT_RAG_RESULT_LIMIT
+    return _process_semantic_results(raw_results)[:limit]
 
 
 def _strip_answer_source_paths(answer: str) -> str:
@@ -654,19 +615,11 @@ def _process_keyword_results(raw_results: list[Any]) -> list[dict[str, Any]]:
 
 def _extract_document_record(row: dict[str, Any]) -> dict[str, Any]:
     """Normalize a LanceDB docs-row into a dict-like document."""
-    raw_doc = row.get("document", {})
-    if isinstance(raw_doc, str):
-        try:
-            return json.loads(raw_doc)
-        except json.JSONDecodeError:
-            return {"content": raw_doc}
-    if isinstance(raw_doc, dict):
-        return raw_doc
-    return {"content": str(raw_doc)}
+    return normalize_document_cell(row.get("document", {}))
 
 
 def _load_docs_rows(vault_path: str) -> list[dict[str, Any]]:
-    """Load rows from the TalkPipe docs table from common vault locations."""
+    """Load rows from the vault's TalkPipe docs table."""
     ensure_supported_vault_layout(vault_path)
     vectordb_path = get_vector_db_path(vault_path)
     doc_store = LanceDBDocumentStore(
@@ -721,23 +674,21 @@ def _get_chunk_text_for_path_and_snippet(
     """Return full text for a selected chunk identified by path/id and snippet."""
     rows = _load_docs_rows(vault_path)
     snippet_prefix = _normalize_snippet_prefix(snippet)
-    content_by_snippet: list[str] = []
+    first_snippet_match = ""
     for row in rows:
         doc = _extract_document_record(row)
         content = str(doc.get("content", "")).strip()
         if not content:
             continue
-        candidate_prefix = " ".join(content.split())
-        if snippet_prefix and snippet_prefix in candidate_prefix:
-            content_by_snippet.append(content)
+        snippet_matches = snippet_prefix and snippet_prefix in " ".join(content.split())
+        if snippet_matches and not first_snippet_match:
+            first_snippet_match = content
         if path not in _document_lookup_keys(row, doc):
             continue
-        if snippet_prefix and snippet_prefix not in candidate_prefix:
+        if snippet_prefix and not snippet_matches:
             continue
         return content
-    if snippet_prefix and content_by_snippet:
-        return content_by_snippet[0]
-    return ""
+    return first_snippet_match
 
 
 def _vault_selected(state: AppState) -> bool:
@@ -751,6 +702,26 @@ def _require_vault(state: AppState) -> RedirectResponse | None:
         return None
     return _redirect_with_message(
         "/vaults", error="Choose or create a vault to get started."
+    )
+
+
+def _render_page(
+    request: Request,
+    state: AppState,
+    template: str,
+    *,
+    require_vault: bool = True,
+    **context: Any,
+) -> Any:
+    """Render a page template with the common context, gating on vault selection."""
+    if require_vault:
+        redirect = _require_vault(state)
+        if redirect:
+            return redirect
+    return templates.TemplateResponse(
+        request=request,
+        name=template,
+        context=_template_context(request, state, **context),
     )
 
 
@@ -846,12 +817,13 @@ async def home(
         return redirect
     # Refresh document counts on home page load
     _update_document_counts(state.vault_path)
-    return templates.TemplateResponse(
-        request=request,
-        name="home.html",
-        context=_template_context(
-            request, state, flash_message=message, flash_error=error
-        ),
+    return _render_page(
+        request,
+        state,
+        "home.html",
+        require_vault=False,
+        flash_message=message,
+        flash_error=error,
     )
 
 
@@ -868,17 +840,15 @@ async def vaults_page(
     # the fence), point under the root instead of the home directory.
     root = access_control.vault_root()
     vault_example = str(root / "my-vault") if root else "~/my-vault"
-    return templates.TemplateResponse(
-        request=request,
-        name="vaults.html",
-        context=_template_context(
-            request,
-            state,
-            recent_vaults=user_settings.get_recent_vaults(),
-            vault_example=vault_example,
-            flash_message=message,
-            flash_error=error,
-        ),
+    return _render_page(
+        request,
+        state,
+        "vaults.html",
+        require_vault=False,
+        recent_vaults=user_settings.get_recent_vaults(),
+        vault_example=vault_example,
+        flash_message=message,
+        flash_error=error,
     )
 
 
@@ -897,11 +867,13 @@ async def open_vault(
         return _redirect_with_message("/vaults", error="Enter a vault path.")
 
     vault_path = Path(raw_path).expanduser()
-    root = access_control.vault_root()
-    if root is not None and not access_control.is_allowed(vault_path, [root]):
+    if not access_control.vault_path_allowed(vault_path):
         return _redirect_with_message(
             "/vaults",
-            error=f"Vaults on this server must live under {root}.",
+            error=(
+                "Vaults on this server must live under "
+                f"{access_control.vault_root()}."
+            ),
         )
     if vault_path.is_file():
         return _redirect_with_message(
@@ -916,7 +888,11 @@ async def open_vault(
     # written into it, so the user is told what is about to happen.
     non_empty_non_vault = False
     if not created:
-        vault_markers = ("docs.lance", "vault_metadata.json", "fulltext_vault")
+        vault_markers = (
+            f"{DEFAULT_VECTOR_TABLE_NAME}.lance",
+            vault_metadata.METADATA_FILENAME,
+            FULLTEXT_VAULT_SUBDIR,
+        )
         looks_like_vault = any(
             (vault_path / marker).exists() for marker in vault_markers
         )
@@ -1016,14 +992,13 @@ async def delete_vault(
     # Vaults outside the configured root (e.g. remembered before the
     # restriction existed) can be forgotten, but their files are never
     # touched.
-    root = access_control.vault_root()
-    if root is not None and not access_control.is_allowed(resolved, [root]):
+    if not access_control.vault_path_allowed(resolved):
         user_settings.forget_vault(resolved)
         return _redirect_with_message(
             "/vaults",
             message=(
-                f"Removed {resolved} from the list. It is outside {root}, "
-                "so its files were left untouched."
+                f"Removed {resolved} from the list. It is outside "
+                f"{access_control.vault_root()}, so its files were left untouched."
             ),
         )
 
@@ -1055,19 +1030,13 @@ async def documents_page(
     state: AppState = Depends(get_state),
 ) -> HTMLResponse:
     """Render the page for indexing documents into the current vault."""
-    redirect = _require_vault(state)
-    if redirect:
-        return redirect
-    return templates.TemplateResponse(
-        request=request,
-        name="documents.html",
-        context=_template_context(
-            request,
-            state,
-            models=_effective_models(state),
-            flash_message=message,
-            flash_error=error,
-        ),
+    return _render_page(
+        request,
+        state,
+        "documents.html",
+        models=_effective_models(state),
+        flash_message=message,
+        flash_error=error,
     )
 
 
@@ -1227,18 +1196,7 @@ _index_job_lock = threading.Lock()
 
 def _index_job_snapshot() -> dict[str, Any]:
     with _index_job_lock:
-        return {
-            "running": _index_job.running,
-            "source": _index_job.source,
-            "vault_path": _index_job.vault_path,
-            "embedding": _index_job.embedding,
-            "total_files": _index_job.total_files,
-            "files_done": _index_job.files_done,
-            "current_file": _index_job.current_file,
-            "chunks": _index_job.chunks,
-            "message": _index_job.message,
-            "error": _index_job.error,
-        }
+        return asdict(_index_job)
 
 
 def _run_index_job(
@@ -1304,6 +1262,7 @@ def start_index_job(
     vault_path: str,
     source: str,
     pattern: str,
+    total_files: int,
     embedding_model: str,
     embedding_source: str,
     chunk_size: int,
@@ -1312,22 +1271,18 @@ def start_index_job(
     overwrite: bool,
 ) -> bool:
     """Start the background indexing job; False if one is already running."""
-    total_files = sum(
-        1 for p in globlib.iglob(pattern, recursive=True) if os.path.isfile(p)
-    )
+    global _index_job
     with _index_job_lock:
         if _index_job.running:
             return False
-        _index_job.running = True
-        _index_job.source = source
-        _index_job.vault_path = vault_path
-        _index_job.embedding = f"{embedding_source}/{embedding_model}"
-        _index_job.total_files = total_files
-        _index_job.files_done = 0
-        _index_job.current_file = ""
-        _index_job.chunks = 0
-        _index_job.message = ""
-        _index_job.error = None
+        # A fresh instance resets every other field to its dataclass default.
+        _index_job = IndexJob(
+            running=True,
+            source=source,
+            vault_path=vault_path,
+            embedding=f"{embedding_source}/{embedding_model}",
+            total_files=total_files,
+        )
 
     thread = threading.Thread(
         target=_run_index_job,
@@ -1372,14 +1327,7 @@ _fulltext_index_job_lock = threading.Lock()
 
 def _fulltext_index_job_snapshot() -> dict[str, Any]:
     with _fulltext_index_job_lock:
-        return {
-            "running": _fulltext_index_job.running,
-            "vault_path": _fulltext_index_job.vault_path,
-            "total_docs": _fulltext_index_job.total_docs,
-            "docs_done": _fulltext_index_job.docs_done,
-            "message": _fulltext_index_job.message,
-            "error": _fulltext_index_job.error,
-        }
+        return asdict(_fulltext_index_job)
 
 
 def _run_fulltext_index_job(vault_path: str) -> None:
@@ -1432,15 +1380,12 @@ def _run_fulltext_index_job(vault_path: str) -> None:
 
 def start_fulltext_index_job(vault_path: str) -> bool:
     """Start the background full-text index build; False if one is already running."""
+    global _fulltext_index_job
     with _fulltext_index_job_lock:
         if _fulltext_index_job.running:
             return False
-        _fulltext_index_job.running = True
-        _fulltext_index_job.vault_path = vault_path
-        _fulltext_index_job.total_docs = 0
-        _fulltext_index_job.docs_done = 0
-        _fulltext_index_job.message = ""
-        _fulltext_index_job.error = None
+        # A fresh instance resets every other field to its dataclass default.
+        _fulltext_index_job = FulltextIndexJob(running=True, vault_path=vault_path)
 
     thread = threading.Thread(
         target=_run_fulltext_index_job,
@@ -1482,7 +1427,7 @@ def _collect_config_status(
     state: AppState, probe: bool = True, allow_download: bool = False
 ) -> dict[str, Any]:
     """Build the config-status report for the effective model selection."""
-    vault_selected = bool(state.vault_path)
+    vault_selected = _vault_selected(state)
     vault_embedding = (
         vault_metadata.load_embedding_config(state.vault_path)
         if vault_selected
@@ -1544,7 +1489,15 @@ async def index_documents(
             error="Indexing on this server is limited to documents under "
             f"{access_control.describe(doc_roots)}.",
         )
-    if not globlib.glob(pattern, recursive=True):
+    # One walk of the source tree serves both the any-match check and the
+    # job's file count.
+    any_match = False
+    total_files = 0
+    for matched in globlib.iglob(pattern, recursive=True):
+        any_match = True
+        if os.path.isfile(matched):
+            total_files += 1
+    if not any_match:
         return _redirect_with_message(
             "/documents",
             error=(
@@ -1558,6 +1511,7 @@ async def index_documents(
         vault_path=state.vault_path,
         source=source_path.strip(),
         pattern=pattern,
+        total_files=total_files,
         embedding_model=models["embedding_model"],
         embedding_source=models["embedding_source"],
         chunk_size=models["chunk_size"],
@@ -1587,20 +1541,18 @@ async def settings_page(
     state: AppState = Depends(get_state),
 ) -> HTMLResponse:
     """Render the model configuration page."""
-    return templates.TemplateResponse(
-        request=request,
-        name="settings.html",
-        context=_template_context(
-            request,
-            state,
-            models=_effective_models(state),
-            embedding_sources=getEmbeddingSources(),
-            chat_sources=getPromptSources(),
-            credentials=credentials.describe(),
-            credentials_store=str(credentials.store_path()),
-            flash_message=message,
-            flash_error=error,
-        ),
+    return _render_page(
+        request,
+        state,
+        "settings.html",
+        require_vault=False,
+        models=_effective_models(state),
+        embedding_sources=getEmbeddingSources(),
+        chat_sources=getPromptSources(),
+        credentials=credentials.describe(),
+        credentials_store=str(credentials.store_path()),
+        flash_message=message,
+        flash_error=error,
     )
 
 
@@ -1660,19 +1612,25 @@ async def save_settings(
         - embedding_source / embedding_model: provider and model for embeddings
         - chat_source / chat_model: provider and model for chat/completion
     """
+    previous_models = _effective_models(state)
     previous_embedding = (
-        _effective_models(state)["embedding_source"],
-        _effective_models(state)["embedding_model"],
+        previous_models["embedding_source"],
+        previous_models["embedding_model"],
     )
 
+    minimums = user_settings.INTEGER_SETTING_MINIMUMS
     try:
-        chunk_size_value = _parse_int_setting(chunk_size, "Chunk size", 1)
-        shingle_size_value = _parse_int_setting(shingle_size, "Shingle size", 1)
+        chunk_size_value = _parse_int_setting(
+            chunk_size, "Chunk size", minimums["chunk_size"]
+        )
+        shingle_size_value = _parse_int_setting(
+            shingle_size, "Shingle size", minimums["shingle_size"]
+        )
         shingle_overlap_value = _parse_int_setting(
-            shingle_overlap, "Shingle overlap", 0
+            shingle_overlap, "Shingle overlap", minimums["shingle_overlap"]
         )
         rag_result_limit_value = _parse_int_setting(
-            rag_result_limit, "Ask result count", 1
+            rag_result_limit, "Ask result count", minimums["rag_result_limit"]
         )
     except ValueError as exc:
         return _redirect_with_message("/settings", error=str(exc))
@@ -1736,19 +1694,7 @@ async def search_page(
     request: Request, state: AppState = Depends(get_state)
 ) -> HTMLResponse:
     """Render the semantic search interface page."""
-    redirect = _require_vault(state)
-    if redirect:
-        return redirect
-    return templates.TemplateResponse(
-        request=request,
-        name="search.html",
-        context=_template_context(
-            request,
-            state,
-            query="",
-            results=None,
-        ),
-    )
+    return _render_page(request, state, "search.html", query="", results=None)
 
 
 @app.post("/search", response_class=HTMLResponse)
@@ -1801,20 +1747,14 @@ async def keyword_search_page(
     state: AppState = Depends(get_state),
 ) -> HTMLResponse:
     """Render the keyword search interface page."""
-    redirect = _require_vault(state)
-    if redirect:
-        return redirect
-    return templates.TemplateResponse(
-        request=request,
-        name="keyword_search.html",
-        context=_template_context(
-            request,
-            state,
-            query="",
-            results=None,
-            flash_message=created,
-            flash_error=error,
-        ),
+    return _render_page(
+        request,
+        state,
+        "keyword_search.html",
+        query="",
+        results=None,
+        flash_message=created,
+        flash_error=error,
     )
 
 
@@ -1873,9 +1813,8 @@ async def create_keyword_index(
     live progress bar, then reloads with the outcome.
     """
     if not state.vault_path:
-        return RedirectResponse(
-            url="/keyword-search?error=Vault%20path%20is%20not%20configured.",
-            status_code=303,
+        return _redirect_with_message(
+            "/keyword-search", error="Vault path is not configured."
         )
 
     if not start_fulltext_index_job(state.vault_path):
@@ -1961,19 +1900,7 @@ async def chat_page(
     request: Request, state: AppState = Depends(get_state)
 ) -> HTMLResponse:
     """Render the Ask interface page."""
-    redirect = _require_vault(state)
-    if redirect:
-        return redirect
-    return templates.TemplateResponse(
-        request=request,
-        name="chat.html",
-        context=_template_context(
-            request,
-            state,
-            messages=[],
-            citations=[],
-        ),
-    )
+    return _render_page(request, state, "chat.html", messages=[], citations=[])
 
 
 @app.post("/chat", response_class=HTMLResponse)
@@ -2073,15 +2000,10 @@ def run_app(
     problems = access_control.startup_errors()
     if problems:
         raise ValueError(" ".join(problems))
-    root = access_control.vault_root()
-    if (
-        vault_path
-        and root is not None
-        and not access_control.is_allowed(vault_path, [root])
-    ):
+    if vault_path and not access_control.vault_path_allowed(vault_path):
         raise ValueError(
             f"Vault path {vault_path} is outside "
-            f"{access_control.VAULT_ROOT_ENV} ({root})."
+            f"{access_control.VAULT_ROOT_ENV} ({access_control.vault_root()})."
         )
     if not access_control.browse_roots() and host not in (
         "127.0.0.1",

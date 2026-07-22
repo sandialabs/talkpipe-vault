@@ -22,12 +22,11 @@ def _most_recent_usable_vault() -> str:
     that no longer exist, fall outside the configured vault root, or have an
     unsupported layout. Returns "" when none qualify.
     """
-    root = access_control.vault_root()
     for candidate in user_settings.get_recent_vaults():
         path = Path(candidate).expanduser()
         if not path.is_dir():
             continue
-        if root is not None and not access_control.is_allowed(str(path), [root]):
+        if not access_control.vault_path_allowed(str(path)):
             continue
         try:
             ensure_supported_vault_layout(str(path))

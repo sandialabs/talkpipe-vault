@@ -94,18 +94,8 @@ def _get_talkpipe_config_value(
 
 
 def get_embedding_model() -> str:
-    """
-    Get embedding model from TalkPipe config or default.
-
-    Checks for configuration in this order:
-    1. TalkPipe config: 'embedding_model' (in [vault] section or top-level)
-    2. TalkPipe config: 'EMBEDDING_MODEL' (uppercase variant)
-    3. TalkPipe config: 'default_embedding_model_name' (standard TalkPipe key)
-    4. Default: EMBEDDING_MODEL constant
-
-    Returns:
-        str: Embedding model name
-    """
+    """Embedding model from TalkPipe config or default (see module docstring
+    for key precedence)."""
     return _get_talkpipe_config_value(
         "embedding_model",
         EMBEDDING_MODEL,
@@ -114,18 +104,8 @@ def get_embedding_model() -> str:
 
 
 def get_embedding_source() -> str:
-    """
-    Get embedding source from TalkPipe config or default.
-
-    Checks for configuration in this order:
-    1. TalkPipe config: 'embedding_source' (in [vault] section or top-level)
-    2. TalkPipe config: 'EMBEDDING_SOURCE' (uppercase variant)
-    3. TalkPipe config: 'default_embedding_model_source' (standard TalkPipe key)
-    4. Default: EMBEDDING_SOURCE constant
-
-    Returns:
-        str: Embedding source/provider (e.g., 'ollama', 'openai')
-    """
+    """Embedding source/provider from TalkPipe config or default (see module
+    docstring for key precedence)."""
     return _get_talkpipe_config_value(
         "embedding_source",
         EMBEDDING_SOURCE,
@@ -205,36 +185,16 @@ def ensure_supported_vault_layout(vault_path: str) -> None:
 
 
 def get_chat_model() -> str:
-    """
-    Get chat model from TalkPipe config or default.
-
-    Checks for configuration in this order:
-    1. TalkPipe config: 'chat_model' (in [vault] section or top-level)
-    2. TalkPipe config: 'CHAT_MODEL' (uppercase variant)
-    3. TalkPipe config: 'default_model_name' (standard TalkPipe key)
-    4. Default: CHAT_MODEL constant
-
-    Returns:
-        str: Chat/completion model name
-    """
+    """Chat/completion model from TalkPipe config or default (see module
+    docstring for key precedence)."""
     return _get_talkpipe_config_value(
         "chat_model", CHAT_MODEL, alternative_keys=["default_model_name", "CHAT_MODEL"]
     )
 
 
 def get_chat_source() -> str:
-    """
-    Get chat source from TalkPipe config or default.
-
-    Checks for configuration in this order:
-    1. TalkPipe config: 'chat_source' (in [vault] section or top-level)
-    2. TalkPipe config: 'CHAT_SOURCE' (uppercase variant)
-    3. TalkPipe config: 'default_model_source' (standard TalkPipe key)
-    4. Default: CHAT_SOURCE constant
-
-    Returns:
-        str: Chat source/provider (e.g., 'ollama', 'openai')
-    """
+    """Chat source/provider from TalkPipe config or default (see module
+    docstring for key precedence)."""
     return _get_talkpipe_config_value(
         "chat_source",
         CHAT_SOURCE,
@@ -262,60 +222,24 @@ RETRIEVAL_TEMPLATE = """task: search result | query: {query}"""
 
 
 def get_document_template() -> str:
-    """
-    Get document template from TalkPipe config or default.
-
-    Checks for configuration in this order:
-    1. TalkPipe config: 'document_template' (in [vault] section or top-level)
-    2. TalkPipe config: 'DOCUMENT_TEMPLATE' (uppercase variant)
-    3. Default: DOCUMENT_TEMPLATE constant
-
-    The template is used to format full documents before embedding.
-    Available placeholders: {title}, {content}
-
-    Returns:
-        str: Document template string
-    """
+    """Template for formatting full documents before embedding (placeholders
+    {title}, {content}); see module docstring for key precedence."""
     return _get_talkpipe_config_value(
         "document_template", DOCUMENT_TEMPLATE, alternative_keys=["DOCUMENT_TEMPLATE"]
     )
 
 
 def get_shingle_template() -> str:
-    """
-    Get shingle template from TalkPipe config or default.
-
-    Checks for configuration in this order:
-    1. TalkPipe config: 'shingle_template' (in [vault] section or top-level)
-    2. TalkPipe config: 'SHINGLE_TEMPLATE' (uppercase variant)
-    3. Default: SHINGLE_TEMPLATE constant
-
-    The template is used to format shingled chunks before embedding.
-    Available placeholders: {title}, {shingle}
-
-    Returns:
-        str: Shingle template string
-    """
+    """Template for formatting shingled chunks before embedding (placeholders
+    {title}, {shingle}); see module docstring for key precedence."""
     return _get_talkpipe_config_value(
         "shingle_template", SHINGLE_TEMPLATE, alternative_keys=["SHINGLE_TEMPLATE"]
     )
 
 
 def get_retrieval_template() -> str:
-    """
-    Get retrieval template from TalkPipe config or default.
-
-    Checks for configuration in this order:
-    1. TalkPipe config: 'retrieval_template' (in [vault] section or top-level)
-    2. TalkPipe config: 'RETRIEVAL_TEMPLATE' (uppercase variant)
-    3. Default: RETRIEVAL_TEMPLATE constant
-
-    The template is used to format search queries before embedding.
-    Available placeholders: {query}
-
-    Returns:
-        str: Retrieval template string
-    """
+    """Template for formatting search queries before embedding (placeholder
+    {query}); see module docstring for key precedence."""
     return _get_talkpipe_config_value(
         "retrieval_template",
         RETRIEVAL_TEMPLATE,

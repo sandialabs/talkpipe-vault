@@ -46,7 +46,7 @@ FUNCTIONAL_PROBE_TIMEOUT = 20.0
 
 # An explicitly requested first-time model download is far slower again than
 # any probe; give it its own budget.
-MODEL_DOWNLOAD_TIMEOUT = 120.0
+MODEL_DOWNLOAD_TIMEOUT = 300.0
 
 # Short, harmless inputs used when actually exercising a provider.
 _PROBE_TEXT = "TalkPipe configuration self-test."
@@ -247,24 +247,17 @@ def _check_provider(
     if normalized == "ollama":
         return _check_ollama(base, model, role=role, probe=probe, timeout=timeout)
 
-    if normalized == "openai":
+    cloud = {
+        "openai": ("OpenAI", "OPENAI_API_KEY"),
+        "anthropic": ("Anthropic", "ANTHROPIC_API_KEY"),
+    }
+    if normalized in cloud:
+        display, env_var = cloud[normalized]
         return _check_api_key(
             base,
-            "OpenAI",
-            "OPENAI_API_KEY",
-            "openai",
-            role=role,
-            model=model,
-            probe=probe,
-            timeout=timeout,
-        )
-
-    if normalized == "anthropic":
-        return _check_api_key(
-            base,
-            "Anthropic",
-            "ANTHROPIC_API_KEY",
-            "anthropic",
+            display,
+            env_var,
+            normalized,
             role=role,
             model=model,
             probe=probe,
@@ -859,11 +852,11 @@ def _config_has(aliases: list[str]) -> bool:
 
 def _ollama_url_and_source() -> tuple[str, str]:
     """Resolve the Ollama server URL and a human label for where it came from."""
-    env_url = os.environ.get("TALKPIPE_OLLAMA_SERVER_URL")
+    env_url = os.environ.get(credentials.OLLAMA_URL_ENV)
     if env_url:
-        if credentials.source_for("TALKPIPE_OLLAMA_SERVER_URL") == "Vault settings":
+        if credentials.source_for(credentials.OLLAMA_URL_ENV) == "Vault settings":
             return env_url.rstrip("/"), "Vault settings"
-        return env_url.rstrip("/"), "TALKPIPE_OLLAMA_SERVER_URL env var"
+        return env_url.rstrip("/"), f"{credentials.OLLAMA_URL_ENV} env var"
     try:
         configured = get_config().get(OLLAMA_SERVER_URL)
     except Exception:  # pragma: no cover - defensive
@@ -915,6 +908,4 @@ def _model_present(model: str, names: list[str]) -> bool:
 
 def _mask(secret: str) -> str:
     """Mask a secret, revealing only the last few characters."""
-    if len(secret) <= 8:
-        return "****"
-    return f"…{secret[-4:]}"
+    return credentials.mask_secret(secret, short="****", prefix="…")

@@ -44,7 +44,7 @@ def test_set_values_persists_and_applies_to_env():
 
 def test_credentials_file_is_owner_only():
     credentials.set_values({"openai_api_key": "sk-live-123456"})
-    path = credentials._path()
+    path = credentials.store_path()
     mode = stat.S_IMODE(path.stat().st_mode)
     assert mode == 0o600
     # Secret is stored, but only in the protected file.
@@ -100,7 +100,7 @@ def test_describe_masks_secrets_and_exposes_urls():
 
 
 def test_load_ignores_unreadable_file(tmp_path, monkeypatch):
-    path = credentials._path()
+    path = credentials.store_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("not valid json {")
     assert credentials.load() == {}

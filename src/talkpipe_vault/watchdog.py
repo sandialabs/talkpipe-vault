@@ -67,13 +67,15 @@ def file_watcher(
     watch_path = path
     extracted_patterns = []
 
-    # Check if path contains glob characters
-    if any(char in path for char in ["*", "?", "[", "]"]):
+    def has_glob(text: str) -> bool:
+        return any(char in text for char in "*?[]")
+
+    if has_glob(path):
         path_obj = Path(path)
         # Find the first parent that doesn't contain glob characters
         for parent in [path_obj] + list(path_obj.parents):
             parent_str = str(parent)
-            if not any(char in parent_str for char in ["*", "?", "[", "]"]):
+            if not has_glob(parent_str):
                 watch_path = parent_str
                 # Extract the pattern portion
                 pattern = path[len(parent_str) :].lstrip(os.sep)
