@@ -227,3 +227,21 @@ class TestRunAppStartup:
         monkeypatch.setenv(access_control.VAULT_ROOT_ENV, str(root))
         with pytest.raises(ValueError, match="outside"):
             query.run_app(vault_path=str(tmp_path / "elsewhere"), open_browser=False)
+
+    def test_pipeline_failure_still_starts_server(self, tmp_path, monkeypatch, capsys):
+        """A vault whose embedder cannot load (e.g. model not cached and
+        Hugging Face unreachable) must degrade to a no-vault start, not keep
+        the server from coming up."""
+
+        def broken_init(path):
+            raise RuntimeError("model download failed")
+
+        served = {}
+        monkeypatch.setattr(query, "init_pipelines", broken_init)
+        monkeypatch.setattr(
+            query.uvicorn, "run", lambda *a, **k: served.update(started=True)
+        )
+        query.run_app(vault_path=str(tmp_path / "vault"), open_browser=False)
+        assert served.get("started")
+        assert query._state.vault_path == ""
+        assert "model download failed" in capsys.readouterr().err

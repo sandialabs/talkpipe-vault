@@ -2068,7 +2068,26 @@ def run_app(
     credentials.apply()
     load_saved_model_overrides()
     if vault_path:
-        init_pipelines(vault_path)
+        # Start degraded rather than not at all: an embedder that cannot load
+        # (e.g. the model is not cached and Hugging Face is unreachable) should
+        # not keep the whole server — and its diagnostics — from coming up.
+        # ValueError still propagates: it marks deliberate preflight failures
+        # (unsupported vault layout) whose message the caller shows the user.
+        try:
+            init_pipelines(vault_path)
+        except ValueError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - degrade to no-vault startup
+            print(
+                f"Warning: could not open vault at {vault_path}: {exc}\n"
+                "Starting without a vault - check Settings -> Configuration "
+                "status, then reopen the vault from the Vaults page.",
+                file=sys.stderr,
+            )
+            _state.vault_path = ""
+            _state.search_pipeline = None
+            _state.chat_pipeline = None
+            _state.keyword_search_pipeline = None
         user_settings.remember_vault(vault_path)
     if open_browser:
         _launch_browser_when_ready(host, port)

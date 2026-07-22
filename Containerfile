@@ -26,6 +26,7 @@ VOLUME ["/app/data"]
 COPY pyproject.toml README.md ./
 COPY .git/ ./.git/
 COPY src/ ./src/
+COPY --chmod=755 container/entrypoint.sh /usr/local/bin/vault-entrypoint
 
 # Install the package
 RUN pip install --no-cache-dir --upgrade pip && \
@@ -40,9 +41,13 @@ ENV VAULT_HOST=0.0.0.0
 ENV VAULT_PORT=8002
 # Persist web-interface settings (recent vaults, model choices) in the data volume
 ENV TALKPIPE_VAULT_HOME=/app/data/vault-home
-# Keep the Hugging Face model cache in the data volume so downloaded embedding
-# models survive container recreation (and can be pre-seeded for offline hosts)
+# Keep the Hugging Face model cache in the data volume so the embedding model
+# is downloaded once, on first use, and survives container recreation (run the
+# container with /app/data on a volume, as the documented commands do).
 ENV HF_HOME=/app/data/hf-cache
+# Cap per-file Hugging Face metadata checks (default 10s) so online mode
+# degrades to the cached model quickly when huggingface.co is slow.
+ENV HF_HUB_ETAG_TIMEOUT=5
 # Fence the web interface into container-appropriate paths: vaults may only
 # live in the persistent data volume, and only the mounted documents tree can
 # be browsed or indexed. Unset (empty) means unrestricted.
@@ -55,5 +60,6 @@ ENV PATH=/home/vault/.local/bin:$PATH
 # Expose port
 EXPOSE 8002
 
-# Run the web application
+# Auto-detect Hugging Face reachability, then run the web application
+ENTRYPOINT ["vault-entrypoint"]
 CMD ["vault-server", "/app/data/vault", "--host", "0.0.0.0", "--port", "8002", "--no-browser"]
