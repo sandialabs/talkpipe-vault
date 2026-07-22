@@ -215,6 +215,22 @@ class TestNonGlobPrefix:
         assert query._nonglob_prefix("**/*.md") == "."
 
 
+class TestVaultPathHint:
+    def test_suggests_home_path_when_unrestricted(self, client):
+        response = client.get("/vaults")
+        assert "~/my-vault" in response.text
+
+    def test_suggests_path_under_vault_root_when_fenced(
+        self, tmp_path, monkeypatch, client
+    ):
+        root = tmp_path / "data"
+        root.mkdir()
+        monkeypatch.setenv(access_control.VAULT_ROOT_ENV, str(root))
+        response = client.get("/vaults")
+        assert str(root.resolve() / "my-vault") in response.text
+        assert "~/my-vault" not in response.text
+
+
 class TestRunAppStartup:
     def test_missing_root_fails_loudly(self, tmp_path, monkeypatch):
         monkeypatch.setenv(access_control.VAULT_ROOT_ENV, str(tmp_path / "missing"))

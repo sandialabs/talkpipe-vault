@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - When commenting segments or sources, do not include the parameters in the code comment.
   Include a description of the data structure that it expects.
 - For sources and segments, parameters should be defined using the Annotated typing convention.
+- Commit messages must not include attribution to Claude (no "Co-Authored-By: Claude"
+  trailers or "Generated with Claude Code" lines).
 
 ## Project Overview
 
@@ -43,7 +45,8 @@ src/talkpipe_vault/
 
 ## The Web Application (primary user path)
 
-`vault-server [vault_path] [--host] [--port] [--show-source-paths]` — the vault path is
+`vault-server [vault_path] [--resume] [--host] [--port] [--show-source-paths]` —
+`--resume` opens the most recently used vault (fallback: vault_path); the vault path is
 optional; without it the UI starts on the Vaults page.
 
 Routes in `apps/query.py`:
@@ -154,7 +157,9 @@ podman run --rm -p 8002:8002 --userns=keep-id \
     talkpipe-vault
 ```
 
-Default CMD serves `/app/data/vault` on port 8002. Mount documents somewhere readable
+Default CMD runs `vault-server --resume` on port 8002 (no default vault): it
+reopens the vault last used in the web interface, starting on the Vaults page
+on the first run before any vault has been opened. Mount documents somewhere readable
 (e.g. `/documents`) and index them from the Add Documents page. Compose services (`vault`,
 `vault-dev`) exist in docker-compose.yml; with podman, install a compose provider
 (`pip install podman-compose`) and run `podman compose up -d`.

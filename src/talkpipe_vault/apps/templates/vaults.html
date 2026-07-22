@@ -12,7 +12,7 @@
     </p>
     <form method="post" action="/vaults/open" id="open-vault-form">
         <input type="text" name="new_vault_path" id="vault-path-input"
-               placeholder="No folder chosen yet &mdash; click Browse, or type a path like ~/my-vault"
+               placeholder="No folder chosen yet &mdash; click Browse, or type a path like {{ vault_example }}"
                value="" required autofocus>
         <button type="button" id="vault-browse-btn" class="btn-secondary">Browse&hellip;</button>
         <button type="submit" id="open-vault-btn">Open or Create</button>

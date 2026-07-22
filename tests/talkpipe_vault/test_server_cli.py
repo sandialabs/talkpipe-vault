@@ -5,7 +5,7 @@ import time
 
 import pytest
 
-from talkpipe_vault.apps import query, vault_server
+from talkpipe_vault.apps import query, user_settings, vault_server
 
 
 @pytest.mark.parametrize(
@@ -66,6 +66,52 @@ def test_vault_server_main_no_browser_flag_disables_open(monkeypatch):
     vault_server.main()
 
     assert calls["open_browser"] is False
+
+
+def test_resume_opens_most_recent_vault(tmp_path, monkeypatch):
+    monkeypatch.setenv(user_settings.VAULT_HOME_ENV, str(tmp_path / "home"))
+    recent = tmp_path / "recent-vault"
+    recent.mkdir()
+    user_settings.remember_vault(str(recent))
+    calls = {}
+    monkeypatch.setattr(vault_server, "run_app", lambda **k: calls.update(k))
+    monkeypatch.setattr(
+        "sys.argv",
+        ["vault-server", str(tmp_path / "default"), "--resume", "--no-browser"],
+    )
+
+    vault_server.main()
+
+    assert calls["vault_path"] == str(recent)
+
+
+def test_resume_skips_unusable_recents_and_falls_back(tmp_path, monkeypatch):
+    monkeypatch.setenv(user_settings.VAULT_HOME_ENV, str(tmp_path / "home"))
+    legacy = tmp_path / "legacy-vault"
+    (legacy / "vector_vault").mkdir(parents=True)
+    user_settings.remember_vault(str(tmp_path / "gone"))  # no longer exists
+    user_settings.remember_vault(str(legacy))  # unsupported layout
+    calls = {}
+    monkeypatch.setattr(vault_server, "run_app", lambda **k: calls.update(k))
+    default = tmp_path / "default"
+    monkeypatch.setattr(
+        "sys.argv", ["vault-server", str(default), "--resume", "--no-browser"]
+    )
+
+    vault_server.main()
+
+    assert calls["vault_path"] == str(default)
+
+
+def test_resume_without_path_or_recents_starts_unselected(tmp_path, monkeypatch):
+    monkeypatch.setenv(user_settings.VAULT_HOME_ENV, str(tmp_path / "home"))
+    calls = {}
+    monkeypatch.setattr(vault_server, "run_app", lambda **k: calls.update(k))
+    monkeypatch.setattr("sys.argv", ["vault-server", "--resume", "--no-browser"])
+
+    vault_server.main()
+
+    assert calls["vault_path"] == ""
 
 
 def test_launch_browser_opens_once_server_accepts(monkeypatch):

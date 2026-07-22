@@ -8,10 +8,33 @@ from pathlib import Path
 
 from talkpipe.util.config import configure_logger
 
+from talkpipe_vault.apps import access_control, user_settings
 from talkpipe_vault.apps.query import run_app
 from talkpipe_vault.pipelines.config import ensure_supported_vault_layout
 
 configure_logger("root:ERROR")
+
+
+def _most_recent_usable_vault() -> str:
+    """Return the most recently opened vault that is still usable.
+
+    Walks the recent-vault list recorded by the web interface, skipping entries
+    that no longer exist, fall outside the configured vault root, or have an
+    unsupported layout. Returns "" when none qualify.
+    """
+    root = access_control.vault_root()
+    for candidate in user_settings.get_recent_vaults():
+        path = Path(candidate).expanduser()
+        if not path.is_dir():
+            continue
+        if root is not None and not access_control.is_allowed(str(path), [root]):
+            continue
+        try:
+            ensure_supported_vault_layout(str(path))
+        except ValueError:
+            continue
+        return str(path)
+    return ""
 
 
 def main() -> None:
@@ -50,11 +73,24 @@ def main() -> None:
         action="store_true",
         help="Do not open the app in a web browser on startup.",
     )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help=(
+            "Open the most recently used vault (as recorded by the web "
+            "interface). Falls back to vault_path — or the vault manager "
+            "page — when no recent vault is usable."
+        ),
+    )
 
     args = parser.parse_args()
 
     vault_path = ""
-    if args.vault_path:
+    resumed = False
+    if args.resume:
+        vault_path = _most_recent_usable_vault()
+        resumed = bool(vault_path)
+    if not vault_path and args.vault_path:
         vault_path = str(Path(args.vault_path).expanduser())
         try:
             Path(vault_path).mkdir(parents=True, exist_ok=True)
@@ -66,7 +102,9 @@ def main() -> None:
     print("=" * 60)
     print("Starting TalkPipe Vault")
     print("=" * 60)
-    if vault_path:
+    if resumed:
+        print(f"Vault storage: {vault_path} (most recently used)")
+    elif vault_path:
         print(f"Vault storage: {vault_path}")
     else:
         print("Vault storage: none selected yet — create or choose a vault")

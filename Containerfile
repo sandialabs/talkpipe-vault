@@ -60,6 +60,8 @@ ENV PATH=/home/vault/.local/bin:$PATH
 # Expose port
 EXPOSE 8002
 
-# Auto-detect Hugging Face reachability, then run the web application
+# Auto-detect Hugging Face reachability, then run the web application.
+# --resume reopens the vault last used in the web interface; before any vault
+# has been opened, the UI starts on the Vaults page.
 ENTRYPOINT ["vault-entrypoint"]
-CMD ["vault-server", "/app/data/vault", "--host", "0.0.0.0", "--port", "8002", "--no-browser"]
+CMD ["vault-server", "--resume", "--host", "0.0.0.0", "--port", "8002", "--no-browser"]

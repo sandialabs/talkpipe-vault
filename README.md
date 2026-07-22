@@ -134,6 +134,52 @@ vault-server ~/my-vault --host 127.0.0.1 --port 8002
 
 To show file-path links in search results, add `--show-source-paths` (hidden by default).
 
+### Run in a Container (Podman)
+
+No local Python needed — run the published image instead:
+
+```bash
+podman run --rm -p 8002:8002 \
+  -v vault_data:/app/data \
+  -v ~/Documents:/documents:ro,Z \
+  -e TALKPIPE_OLLAMA_SERVER_URL=http://host.containers.internal:11434 \
+  ghcr.io/sandialabs/talkpipe-vault:latest
+```
+
+Then open http://127.0.0.1:8002 (use `127.0.0.1`, not `localhost` — rootless
+podman publishes ports IPv4-only, and `localhost` may resolve to `::1`).
+
+- `-v vault_data:/app/data` — persistent storage: vaults, settings, and the
+  embedding-model cache all live in this named volume, so the model is
+  downloaded once and survives container recreation.
+- On start the container reopens the vault you last used in the web interface
+  (`--resume`); on the first run — before any vault has been opened — it
+  starts on the Vaults page. Create vaults under `/app/data` (e.g.
+  `/app/data/my-vault`) so they live in the persistent volume.
+- `-v ~/Documents:/documents:ro,Z` — the folder picker browses the *container*
+  filesystem, so host documents are only visible through this read-only mount.
+  Mount whatever you want to index — `~` instead of `~/Documents` makes your
+  whole home directory browsable. `:Z` is needed on SELinux-enforcing Linux
+  hosts (e.g. Fedora) but must be dropped on macOS and Windows: there podman
+  runs containers in a Linux VM whose SELinux takes the flag literally and
+  tries to relabel every mounted file, failing on protected folders like
+  macOS's `~/.Trash`.
+- The `TALKPIPE_OLLAMA_SERVER_URL` line is **optional**: without it, search and
+  indexing still work and chat falls back to the built-in `eliza` responder.
+  Point it at the machine running Ollama — `host.containers.internal` when
+  Ollama runs on the container host, or a hostname/IP when it runs elsewhere.
+
+**Windows:** the same command works with [Podman Desktop /
+`podman machine`](https://podman.io/docs/installation#windows) (containers run
+in a WSL2 VM), with shell-syntax tweaks: in PowerShell replace the `\`
+line-continuations with backticks (`` ` ``) and write the documents path
+explicitly (`~` is not expanded for native commands) — e.g.
+`-v C:\Users\you\Documents:/documents:ro`. Docker Desktop users can substitute
+`docker run` with the same arguments.
+
+The repository's `docker-compose.yml` offers the same setup as a compose
+service (`podman compose up -d`), configured via `.env` (see `.env.example`).
+
 ### Experimental Directory Monitoring
 
 Directory monitoring is not the recommended production path yet. The installed package currently exposes only `vault-server` as a console script.
@@ -214,7 +260,7 @@ makevectordatabase "/path/to/documents/**/*.txt" \
 Launches the web interface. The vault path is optional; without it, create or choose a vault on the Vaults page.
 
 ```bash
-vault-server [~/my-vault] [--host 0.0.0.0] [--port 8002] [--show-source-paths] [--no-browser]
+vault-server [~/my-vault] [--resume] [--host 0.0.0.0] [--port 8002] [--show-source-paths] [--no-browser]
 ```
 
 The web interface provides:
@@ -225,7 +271,7 @@ The web interface provides:
 - **Keyword Search**: Full-text search when a Whoosh index is available
 - **Ask**: Single-turn Q&A that retrieves relevant context and generates AI responses
 
-`--show-source-paths` shows source file paths in search results and serves the files over HTTP; they are hidden by default. `--no-browser` skips opening the interface in a web browser on startup (useful for headless servers and services).
+`--show-source-paths` shows source file paths in search results and serves the files over HTTP; they are hidden by default. `--no-browser` skips opening the interface in a web browser on startup (useful for headless servers and services). `--resume` opens the vault most recently used in the web interface, falling back to the given vault path (or the Vaults page) when no recent vault is usable — this is how the container image starts.
 
 #### Python Module Entry Point
 

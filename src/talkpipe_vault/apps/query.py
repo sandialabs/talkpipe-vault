@@ -863,6 +863,11 @@ async def vaults_page(
     state: AppState = Depends(get_state),
 ) -> HTMLResponse:
     """Render the vault manager for creating or choosing a vault."""
+    # Suggest an example path the server will actually accept: with a vault
+    # root configured (e.g. in the container, where ~ is ephemeral and outside
+    # the fence), point under the root instead of the home directory.
+    root = access_control.vault_root()
+    vault_example = str(root / "my-vault") if root else "~/my-vault"
     return templates.TemplateResponse(
         request=request,
         name="vaults.html",
@@ -870,6 +875,7 @@ async def vaults_page(
             request,
             state,
             recent_vaults=user_settings.get_recent_vaults(),
+            vault_example=vault_example,
             flash_message=message,
             flash_error=error,
         ),
