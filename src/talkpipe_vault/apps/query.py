@@ -1459,7 +1459,9 @@ async def fulltext_index_status() -> JSONResponse:
 
 @app.get("/api/config-status")
 def config_status(
-    probe: bool = True, state: AppState = Depends(get_state)
+    probe: bool = True,
+    download: bool = False,
+    state: AppState = Depends(get_state),
 ) -> JSONResponse:
     """Verify the selected providers are reachable and their credentials set.
 
@@ -1467,11 +1469,18 @@ def config_status(
     tested. Defined as a sync endpoint so its blocking network probes run in a
     threadpool rather than on the event loop. Pass ``?probe=0`` to skip the
     live connectivity/credential calls and report only what is known locally.
+    Pass ``?download=1`` (the Re-test button) to also let an uncached
+    in-process embedding model be downloaded and exercised; the passive
+    page-load check never downloads.
     """
-    return JSONResponse(content=_collect_config_status(state, probe=probe))
+    return JSONResponse(
+        content=_collect_config_status(state, probe=probe, allow_download=download)
+    )
 
 
-def _collect_config_status(state: AppState, probe: bool = True) -> dict[str, Any]:
+def _collect_config_status(
+    state: AppState, probe: bool = True, allow_download: bool = False
+) -> dict[str, Any]:
     """Build the config-status report for the effective model selection."""
     vault_selected = bool(state.vault_path)
     vault_embedding = (
@@ -1484,6 +1493,7 @@ def _collect_config_status(state: AppState, probe: bool = True) -> dict[str, Any
         vault_selected=vault_selected,
         vault_embedding=vault_embedding,
         probe=probe,
+        allow_download=allow_download,
     )
 
 

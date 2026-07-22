@@ -277,15 +277,19 @@
         body.appendChild(list);
     }
 
-    function load() {
+    function load(allowDownload) {
         refreshBtn.disabled = true;
         body.textContent = '';
         const loading = el('div', 'search-loading');
         loading.appendChild(el('div', 'spinner'));
-        loading.appendChild(el('span', null, 'Testing configuration…'));
+        loading.appendChild(el('span', null, allowDownload
+            ? 'Testing configuration (may download an uncached embedding model)…'
+            : 'Testing configuration…'));
         body.appendChild(loading);
 
-        fetch('/api/config-status')
+        // Re-test may download an uncached embedding model; the passive
+        // page-load check never does.
+        fetch(allowDownload ? '/api/config-status?download=1' : '/api/config-status')
             .then(function (resp) {
                 if (!resp.ok) throw new Error('HTTP ' + resp.status);
                 return resp.json();
@@ -302,7 +306,7 @@
             });
     }
 
-    refreshBtn.addEventListener('click', load);
+    refreshBtn.addEventListener('click', function () { load(true); });
     load();
 })();
 </script>

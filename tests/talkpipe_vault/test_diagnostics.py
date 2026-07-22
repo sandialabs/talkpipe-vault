@@ -87,16 +87,70 @@ def test_model2vec_ready_but_embedding_fails_is_error(monkeypatch):
     assert "corrupt weights" in embeddings["detail"]
 
 
-def test_model2vec_absent_online_warns_about_firewall(monkeypatch):
+def test_model2vec_absent_online_is_warn_not_error(monkeypatch):
+    """An undownloaded model is not a failure: warn and point at Re-test."""
     monkeypatch.setattr(
         diagnostics, "_model2vec_cache_state", lambda model: ("absent", None)
     )
     report = diagnostics.collect_config_status(_models())
     embeddings = _find(report, "Embeddings provider")
     assert embeddings["status"] == "warn"
-    assert "not available in the local cache" in embeddings["summary"]
-    assert "firewall" in embeddings["summary"]
+    assert "has not been downloaded yet" in embeddings["summary"]
+    assert "Re-test" in embeddings["fix"]
     assert "HF_HUB_OFFLINE=1" in embeddings["fix"]
+
+
+def test_model2vec_absent_download_succeeds_turns_ok(monkeypatch):
+    monkeypatch.setattr(
+        diagnostics, "_model2vec_cache_state", lambda model: ("absent", None)
+    )
+    calls = {}
+
+    def fake_probe(role, key, model, timeout):
+        calls["timeout"] = timeout
+        return True, 512
+
+    monkeypatch.setattr(diagnostics, "_functional_probe", fake_probe)
+    report = diagnostics.collect_config_status(_models(), allow_download=True)
+    embeddings = _find(report, "Embeddings provider")
+    assert embeddings["status"] == "ok"
+    assert "downloaded" in embeddings["summary"]
+    assert calls["timeout"] == diagnostics.MODEL_DOWNLOAD_TIMEOUT
+
+
+def test_model2vec_absent_download_failure_is_error(monkeypatch):
+    monkeypatch.setattr(
+        diagnostics, "_model2vec_cache_state", lambda model: ("absent", None)
+    )
+    monkeypatch.setattr(
+        diagnostics,
+        "_functional_probe",
+        lambda role, key, model, timeout: (
+            False,
+            ConnectionError("no route to huggingface.co"),
+        ),
+    )
+    report = diagnostics.collect_config_status(_models(), allow_download=True)
+    embeddings = _find(report, "Embeddings provider")
+    assert embeddings["status"] == "error"
+    assert "could not be downloaded" in embeddings["summary"]
+    assert "no route to huggingface.co" in embeddings["detail"]
+
+
+def test_model2vec_absent_offline_never_attempts_download(monkeypatch):
+    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
+    monkeypatch.setattr(
+        diagnostics, "_model2vec_cache_state", lambda model: ("absent", None)
+    )
+
+    def fail_if_called(role, key, model, timeout):
+        raise AssertionError("download attempted despite offline mode")
+
+    monkeypatch.setattr(diagnostics, "_functional_probe", fail_if_called)
+    report = diagnostics.collect_config_status(_models(), allow_download=True)
+    embeddings = _find(report, "Embeddings provider")
+    assert embeddings["status"] == "error"
+    assert "offline mode is on" in embeddings["summary"]
 
 
 def test_model2vec_absent_offline_is_error(monkeypatch):

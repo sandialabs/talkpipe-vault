@@ -141,6 +141,26 @@ def test_config_status_endpoint_skips_probe(monkeypatch):
     assert chat["status"] == "unknown"
 
 
+def test_config_status_endpoint_passes_download_flag(monkeypatch):
+    """?download=1 (Re-test) must reach diagnostics as allow_download=True."""
+    from talkpipe_vault.pipelines import diagnostics
+
+    captured = {}
+
+    def fake_collect(models, **kwargs):
+        captured.update(kwargs)
+        return {"overall": "ok", "checks": []}
+
+    monkeypatch.setattr(diagnostics, "collect_config_status", fake_collect)
+    client = TestClient(query.app)
+
+    assert client.get("/api/config-status?download=1").status_code == 200
+    assert captured["allow_download"] is True
+
+    assert client.get("/api/config-status").status_code == 200
+    assert captured["allow_download"] is False
+
+
 def test_save_credentials_persists_and_applies(monkeypatch):
     """Posting credentials should store them and apply to the environment."""
     from talkpipe_vault.apps import credentials

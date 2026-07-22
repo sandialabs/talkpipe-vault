@@ -44,6 +44,10 @@ DEFAULT_PROBE_TIMEOUT = 3.0
 # than DEFAULT_PROBE_TIMEOUT (but never less than the caller's own timeout).
 FUNCTIONAL_PROBE_TIMEOUT = 20.0
 
+# An explicitly requested first-time model download is far slower again than
+# any probe; give it its own budget.
+MODEL_DOWNLOAD_TIMEOUT = 120.0
+
 # Short, harmless inputs used when actually exercising a provider.
 _PROBE_TEXT = "TalkPipe configuration self-test."
 _PROBE_PROMPT = "Reply with the single word: ok."
@@ -70,6 +74,7 @@ def collect_config_status(
     vault_embedding: dict[str, Any] | None = None,
     probe: bool = True,
     timeout: float = DEFAULT_PROBE_TIMEOUT,
+    allow_download: bool = False,
 ) -> dict[str, Any]:
     """Build the configuration status report for the effective selection.
 
@@ -85,6 +90,11 @@ def collect_config_status(
         probe: When True, make live connectivity/credential calls. When False,
             report only what can be determined without touching the network.
         timeout: Per-call network timeout, in seconds.
+        allow_download: When True, an uncached in-process embedding model
+            (model2vec) may be downloaded and exercised, rather than only
+            reported as not-yet-downloaded. Used by the explicit Re-test
+            action; passive page loads keep this False so opening Settings
+            never triggers a download.
 
     Returns:
         Dict with ``overall`` (worst status) and ``checks`` (list of rows).
@@ -97,6 +107,7 @@ def collect_config_status(
             "embedding_source",
             probe=probe,
             timeout=timeout,
+            allow_download=allow_download,
         ),
         _check_provider(
             "Chat (Ask)",
@@ -192,6 +203,7 @@ def _check_provider(
     *,
     probe: bool,
     timeout: float,
+    allow_download: bool = False,
 ) -> dict[str, Any]:
     """Check a single provider role (embeddings or chat)."""
     base: dict[str, Any] = {
@@ -203,7 +215,9 @@ def _check_provider(
     role = _role_for_setting(source_setting_key)
 
     if normalized == "model2vec":
-        return _check_model2vec(base, model, probe=probe, timeout=timeout)
+        return _check_model2vec(
+            base, model, probe=probe, timeout=timeout, allow_download=allow_download
+        )
 
     if normalized == "eliza":
         base["status"] = "ok"
@@ -491,7 +505,12 @@ def _is_auth_failure(package: str, exc: BaseException) -> bool:
 
 
 def _check_model2vec(
-    base: dict[str, Any], model: str, *, probe: bool, timeout: float
+    base: dict[str, Any],
+    model: str,
+    *,
+    probe: bool,
+    timeout: float,
+    allow_download: bool = False,
 ) -> dict[str, Any]:
     """Check that a model2vec model is available locally, then embed a test string.
 
@@ -509,6 +528,11 @@ def _check_model2vec(
     than loading the model (so opening Settings never triggers a download), and
     only once the model is known to be loadable — a local directory, or a ready
     cache entry — do we actually make a test embedding to confirm it works.
+
+    A model that simply has not been downloaded yet is not an error — nothing
+    has failed — so it reports as a warning. With ``allow_download`` (the
+    explicit Re-test action) the model is actually loaded, letting the first
+    download happen right there and turning the row green once it works.
     """
     if _is_local_model_dir(model):
         return _model2vec_finalize(
@@ -564,7 +588,7 @@ def _check_model2vec(
         base["summary"] = (
             f"Hugging Face offline mode is on, but model2vec model '{model}' "
             "cannot be loaded from the local cache, so indexing and search will "
-            "fail."
+            "fail. Re-test cannot download it while offline mode is on."
         )
         base["fix"] = (
             "Most reliable behind a firewall: download the model and point the "
@@ -573,16 +597,38 @@ def _check_model2vec(
         )
         return base
 
+    if allow_download:
+        ok, result = _functional_probe(
+            "embedding", "model2vec", model, MODEL_DOWNLOAD_TIMEOUT
+        )
+        if ok:
+            base["status"] = "ok"
+            base["summary"] = (
+                f"model2vec model '{model}' was downloaded from Hugging Face "
+                "and embedded a test string — ready to use, runs in-process."
+            )
+            return base
+        base["status"] = "error"
+        base["summary"] = (
+            f"model2vec model '{model}' could not be downloaded and loaded."
+        )
+        base["fix"] = (
+            "Check outbound access to huggingface.co and the model name. "
+            "Firewalled: point the embedding model at a local model directory, "
+            "or pre-cache it and start the app with HF_HUB_OFFLINE=1."
+        )
+        base["detail"] = _short_error(result)
+        return base
+
     base["status"] = "warn"
     base["summary"] = (
-        f"model2vec model '{model}' is not available in the local cache. It "
-        "downloads from Hugging Face on first index or search — which fails or "
-        "hangs behind a firewall."
+        f"model2vec model '{model}' has not been downloaded yet. It downloads "
+        "from Hugging Face automatically on first index or search."
     )
     base["fix"] = (
-        "Online: it downloads automatically (~30 MB). Firewalled: point the "
-        "embedding model at a local model directory, or pre-cache it and start "
-        "the app with HF_HUB_OFFLINE=1."
+        "Click Re-test to download it now and confirm it works. Firewalled: "
+        "point the embedding model at a local model directory, or pre-cache it "
+        "and start the app with HF_HUB_OFFLINE=1."
     )
     return base
 
