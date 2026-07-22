@@ -24,10 +24,12 @@ services:
       # Persist web-interface settings (recent vaults, model choices) in the data volume
       - TALKPIPE_VAULT_HOME=/app/data/vault-home
       - TALKPIPE_OLLAMA_SERVER_URL=${TALKPIPE_OLLAMA_SERVER_URL:-http://host.containers.internal:11434}
-      # Set to 1 (e.g. in .env) once the embedding model is cached: skips
-      # Hugging Face etag checks that hang startup and vault creation when
-      # huggingface.co is slow or unreachable (see .env.example).
-      - HF_HUB_OFFLINE=${HF_HUB_OFFLINE:-0}
+      # Hugging Face offline mode. Leave unset for auto-detection: the
+      # entrypoint probes huggingface.co at startup and switches to offline
+      # (cache-only) model loads when it is unreachable. The model downloads
+      # once, into the data volume. Set 1 in .env to force offline, 0 to
+      # force online (see .env.example).
+      - HF_HUB_OFFLINE=${HF_HUB_OFFLINE:-}
       # Path fences (defaults baked into the image); override in .env to
       # relax (empty = unrestricted) or move them.
       - TALKPIPE_VAULT_ROOT=${TALKPIPE_VAULT_ROOT-/app/data}
@@ -67,7 +69,9 @@ services:
       # Persist web-interface settings (recent vaults, model choices) in the data volume
       - TALKPIPE_VAULT_HOME=/app/data/vault-home
       - TALKPIPE_OLLAMA_SERVER_URL=${TALKPIPE_OLLAMA_SERVER_URL:-http://host.containers.internal:11434}
-      - HF_HUB_OFFLINE=${HF_HUB_OFFLINE:-0}
+      # No auto-detection here: vault-dev overrides the entrypoint, so set
+      # HF_HUB_OFFLINE explicitly in .env when huggingface.co is unreachable.
+      - HF_HUB_OFFLINE=${HF_HUB_OFFLINE:-}
       - TALKPIPE_VAULT_ROOT=${TALKPIPE_VAULT_ROOT-/app/data}
       - TALKPIPE_DOCUMENT_ROOTS=${TALKPIPE_DOCUMENT_ROOTS-/documents}
       - PYTHONUNBUFFERED=1

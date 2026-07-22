@@ -166,14 +166,18 @@ Podman notes:
 - The compose services mount `$VAULT_DOCUMENTS_DIR` (default `~/Documents`)
   read-only at `/documents` — the folder picker browses the *container*
   filesystem, so host files are only visible through this mount.
-- If huggingface.co is slow/unreachable, startup and vault creation hang on
-  model etag checks even with a cached model; set `HF_HUB_OFFLINE=1` in `.env`
-  once the model is in the data volume (this host's `.env` already does).
-- The image sets `HF_HOME=/app/data/hf-cache`, so the embedding model downloaded on
-  first start persists in the data volume across container recreations. On an
-  offline host, pre-seed `<volume>/hf-cache/hub/` from a machine that has
-  `~/.cache/huggingface/hub/models--minishlab--potion-retrieval-32M`
-  (`podman unshare cp -r ... && podman unshare chown -R 1000:1000 ...`).
+- The image sets `HF_HOME=/app/data/hf-cache`, so the embedding model is
+  downloaded once, on first use, into the data volume and survives container
+  recreation — keep `/app/data` on a volume (`-v <host-data-dir>:/app/data`,
+  as the command above and the compose services do) or the model is
+  re-downloaded every recreation.
+- `container/entrypoint.sh` probes huggingface.co at startup when
+  `HF_HUB_OFFLINE` is unset and switches to offline (cache-only) model loads
+  if it is unreachable, so nothing hangs on connection timeouts; set
+  `HF_HUB_OFFLINE=1`/`0` in `.env` to force a mode. If the model cannot be
+  loaded at all (unreachable and not yet cached), the server still starts —
+  without a vault, with a warning on stderr and diagnostics on the Settings
+  page — and downloads the model once it starts with connectivity again.
 
 ## CI/CD
 
