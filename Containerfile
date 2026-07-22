@@ -17,7 +17,7 @@ WORKDIR /app
 
 # Create application data directory and the documents mountpoint (empty
 # unless a host folder is mounted over it)
-RUN mkdir -p /app/data/vault /documents && chown -R vault:vault /app/data
+RUN mkdir -p /app/data /documents && chown -R vault:vault /app/data
 
 # Define volumes
 VOLUME ["/app/data"]
