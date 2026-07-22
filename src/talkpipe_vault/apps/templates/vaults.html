@@ -17,6 +17,11 @@
         <button type="button" id="vault-browse-btn" class="btn-secondary">Browse&hellip;</button>
         <button type="submit" id="open-vault-btn">Open or Create</button>
     </form>
+    <div id="vault-open-progress" class="search-loading" style="display: none">
+        <div class="spinner"></div>
+        <span>Opening vault&hellip; first use may download the embedding model,
+              which can take a few minutes.</span>
+    </div>
 </div>
 
 <div class="search-box">
@@ -84,6 +89,18 @@
             if (!ok) {
                 event.preventDefault();
             }
+        });
+    });
+
+    // Opening a vault can block on first-time setup (e.g. downloading the
+    // embedding model), so show progress and stop double submits while the
+    // browser waits for the redirect.
+    document.querySelectorAll('form[action="/vaults/open"]').forEach(function (form) {
+        form.addEventListener('submit', function () {
+            document.getElementById('vault-open-progress').style.display = '';
+            document.querySelectorAll(
+                'form[action="/vaults/open"] button[type="submit"]'
+            ).forEach(function (btn) { btn.disabled = true; });
         });
     });
 </script>

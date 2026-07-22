@@ -329,6 +329,14 @@ class TestVaultDeletion:
         assert 'action="/vaults/delete"' in response.text
         assert "This cannot be undone" in response.text
 
+    def test_vaults_page_has_open_progress_indicator(self, client):
+        """Opening a vault can block on a first-time model download, so the
+        page must carry the progress element the submit handler reveals."""
+        response = client.get("/vaults")
+
+        assert 'id="vault-open-progress"' in response.text
+        assert "may download the embedding model" in response.text
+
 
 class TestDirectoryPicker:
     """Tests for the folder-picker dialog and its listing endpoint."""

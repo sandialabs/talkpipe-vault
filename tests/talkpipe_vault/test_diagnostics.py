@@ -402,12 +402,32 @@ def test_embedding_match_row_error_on_mismatch():
 
 
 def test_embedding_match_row_unknown_for_legacy_vault():
+    """Documents present but no record: a real legacy vault, can't be checked."""
     report = diagnostics.collect_config_status(
-        _models(), vault_selected=True, vault_embedding=None, probe=False
+        _models(),
+        vault_selected=True,
+        vault_embedding=None,
+        vault_indexed=True,
+        probe=False,
     )
     match = _find(report, "Embedding ↔ index")
     assert match["status"] == "unknown"
     assert "no recorded embedding configuration" in match["summary"]
+
+
+def test_embedding_match_row_ok_for_new_empty_vault():
+    """No record and no documents: nothing has happened yet, not a legacy vault."""
+    report = diagnostics.collect_config_status(
+        _models(),
+        vault_selected=True,
+        vault_embedding=None,
+        vault_indexed=False,
+        probe=False,
+    )
+    match = _find(report, "Embedding ↔ index")
+    assert match["status"] == "ok"
+    assert "No documents have been indexed" in match["summary"]
+    assert "recorded when documents are first indexed" in match["summary"]
 
 
 def test_api_key_provenance_shows_vault_settings(monkeypatch):

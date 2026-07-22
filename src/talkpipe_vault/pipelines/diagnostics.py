@@ -72,6 +72,7 @@ def collect_config_status(
     *,
     vault_selected: bool = False,
     vault_embedding: dict[str, Any] | None = None,
+    vault_indexed: bool = True,
     probe: bool = True,
     timeout: float = DEFAULT_PROBE_TIMEOUT,
     allow_download: bool = False,
@@ -87,6 +88,10 @@ def collect_config_status(
         vault_embedding: The open vault's recorded embedding config
             (``source``/``model``/``dimension``), or None for a legacy vault that
             has no record. Only consulted when ``vault_selected`` is True.
+        vault_indexed: Whether the open vault contains any indexed documents.
+            Distinguishes a new, never-indexed vault (no record is expected)
+            from a legacy vault whose index predates the record. Only
+            consulted when ``vault_selected`` is True.
         probe: When True, make live connectivity/credential calls. When False,
             report only what can be determined without touching the network.
         timeout: Per-call network timeout, in seconds.
@@ -119,19 +124,24 @@ def collect_config_status(
         ),
     ]
     if vault_selected:
-        checks.append(_check_embedding_index_match(models, vault_embedding))
+        checks.append(
+            _check_embedding_index_match(models, vault_embedding, vault_indexed)
+        )
     return {"overall": _rollup(checks), "checks": checks}
 
 
 def _check_embedding_index_match(
-    models: dict[str, Any], recorded: dict[str, Any] | None
+    models: dict[str, Any], recorded: dict[str, Any] | None, vault_indexed: bool = True
 ) -> dict[str, Any]:
     """Compare the current embedder with the one the open vault was indexed with.
 
     Semantic search only works when the query is embedded with the same model
     that embedded the documents, so a mismatch is a genuine configuration error.
-    A legacy vault with no record can't be checked, so we say so rather than
-    guess — the current embedder is left in place either way.
+    No record can mean two very different things: a vault with no documents yet
+    has simply not recorded anything (fine — the record is written on first
+    index), while a vault that *has* documents but no record is a legacy vault
+    that can't be checked, so we say so rather than guess. The current embedder
+    is left in place either way.
     """
     current_source = (models.get("embedding_source") or "").strip()
     current_model = (models.get("embedding_model") or "").strip()
@@ -141,6 +151,14 @@ def _check_embedding_index_match(
     }
 
     if not recorded:
+        if not vault_indexed:
+            base["status"] = "ok"
+            base["summary"] = (
+                "No documents have been indexed into this vault yet, so there "
+                "is nothing to compare. The embedding configuration is "
+                "recorded when documents are first indexed."
+            )
+            return base
         base["status"] = "unknown"
         base["summary"] = (
             "This vault has no recorded embedding configuration (it was indexed "

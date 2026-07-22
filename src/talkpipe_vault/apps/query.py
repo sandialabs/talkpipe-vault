@@ -1492,9 +1492,27 @@ def _collect_config_status(
         _effective_models(state),
         vault_selected=vault_selected,
         vault_embedding=vault_embedding,
+        vault_indexed=vault_selected and _vault_has_documents(state.vault_path),
         probe=probe,
         allow_download=allow_download,
     )
+
+
+def _vault_has_documents(vault_path: str) -> bool:
+    """True when the vault's docs table exists and holds at least one chunk.
+
+    Any failure to read the table (no table yet, unreadable vault) counts as
+    "no documents": for the embedding↔index diagnostic that is the state where
+    no recorded config should be expected.
+    """
+    try:
+        doc_store = LanceDBDocumentStore(
+            path=get_vector_db_path(vault_path),
+            table_name=DEFAULT_VECTOR_TABLE_NAME,
+        )
+        return doc_store.count() > 0
+    except Exception:
+        return False
 
 
 @app.post("/documents/index", response_class=HTMLResponse)
