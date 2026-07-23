@@ -176,6 +176,11 @@ export OPENAI_API_KEY="sk-your-key-here"
 - **eliza** (chat only, built-in): a rule-based responder needing no server
   or key — useful for smoke-testing the Ask page before a real chat provider
   is configured. It does not use the retrieved context.
+- **Plugins**: the Settings dropdowns are populated from TalkPipe's provider
+  registry, so a TalkPipe plugin that registers an additional embedding or
+  chat provider appears there automatically once installed. See
+  [Deriving a customized image](#deriving-a-customized-image) for installing
+  plugin packages in the container.
 
 ### Overriding in code
 

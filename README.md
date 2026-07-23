@@ -29,10 +29,10 @@ three ways:
 - **Ask** — single-turn Q&A with answers grounded in your documents
 
 Everything runs locally by default. The built-in embedding model (model2vec)
-runs in-process with no server or API key; for generated answers you can point
-it at a local [Ollama](https://ollama.com/) server or a cloud provider
-(OpenAI, Anthropic) — your documents are only ever sent to the provider you
-choose.
+runs in-process with no server or API key; generated answers can come from
+any LLM provider TalkPipe supports — a local [Ollama](https://ollama.com/)
+server, OpenAI, Anthropic — and TalkPipe plugins can add others. Your
+documents are only ever sent to the provider you choose.
 
 It is built on the [TalkPipe](https://github.com/sandialabs/talkpipe)
 pipeline framework and doubles as a real-world example of composing document
@@ -64,11 +64,12 @@ Open http://127.0.0.1:8002, then:
    cached afterward).
 3. **Search** and **Ask** away.
 
-Answers on the Ask page need a chat model: point the app at an Ollama server
-under **Settings → Connections & credentials** (or set
-`TALKPIPE_OLLAMA_SERVER_URL`), or configure OpenAI/Anthropic there. With no
-chat provider at all, Ask falls back to a built-in scripted responder
-(eliza) that is only useful for checking that the plumbing works.
+Answers on the Ask page need a chat provider — any one that TalkPipe
+supports. Pick it on the **Settings** page: a local Ollama server (the
+default setting; enter its URL under **Connections & credentials**), or
+OpenAI or Anthropic (enter an API key there — no environment variables
+needed). With no chat provider at all, Ask falls back to a built-in scripted
+responder (eliza) that is only useful for checking that the plumbing works.
 
 ### Option 2: Container (Podman or Docker)
 
@@ -95,8 +96,10 @@ What each piece does:
   home directory. Keep `:Z` on SELinux Linux hosts (e.g. Fedora); **drop it
   on macOS and Windows**, where it makes podman try to relabel every mounted
   file.
-- The `TALKPIPE_OLLAMA_SERVER_URL` line is **optional** — without it, search
-  and indexing still work and Ask falls back to the scripted responder.
+- The `TALKPIPE_OLLAMA_SERVER_URL` line is **optional** and only matters if
+  you use the default Ollama chat setting — drop it if you configure OpenAI
+  or Anthropic in the browser instead. Without any provider, search and
+  indexing still work and Ask falls back to the scripted responder.
 
 **macOS/Windows notes:** containers run inside the podman machine VM
 (Podman Desktop sets this up). In PowerShell, replace the `\` line
@@ -136,10 +139,13 @@ A compose service and instructions for deriving your own customized image
 ## Configuring models
 
 The Settings page is the primary way to configure models; choices persist
-and apply immediately. Defaults: embeddings run in-process via
-model2vec (`minishlab/potion-retrieval-32M`), chat uses `ollama` /
-`mistral-small`. OpenAI and Anthropic are supported via API keys entered in
-the browser.
+and apply immediately. The defaults are just starting points — embeddings:
+`model2vec` / `minishlab/potion-retrieval-32M` (in-process, no key or
+server); chat: `ollama` / `mistral-small` — and both dropdowns list every
+provider registered with TalkPipe: model2vec, Ollama, OpenAI, and Anthropic
+out of the box, plus any provider added by an installed TalkPipe plugin,
+which appears there automatically. API keys are entered in the browser, not
+the environment.
 
 One behavior worth knowing: the embedding model is a property of the indexed
 data — embeddings are only comparable to queries embedded by the same model —
