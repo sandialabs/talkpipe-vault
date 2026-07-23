@@ -48,6 +48,10 @@ ENV HF_HOME=/app/data/hf-cache
 # Cap per-file Hugging Face metadata checks (default 10s) so online mode
 # degrades to the cached model quickly when huggingface.co is slow.
 ENV HF_HUB_ETAG_TIMEOUT=5
+# Cap glibc malloc arenas: LanceDB's multithreaded writer otherwise strands
+# freed memory across per-thread arenas, so long ingestions grow RSS without
+# bound and OOM-kill the container (see talkpipe_vault/memtune.py).
+ENV MALLOC_ARENA_MAX=2
 # Fence the web interface into container-appropriate paths: vaults may only
 # live in the persistent data volume, and only the mounted documents tree can
 # be browsed or indexed. Unset (empty) means unrestricted.

@@ -8,6 +8,7 @@ from pathlib import Path
 
 from talkpipe.util.config import configure_logger
 
+from talkpipe_vault import memtune
 from talkpipe_vault.apps import access_control, user_settings
 from talkpipe_vault.apps.query import run_app
 from talkpipe_vault.pipelines.config import ensure_supported_vault_layout
@@ -38,6 +39,9 @@ def _most_recent_usable_vault() -> str:
 
 def main() -> None:
     """CLI entry point for running the web interface only."""
+    # Before any worker threads exist: keep LanceDB ingestion memory flat
+    # (see talkpipe_vault.memtune).
+    memtune.limit_malloc_arenas()
     parser = argparse.ArgumentParser(
         description="Run the TalkPipe Vault web interface for searching and chat"
     )
