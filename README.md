@@ -177,6 +177,19 @@ explicitly (`~` is not expanded for native commands) — e.g.
 `-v C:\Users\you\Documents:/documents:ro`. Docker Desktop users can substitute
 `docker run` with the same arguments.
 
+**VM memory (macOS/Windows):** on these platforms containers run inside the
+podman machine VM, whose default allocation (often 2 GB) is enough to run the
+vault but tight for indexing large document collections — a big ingestion
+peaks around 1.5–2 GB, and an over-limit kill is silent (`exit code 137`;
+`podman inspect` shows `oom=true`). Before indexing thousands of documents,
+give the VM more room:
+
+```bash
+podman machine stop
+podman machine set --memory 4096    # MiB; use 8192 for very large collections
+podman machine start
+```
+
 The repository's `docker-compose.yml` offers the same setup as a compose
 service (`podman compose up -d`), configured via `.env` (see `.env.example`).
 
