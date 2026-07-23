@@ -12,6 +12,7 @@ def isolated_app(tmp_path, monkeypatch):
     monkeypatch.setenv(user_settings.VAULT_HOME_ENV, str(tmp_path / "vault-home"))
     with query._index_job_lock:
         query._index_job.running = False
+        query._index_job.phase = ""
         query._index_job.source = ""
         query._index_job.vault_path = ""
         query._index_job.embedding = ""
@@ -564,6 +565,19 @@ class TestDocumentIndexing:
         assert response.status_code == 303
         assert "matched+no+files" in response.headers["location"]
 
+    def test_index_reports_empty_folder_via_job_status(self, client, tmp_path):
+        """A folder that exists but matches no files errors from the job."""
+        empty = tmp_path / "empty"
+        empty.mkdir()
+        client.post("/vaults/open", data={"new_vault_path": str(tmp_path / "v")})
+
+        response = client.post("/documents/index", data={"source_path": str(empty)})
+
+        assert response.status_code == 303
+        assert "Indexing+started" in response.headers["location"]
+        status = self._wait_for_index_job(client)
+        assert "matched no files" in status["error"]
+
     def test_resolve_source_pattern_expands_directories(self, tmp_path):
         subdir = tmp_path / "docs"
         subdir.mkdir()
@@ -651,6 +665,7 @@ class TestDocumentIndexing:
 
         running = client.get("/api/index-status").json()
         assert running["running"] is True
+        assert running["phase"] == "indexing"
         assert running["chunks"] == 3
         assert running["files_done"] == 1
         assert running["current_file"] == "a.txt"

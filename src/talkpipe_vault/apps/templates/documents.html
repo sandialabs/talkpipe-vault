@@ -86,6 +86,7 @@
 
     (function () {
         const panel = document.getElementById('index-progress');
+        const title = document.getElementById('progress-title');
         const fill = document.getElementById('progress-fill');
         const text = document.getElementById('progress-text');
         const indexBtn = document.getElementById('index-btn');
@@ -94,6 +95,15 @@
         function render(status) {
             panel.style.display = 'block';
             indexBtn.disabled = true;
+            if (status.phase === 'counting') {
+                title.textContent = 'Counting documents…';
+                fill.classList.add('indeterminate');
+                text.textContent = status.total_files > 0
+                    ? status.total_files + ' file(s) found so far'
+                    : 'Scanning the source folder for files to index';
+                return;
+            }
+            title.textContent = 'Indexing documents…';
             const embedder = status.embedding ? ' via ' + status.embedding : '';
             if (status.total_files > 0) {
                 const done = Math.min(status.files_done, status.total_files);

@@ -1194,6 +1194,7 @@ class IndexJob:
     """Progress of the (single) background document-indexing job."""
 
     running: bool = False
+    phase: str = ""  # "counting" while the source walk runs, then "indexing"
     source: str = ""
     vault_path: str = ""
     embedding: str = ""
@@ -1225,7 +1226,12 @@ def _run_index_job(
     shingle_overlap: int,
     overwrite: bool,
 ) -> None:
-    """Thread target: run one indexing job, publishing progress as it goes."""
+    """Thread target: run one indexing job, publishing progress as it goes.
+
+    Starts with a counting pass over the source tree (published as phase
+    "counting" with a live file count) so large trees show activity instead
+    of appearing hung, then switches to phase "indexing" for the embed run.
+    """
 
     def report(chunks: int, files_done: int, current: str) -> None:
         with _index_job_lock:
@@ -1234,6 +1240,24 @@ def _run_index_job(
             _index_job.current_file = Path(current).name if current else ""
 
     try:
+        any_match = False
+        total_files = 0
+        for matched in globlib.iglob(pattern, recursive=True):
+            any_match = True
+            if os.path.isfile(matched):
+                total_files += 1
+                with _index_job_lock:
+                    _index_job.total_files = total_files
+        if not any_match:
+            with _index_job_lock:
+                _index_job.error = (
+                    f"'{source}' matched no files. Check the folder path "
+                    "or glob pattern."
+                )
+            return
+        with _index_job_lock:
+            _index_job.phase = "indexing"
+
         chunk_count, skipped = index_documents_into_vault(
             vault_path=vault_path,
             source_pattern=pattern,
@@ -1277,7 +1301,6 @@ def start_index_job(
     vault_path: str,
     source: str,
     pattern: str,
-    total_files: int,
     embedding_model: str,
     embedding_source: str,
     chunk_size: int,
@@ -1293,10 +1316,10 @@ def start_index_job(
         # A fresh instance resets every other field to its dataclass default.
         _index_job = IndexJob(
             running=True,
+            phase="counting",
             source=source,
             vault_path=vault_path,
             embedding=f"{embedding_source}/{embedding_model}",
-            total_files=total_files,
         )
 
     thread = threading.Thread(
@@ -1504,15 +1527,11 @@ async def index_documents(
             error="Indexing on this server is limited to documents under "
             f"{access_control.describe(doc_roots)}.",
         )
-    # One walk of the source tree serves both the any-match check and the
-    # job's file count.
-    any_match = False
-    total_files = 0
-    for matched in globlib.iglob(pattern, recursive=True):
-        any_match = True
-        if os.path.isfile(matched):
-            total_files += 1
-    if not any_match:
+    # Only a cheap existence check here so typos fail fast; the full source
+    # walk (file count + no-match check) runs in the background job, since
+    # walking a large tree in this handler would block the event loop and
+    # leave the browser hanging on the form submit with no feedback.
+    if not os.path.exists(_nonglob_prefix(pattern)):
         return _redirect_with_message(
             "/documents",
             error=(
@@ -1526,7 +1545,6 @@ async def index_documents(
         vault_path=state.vault_path,
         source=source_path.strip(),
         pattern=pattern,
-        total_files=total_files,
         embedding_model=models["embedding_model"],
         embedding_source=models["embedding_source"],
         chunk_size=models["chunk_size"],
