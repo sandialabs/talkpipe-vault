@@ -106,8 +106,10 @@ def test_model2vec_absent_download_succeeds_turns_ok(monkeypatch):
     )
     calls = {}
 
+    # Keyed by provider: with a live local Ollama, the chat check also probes,
+    # and must not clobber the embedding probe's recorded timeout.
     def fake_probe(role, key, model, timeout):
-        calls["timeout"] = timeout
+        calls[key] = timeout
         return True, 512
 
     monkeypatch.setattr(diagnostics, "_functional_probe", fake_probe)
@@ -115,7 +117,7 @@ def test_model2vec_absent_download_succeeds_turns_ok(monkeypatch):
     embeddings = _find(report, "Embeddings provider")
     assert embeddings["status"] == "ok"
     assert "downloaded" in embeddings["summary"]
-    assert calls["timeout"] == diagnostics.MODEL_DOWNLOAD_TIMEOUT
+    assert calls["model2vec"] == diagnostics.MODEL_DOWNLOAD_TIMEOUT
 
 
 def test_model2vec_absent_download_failure_is_error(monkeypatch):
@@ -143,8 +145,12 @@ def test_model2vec_absent_offline_never_attempts_download(monkeypatch):
         diagnostics, "_model2vec_cache_state", lambda model: ("absent", None)
     )
 
+    # Only the model2vec probe is forbidden: with a live local Ollama, the
+    # chat check legitimately probes too.
     def fail_if_called(role, key, model, timeout):
-        raise AssertionError("download attempted despite offline mode")
+        if key == "model2vec":
+            raise AssertionError("download attempted despite offline mode")
+        return True, "ok"
 
     monkeypatch.setattr(diagnostics, "_functional_probe", fail_if_called)
     report = diagnostics.collect_config_status(_models(), allow_download=True)
