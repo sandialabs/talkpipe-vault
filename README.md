@@ -180,6 +180,51 @@ explicitly (`~` is not expanded for native commands) — e.g.
 The repository's `docker-compose.yml` offers the same setup as a compose
 service (`podman compose up -d`), configured via `.env` (see `.env.example`).
 
+#### Deriving a customized image
+
+To ship different default models and extra Python packages, build a small
+image on top of this one — the entrypoint, port, volumes, and path fences are
+all inherited, so nothing else needs to be repeated:
+
+```dockerfile
+# Containerfile.custom
+FROM ghcr.io/sandialabs/talkpipe-vault:latest
+
+# Extra Python packages (e.g. a TalkPipe plugin or provider SDK). The base
+# image runs as user "vault", so switch to root to install system-wide.
+USER root
+RUN pip install --no-cache-dir your-extra-package
+USER vault
+
+# Different default sources/models for embeddings and chat. TalkPipe reads
+# these at the configuration level, so they replace the built-in defaults
+# (model2vec / ollama+mistral-small) but choices saved on the web Settings
+# page still take precedence.
+ENV TALKPIPE_EMBEDDING_SOURCE=ollama
+ENV TALKPIPE_EMBEDDING_MODEL=nomic-embed-text
+ENV TALKPIPE_CHAT_SOURCE=ollama
+ENV TALKPIPE_CHAT_MODEL=llama3.1
+```
+
+Build and run it exactly like the base image:
+
+```bash
+podman build -t my-talkpipe-vault -f Containerfile.custom .
+podman run --rm -p 8002:8002 -v vault_data:/app/data \
+  -v ~/Documents:/documents:ro \
+  -e TALKPIPE_OLLAMA_SERVER_URL=http://host.containers.internal:11434 \
+  my-talkpipe-vault
+```
+
+Two things to keep in mind:
+
+- Ollama-backed sources still need `TALKPIPE_OLLAMA_SERVER_URL` at run time,
+  as shown above.
+- The embedding default applies to vaults you index from now on. A vault that
+  was already indexed reopens with the embedder recorded in its
+  `vault_metadata.json` regardless of the new default — embeddings are only
+  comparable to queries embedded by the same model.
+
 ### Experimental Directory Monitoring
 
 Directory monitoring is not the recommended production path yet. The installed package currently exposes only `vault-server` as a console script.
