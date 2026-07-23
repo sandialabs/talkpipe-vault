@@ -22,6 +22,7 @@ import time
 import urllib.parse
 import uuid
 import webbrowser
+from collections.abc import Iterator
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Annotated, Any, Callable
@@ -618,8 +619,13 @@ def _extract_document_record(row: dict[str, Any]) -> dict[str, Any]:
     return normalize_document_cell(row.get("document", {}))
 
 
-def _load_docs_rows(vault_path: str) -> list[dict[str, Any]]:
-    """Load rows from the vault's TalkPipe docs table."""
+def _load_docs_rows(vault_path: str) -> Iterator[dict[str, Any]]:
+    """Stream id/document rows from the vault's TalkPipe docs table.
+
+    Reads column-pruned batches instead of materializing the table:
+    ``to_arrow()`` holds every row's embedding vector in memory at once —
+    gigabytes on a large vault — and no caller needs the vectors.
+    """
     ensure_supported_vault_layout(vault_path)
     vectordb_path = get_vector_db_path(vault_path)
     doc_store = LanceDBDocumentStore(
@@ -627,10 +633,18 @@ def _load_docs_rows(vault_path: str) -> list[dict[str, Any]]:
         table_name=DEFAULT_VECTOR_TABLE_NAME,
     )
     table, _ = doc_store._get_table()
+    if hasattr(table, "search"):
+        query = table.search(None).select(["id", "document"]).limit(None)
+        for batch in query.to_batches():
+            yield from batch.to_pylist()
+        return
+    # Fallback for table objects without the query API (e.g. test doubles).
     if hasattr(table, "to_arrow"):
-        return table.to_arrow().to_pylist()
+        yield from table.to_arrow().to_pylist()
+        return
     if hasattr(table, "to_pandas"):
-        return table.to_pandas().to_dict(orient="records")
+        yield from table.to_pandas().to_dict(orient="records")
+        return
     raise RuntimeError(
         "Unsupported LanceDB table reader: expected to_arrow() or to_pandas()."
     )
