@@ -1190,3 +1190,17 @@ def test_config_status_reports_embedding_mismatch(tmp_path, monkeypatch):
     match = next(c for c in body["checks"] if c["name"] == "Embedding ↔ index")
     assert match["status"] == "error"
     assert "text-embedding-3-large" in match["summary"]
+
+
+def test_documents_page_sends_finished_index_job_to_home():
+    """A successful indexing job should land on Home; a failed one stays here."""
+    client = TestClient(query.app)
+
+    response = client.get("/documents")
+
+    assert response.status_code == 200
+    body = response.text
+    # Success: redirect to Home carrying the flash message.
+    assert "window.location = '/' + (params.toString() ? '?' + params : '')" in body
+    # Failure: reload the Documents page so the error sits next to the form.
+    assert "window.location = '/documents?' + params" in body

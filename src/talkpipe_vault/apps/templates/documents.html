@@ -136,14 +136,19 @@
                 render(status);
                 setTimeout(poll, 800);
             } else if (sawRunningJob) {
-                // The job we were watching finished: reload with its outcome.
+                // The job we were watching finished. On success, land on Home so
+                // the next steps (search, chat) are in view; on failure, stay
+                // here so the error sits next to the form to retry.
                 const params = new URLSearchParams();
                 if (status.error) {
                     params.set('error', status.error);
-                } else if (status.message) {
+                    window.location = '/documents?' + params;
+                    return;
+                }
+                if (status.message) {
                     params.set('message', status.message);
                 }
-                window.location = '/documents' + (params.toString() ? '?' + params : '');
+                window.location = '/' + (params.toString() ? '?' + params : '');
             } else {
                 panel.style.display = 'none';
             }
