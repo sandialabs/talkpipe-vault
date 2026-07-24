@@ -55,6 +55,7 @@ from talkpipe_vault.pipelines import diagnostics, vault_metadata
 from talkpipe_vault.pipelines.config import (
     DEFAULT_VECTOR_TABLE_NAME,
     FULLTEXT_VAULT_SUBDIR,
+    VECTOR_VAULT_SUBDIR,
     ensure_supported_vault_layout,
     get_chat_model,
     get_chat_source,
@@ -842,11 +843,33 @@ async def home(
     )
 
 
+def _existing_non_vault_entries(vault_path: Path) -> int:
+    """Return how many entries an existing folder holds if it has no vault data.
+
+    Zero means the folder is missing, empty, or already contains vault data
+    (docs table, vault metadata, full-text index, or the rejected legacy
+    layout) — i.e. opening it as a vault touches nothing that isn't ours, or
+    fails with the proper migration guidance.
+    """
+    if not vault_path.is_dir():
+        return 0
+    vault_markers = (
+        f"{DEFAULT_VECTOR_TABLE_NAME}.lance",
+        vault_metadata.METADATA_FILENAME,
+        FULLTEXT_VAULT_SUBDIR,
+        VECTOR_VAULT_SUBDIR,
+    )
+    if any((vault_path / marker).exists() for marker in vault_markers):
+        return 0
+    return sum(1 for _ in vault_path.iterdir())
+
+
 @app.get("/vaults", response_class=HTMLResponse)
 async def vaults_page(
     request: Request,
     message: str | None = None,
     error: str | None = None,
+    confirm_path: str | None = None,
     state: AppState = Depends(get_state),
 ) -> HTMLResponse:
     """Render the vault manager for creating or choosing a vault."""
@@ -855,6 +878,11 @@ async def vaults_page(
     # the fence), point under the root instead of the home directory.
     root = access_control.vault_root()
     vault_example = str(root / "my-vault") if root else "~/my-vault"
+    # Re-count instead of trusting a count in the URL; if the folder no longer
+    # needs confirmation (emptied, deleted, or now a vault), drop the panel.
+    confirm_entry_count = (
+        _existing_non_vault_entries(Path(confirm_path)) if confirm_path else 0
+    )
     return _render_page(
         request,
         state,
@@ -862,6 +890,8 @@ async def vaults_page(
         require_vault=False,
         recent_vaults=user_settings.get_recent_vaults(),
         vault_example=vault_example,
+        confirm_vault_path=confirm_path if confirm_entry_count else None,
+        confirm_entry_count=confirm_entry_count,
         flash_message=message,
         flash_error=error,
     )
@@ -870,12 +900,15 @@ async def vaults_page(
 @app.post("/vaults/open", response_class=HTMLResponse)
 async def open_vault(
     new_vault_path: Annotated[str, Form()] = "",
+    confirm_non_vault: Annotated[str, Form()] = "",
     state: AppState = Depends(get_state),
 ) -> HTMLResponse:
     """Open an existing vault, or create a new one when the path doesn't exist.
 
     Expects form data with:
         - new_vault_path: str - Directory for the vault (created if missing)
+        - confirm_non_vault: str - "yes" to confirm creating a vault inside a
+          non-empty folder that holds no vault data
     """
     raw_path = new_vault_path.strip()
     if not raw_path:
@@ -915,19 +948,13 @@ async def open_vault(
     created = not vault_path.is_dir()
 
     # A folder of ordinary files (e.g. the user's documents folder) is easy to
-    # confuse with a vault folder. Detect that case before index scaffolding is
-    # written into it, so the user is told what is about to happen.
-    non_empty_non_vault = False
-    if not created:
-        vault_markers = (
-            f"{DEFAULT_VECTOR_TABLE_NAME}.lance",
-            vault_metadata.METADATA_FILENAME,
-            FULLTEXT_VAULT_SUBDIR,
-        )
-        looks_like_vault = any(
-            (vault_path / marker).exists() for marker in vault_markers
-        )
-        non_empty_non_vault = not looks_like_vault and any(vault_path.iterdir())
+    # confuse with a vault folder — the create-a-vault and add-documents forms
+    # look alike. Opening it as a vault writes index scaffolding alongside the
+    # user's files, and deleting the vault later removes the whole folder, so
+    # nothing is touched until the user explicitly confirms on the vaults page.
+    non_empty_non_vault = _existing_non_vault_entries(vault_path) > 0
+    if non_empty_non_vault and confirm_non_vault != "yes":
+        return _redirect_with_message("/vaults", confirm_path=str(vault_path))
 
     try:
         vault_path.mkdir(parents=True, exist_ok=True)

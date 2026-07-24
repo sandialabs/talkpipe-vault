@@ -142,12 +142,15 @@ class TestVaultSelection:
         assert response.headers["location"].startswith("/?")
         assert query._state.vault_path == str(existing)
 
-    def test_open_non_empty_non_vault_folder_warns(self, client, tmp_path):
-        """Opening a folder of ordinary files must say index files will be added.
+    def test_open_non_empty_non_vault_folder_requires_confirmation(
+        self, client, tmp_path
+    ):
+        """Opening a folder of ordinary files must not touch it until confirmed.
 
         Confusing a documents folder with a vault folder is an easy newcomer
-        mistake; the app writes index scaffolding into whatever folder it opens,
-        so the user should be told that is about to happen.
+        mistake; the app writes index scaffolding into whatever folder it
+        opens, and deleting the vault later removes the whole folder, so the
+        user must explicitly confirm before anything is written.
         """
         docs_folder = tmp_path / "my-documents"
         docs_folder.mkdir()
@@ -158,10 +161,56 @@ class TestVaultSelection:
         )
 
         assert response.status_code == 303
+        assert response.headers["location"].startswith("/vaults?confirm_path=")
+        assert query._state.vault_path == ""
+        assert user_settings.get_recent_vaults() == []
+        assert sorted(p.name for p in docs_folder.iterdir()) == ["notes.txt"]
+
+    def test_confirmation_page_offers_create_anyway_and_cancel(self, client, tmp_path):
+        docs_folder = tmp_path / "my-documents"
+        docs_folder.mkdir()
+        (docs_folder / "notes.txt").write_text("Plain user document.")
+
+        response = client.get(f"/vaults?confirm_path={docs_folder}")
+
+        assert response.status_code == 200
+        assert str(docs_folder) in response.text
+        assert 'name="confirm_non_vault" value="yes"' in response.text
+        assert "delete this entire folder" in response.text
+        assert "Create the vault here anyway" in response.text
+        assert "Choose a different folder" in response.text
+
+    def test_confirmation_page_skips_panel_when_folder_no_longer_qualifies(
+        self, client, tmp_path
+    ):
+        """A stale confirm_path (folder emptied or deleted) shows no panel."""
+        gone = tmp_path / "emptied"
+        gone.mkdir()
+
+        response = client.get(f"/vaults?confirm_path={gone}")
+
+        assert response.status_code == 200
+        assert "confirm_non_vault" not in response.text
+
+    def test_confirmed_open_creates_vault_and_warns(self, client, tmp_path):
+        docs_folder = tmp_path / "my-documents"
+        docs_folder.mkdir()
+        (docs_folder / "notes.txt").write_text("Plain user document.")
+
+        response = client.post(
+            "/vaults/open",
+            data={
+                "new_vault_path": str(docs_folder),
+                "confirm_non_vault": "yes",
+            },
+        )
+
+        assert response.status_code == 303
         location = response.headers["location"]
         assert location.startswith("/documents")
         assert "not+vault+data" in location
         assert query._state.vault_path == str(docs_folder)
+        assert user_settings.get_recent_vaults() == [str(docs_folder)]
 
     def test_open_existing_vault_folder_gets_no_warning(self, client, tmp_path):
         """A folder with vault data opens quietly, even with other files in it."""
