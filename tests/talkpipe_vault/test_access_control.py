@@ -165,6 +165,33 @@ class TestVaultRoutes:
         assert _error_from_redirect(response) == ""
         assert inside.is_dir()
 
+    def test_relative_name_is_placed_under_root(self, client, tmp_path, monkeypatch):
+        root = tmp_path / "data"
+        root.mkdir()
+        monkeypatch.setenv(access_control.VAULT_ROOT_ENV, str(root))
+        response = client.post(
+            "/vaults/open",
+            data={"new_vault_path": "my-vault"},
+            follow_redirects=False,
+        )
+        message = _message_from_redirect(response)
+        assert f"Created new vault at {root / 'my-vault'}" in message
+        # The user is told the name was placed under the root automatically.
+        assert "placed there automatically" in message
+        assert (root / "my-vault").is_dir()
+
+    def test_relative_name_cannot_escape_root(self, client, tmp_path, monkeypatch):
+        root = tmp_path / "data"
+        root.mkdir()
+        monkeypatch.setenv(access_control.VAULT_ROOT_ENV, str(root))
+        response = client.post(
+            "/vaults/open",
+            data={"new_vault_path": "../escape"},
+            follow_redirects=False,
+        )
+        assert str(root) in _error_from_redirect(response)
+        assert not (tmp_path / "escape").exists()
+
     def test_delete_outside_root_only_forgets(self, client, tmp_path, monkeypatch):
         root = tmp_path / "data"
         root.mkdir()

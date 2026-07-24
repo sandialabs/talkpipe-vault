@@ -882,6 +882,22 @@ async def open_vault(
         return _redirect_with_message("/vaults", error="Enter a vault path.")
 
     vault_path = Path(raw_path).expanduser()
+
+    # Failsafe for fenced deployments (e.g. the container, where vaults live
+    # under /app/data): a bare name like "my-vault" would otherwise resolve
+    # against the server's working directory and be refused by the fence.
+    # Place it under the vault root instead and tell the user below.
+    root = access_control.vault_root()
+    placed_under_root = root is not None and not vault_path.is_absolute()
+    if placed_under_root:
+        vault_path = root / vault_path
+    placement_note = (
+        f" (You entered '{raw_path}'; vaults on this server live under "
+        f"{root}, so it was placed there automatically.)"
+        if placed_under_root
+        else ""
+    )
+
     if not access_control.vault_path_allowed(vault_path):
         return _redirect_with_message(
             "/vaults",
@@ -925,7 +941,7 @@ async def open_vault(
             "/documents",
             message=(
                 f"Created new vault at {vault_path}. "
-                "Add documents to make it searchable."
+                "Add documents to make it searchable." + placement_note
             ),
         )
     if non_empty_non_vault:
@@ -936,10 +952,12 @@ async def open_vault(
                 "already contains files that are not vault data, and index "
                 "files will be created alongside them. If you meant to search "
                 "those documents, keep the vault elsewhere and index this "
-                "folder from this page instead."
+                "folder from this page instead." + placement_note
             ),
         )
-    return _redirect_with_message("/", message=f"Opened vault at {vault_path}.")
+    return _redirect_with_message(
+        "/", message=f"Opened vault at {vault_path}.{placement_note}"
+    )
 
 
 def _is_dangerous_delete_target(real_path: Path) -> bool:
