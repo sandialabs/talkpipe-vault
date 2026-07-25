@@ -19,6 +19,13 @@
 - Changing the embedding model warns that existing vaults must be re-indexed so stored and query vectors match.
 - Added settings for chunk size, shingle size, shingle overlap, and Ask RAG result count; these persist across restarts and feed both document indexing and Ask retrieval.
 
+### TalkPipe 0.14.1 Requirement
+
+- Require `talkpipe[all]>=0.14.1`. The previous floor, `>=0.13.0b3`, named a
+  beta; because the specifier itself referenced a prerelease, pip was free to
+  resolve TalkPipe to future prereleases as well. The floor is now a stable
+  release, so a plain `pip install talkpipe-vault` stays on stable TalkPipe.
+
 ### TalkPipe 0.12.4 Compatibility
 
 - Require `talkpipe[all]>=0.12.4`.

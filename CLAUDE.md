@@ -18,7 +18,7 @@ built on the TalkPipe framework and demonstrates real-world usage of its composa
 - **Package**: `talkpipe-vault`
 - **Module**: `talkpipe_vault`
 - **Python**: 3.11.4+ required
-- **TalkPipe**: >=0.12.4 (`talkpipe[all]`)
+- **TalkPipe**: >=0.14.1 (`talkpipe[all]`)
 - **Status**: Alpha (active development)
 - **License**: Apache 2.0
 
@@ -53,7 +53,7 @@ Routes in `apps/query.py`:
 - `/vaults` (+ `/vaults/open`): create or choose a vault; recents persisted via
   `user_settings.py` in `$TALKPIPE_VAULT_HOME` (default `~/.talkpipe-vault`).
 - `/documents` (+ `/documents/index`): index a folder/glob into the current vault using
-  TalkPipe's `build_rag_database()` driver (requires talkpipe >= 0.13.0b2; writes the
+  TalkPipe's `build_rag_database()` driver (writes the
   `docs` table — the same driver behind TalkPipe's `makevectordatabase` CLI, with
   embedder preflight, dimension checking, overflow truncation, and skip counting).
 - `/settings`: embedding + chat source/model overrides, persisted and applied immediately.
