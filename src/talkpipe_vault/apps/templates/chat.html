@@ -253,6 +253,15 @@
         font-size: 0.8rem;
         padding: 4px 10px;
     }
+    .source-card-actions {
+        display: flex;
+        flex-shrink: 0;
+        gap: 8px;
+    }
+    a.source-open-btn {
+        display: inline-block;
+        text-decoration: none;
+    }
     .source-card-snippet {
         color: #475569;
         font-size: 0.92rem;
@@ -385,6 +394,14 @@ document.addEventListener('DOMContentLoaded', function() {
                 openDocumentModal(lookupPath, citation.snippet || '', title, citation.filename);
             });
 
+            const openLink = document.createElement('a');
+            openLink.className = 'copy-btn source-copy-btn source-open-btn';
+            openLink.textContent = 'Open';
+            openLink.title = 'Open the source document';
+            openLink.href = '/open-file?path=' + encodeURIComponent(lookupPath);
+            openLink.target = '_blank';
+            openLink.rel = 'noopener';
+
             const copyChunkBtn = document.createElement('button');
             copyChunkBtn.type = 'button';
             copyChunkBtn.className = 'copy-btn source-copy-btn';
@@ -401,8 +418,13 @@ document.addEventListener('DOMContentLoaded', function() {
                 });
             });
 
+            const actions = document.createElement('div');
+            actions.className = 'source-card-actions';
+            actions.appendChild(openLink);
+            actions.appendChild(copyChunkBtn);
+
             header.appendChild(title);
-            header.appendChild(copyChunkBtn);
+            header.appendChild(actions);
 
             const snippet = document.createElement('div');
             snippet.className = 'source-card-snippet';

@@ -1076,6 +1076,175 @@ def test_source_file_route_serves_referenced_file_when_enabled(tmp_path, monkeyp
     assert response.text == "source text"
 
 
+def test_search_results_include_open_file_link(monkeypatch):
+    """Semantic results should offer an Open link keyed by lookup path."""
+    query._state.search_pipeline = lambda _query: [
+        {
+            "_distance": 0.25,
+            "_doc_id": "row-uuid",
+            "source": "/original/source.pdf",
+            "title": "source.pdf",
+            "content": "semantic result text",
+        }
+    ]
+    monkeypatch.setattr(query, "_refresh_pipelines", lambda: None)
+    monkeypatch.setattr(query, "_update_document_counts", lambda vault_path: None)
+    client = TestClient(query.app)
+
+    response = client.post("/search", data={"query": "semantic"})
+
+    assert response.status_code == 200
+    assert 'href="/open-file?path=row-uuid"' in response.text
+    # The Open link must not leak the filesystem path when paths are hidden.
+    assert "/original/source.pdf" not in response.text
+
+
+def test_keyword_search_results_include_open_file_link(monkeypatch):
+    """Keyword results should offer an Open link keyed by lookup path."""
+    query._state.keyword_search_enabled = True
+    query._state.keyword_search_pipeline = lambda _query: [
+        {
+            "doc_id": "row-uuid",
+            "score": 1.0,
+            "document": {
+                "content": "indexed text",
+                "path": "/original/source.pdf",
+                "filename": "source.pdf",
+            },
+        }
+    ]
+    monkeypatch.setattr(query, "_refresh_pipelines", lambda: None)
+    monkeypatch.setattr(query, "_update_document_counts", lambda vault_path: None)
+    client = TestClient(query.app)
+
+    response = client.post("/keyword-search", data={"query": "indexed"})
+
+    assert response.status_code == 200
+    assert 'href="/open-file?path=row-uuid"' in response.text
+    assert "/original/source.pdf" not in response.text
+
+
+def test_chat_page_offers_open_file_link():
+    """Ask citations should link to the source document via /open-file."""
+    client = TestClient(query.app)
+
+    response = client.get("/chat")
+
+    assert response.status_code == 200
+    assert "'/open-file?path=' + encodeURIComponent(lookupPath)" in response.text
+
+
+def test_open_file_route_serves_file_by_row_id(tmp_path, monkeypatch):
+    """Open-file should resolve a docs-row id to its source file and inline it."""
+    source_file = tmp_path / "source.txt"
+    source_file.write_text("source text")
+    monkeypatch.setattr(
+        query,
+        "_load_docs_rows",
+        lambda _vault_path: [
+            {
+                "id": "row-uuid",
+                "document": {"content": "source text", "path": str(source_file)},
+            }
+        ],
+    )
+    client = TestClient(query.app)
+
+    response = client.get("/open-file", params={"path": "row-uuid"})
+
+    assert response.status_code == 200
+    assert response.text == "source text"
+    assert response.headers["content-disposition"].startswith("inline")
+
+
+def test_open_file_route_serves_file_by_indexed_path(tmp_path, monkeypatch):
+    """Open-file should also accept the indexed path as the lookup key."""
+    source_file = tmp_path / "source.txt"
+    source_file.write_text("source text")
+    monkeypatch.setattr(
+        query,
+        "_load_docs_rows",
+        lambda _vault_path: [
+            {
+                "id": "row-uuid",
+                "document": {"content": "source text", "source": str(source_file)},
+            }
+        ],
+    )
+    client = TestClient(query.app)
+
+    response = client.get("/open-file", params={"path": str(source_file)})
+
+    assert response.status_code == 200
+    assert response.text == "source text"
+
+
+def test_open_file_route_downloads_types_browsers_should_not_render(
+    tmp_path, monkeypatch
+):
+    """Types that could run scripts with the app origin must download instead."""
+    source_file = tmp_path / "source.html"
+    source_file.write_text("<script>alert(1)</script>")
+    monkeypatch.setattr(
+        query,
+        "_load_docs_rows",
+        lambda _vault_path: [
+            {
+                "id": "row-uuid",
+                "document": {"content": "alert", "path": str(source_file)},
+            }
+        ],
+    )
+    client = TestClient(query.app)
+
+    response = client.get("/open-file", params={"path": "row-uuid"})
+
+    assert response.status_code == 200
+    assert response.headers["content-disposition"].startswith("attachment")
+
+
+def test_open_file_route_rejects_unindexed_key(monkeypatch):
+    """Open-file must not serve anything the vault index does not reference."""
+    monkeypatch.setattr(query, "_load_docs_rows", lambda _vault_path: [])
+    client = TestClient(query.app)
+
+    response = client.get("/open-file", params={"path": "/etc/passwd"})
+
+    assert response.status_code == 404
+    assert response.json() == {"error": "Source file is not referenced by this vault."}
+
+
+def test_open_file_route_reports_missing_file(tmp_path, monkeypatch):
+    """A referenced file absent from this filesystem should explain itself."""
+    missing = tmp_path / "gone.txt"
+    monkeypatch.setattr(
+        query,
+        "_load_docs_rows",
+        lambda _vault_path: [
+            {
+                "id": "row-uuid",
+                "document": {"content": "text", "path": str(missing)},
+            }
+        ],
+    )
+    client = TestClient(query.app)
+
+    response = client.get("/open-file", params={"path": "row-uuid"})
+
+    assert response.status_code == 404
+    assert "re-index" in response.json()["error"]
+
+
+def test_open_file_route_requires_vault():
+    """Open-file should fail cleanly when no vault is selected."""
+    query._state.vault_path = ""
+    client = TestClient(query.app)
+
+    response = client.get("/open-file", params={"path": "row-uuid"})
+
+    assert response.status_code == 400
+
+
 def test_indexed_source_paths_reads_references_from_docs_rows(monkeypatch):
     """Allowed source-file paths should come from indexed docs-row metadata."""
     monkeypatch.setattr(
