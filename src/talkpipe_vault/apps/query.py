@@ -13,6 +13,7 @@ Provides the following via web interface:
 import argparse
 import glob as globlib
 import logging
+import mimetypes
 import os
 import re
 import shutil
@@ -683,6 +684,64 @@ def _indexed_source_paths(vault_path: str) -> set[str]:
             if value:
                 source_paths.add(value)
     return source_paths
+
+
+def _resolve_indexed_source_file(vault_path: str, key: str) -> Path | None:
+    """Resolve a result lookup key (row id or indexed path) to its source file.
+
+    Search results and Ask citations identify chunks by ``lookup_path`` — the
+    stable docs-row id when one exists, the indexed path otherwise. Either kind
+    of key is matched against the docs table and mapped back to the source file
+    path recorded at indexing time.
+    """
+    for row in _load_docs_rows(vault_path):
+        doc = _extract_document_record(row)
+        if key not in _document_lookup_keys(row, doc):
+            continue
+        source = (
+            str(doc.get("path") or "")
+            or str(doc.get("source") or "")
+            or str(doc.get("id") or "")
+        )
+        if source:
+            return Path(source)
+    return None
+
+
+# Media types the browser may render directly. Everything else — notably
+# text/html and image/svg+xml, which could run scripts with the app's origin —
+# is served as a download instead.
+_INLINE_MEDIA_TYPES = {
+    "application/pdf",
+    "image/png",
+    "image/jpeg",
+    "image/gif",
+    "image/webp",
+}
+
+# Text-like documents shown in-browser as plain text, whatever their real
+# media type (browsers download text/markdown and friends otherwise).
+_INLINE_TEXT_EXTENSIONS = {".txt", ".text", ".md", ".markdown", ".rst", ".log"}
+
+
+def _document_file_response(source_path: Path) -> FileResponse:
+    """Serve a source document, inline when the browser can safely render it."""
+    if source_path.suffix.lower() in _INLINE_TEXT_EXTENSIONS:
+        return FileResponse(
+            source_path,
+            media_type="text/plain; charset=utf-8",
+            filename=source_path.name,
+            content_disposition_type="inline",
+        )
+    media_type, _ = mimetypes.guess_type(source_path.name)
+    if media_type in _INLINE_MEDIA_TYPES:
+        return FileResponse(
+            source_path,
+            media_type=media_type,
+            filename=source_path.name,
+            content_disposition_type="inline",
+        )
+    return FileResponse(source_path, filename=source_path.name)
 
 
 def _get_chunk_text_for_path_and_snippet(
@@ -2151,6 +2210,55 @@ async def source_file(
         )
 
     return FileResponse(source_path, filename=source_path.name)
+
+
+@app.get("/open-file")
+async def open_file(
+    path: str,
+    state: AppState = Depends(get_state),
+) -> Response:
+    """Open the source document behind a search result or Ask citation.
+
+    Accepts the same lookup key as /chunk-content (docs-row id or indexed
+    path) and streams the file over HTTP, so it works wherever the browser
+    runs — including against a containerized server, where the document only
+    exists at the container-side mount path.
+    """
+    if not state.vault_path:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Vault path is not configured."},
+        )
+
+    try:
+        source_path = _resolve_indexed_source_file(state.vault_path, path)
+    except Exception as exc:
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"Failed to look up the source file: {exc}"},
+        )
+
+    if source_path is None:
+        return JSONResponse(
+            status_code=404,
+            content={"error": "Source file is not referenced by this vault."},
+        )
+
+    if not source_path.is_file():
+        return JSONResponse(
+            status_code=404,
+            content={
+                "error": (
+                    f"Source file {source_path.name} was not found on the "
+                    "server's filesystem. If the vault was indexed on another "
+                    "machine or in a container, the recorded path may not "
+                    "exist here; re-index the documents from this server to "
+                    "restore the link."
+                )
+            },
+        )
+
+    return _document_file_response(source_path)
 
 
 @app.get("/chat", response_class=HTMLResponse)

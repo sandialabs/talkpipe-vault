@@ -136,6 +136,13 @@ A compose service and instructions for deriving your own customized image
   use semantic search for meaning-based lookups.
 - **Ask** — single-turn Q&A with source citations you can open and copy.
 
+Every search result and Ask citation has an **Open** link that fetches the
+original document from the server — PDFs, images, and plain text open right
+in the browser; other formats download. Because the file is streamed over
+HTTP, this works the same when the server runs in a container (where your
+documents live at a container-side mount path the browser can't reach
+directly).
+
 ## Configuring models
 
 The Settings page is the primary way to configure models; choices persist

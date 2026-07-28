@@ -42,7 +42,9 @@ vault-server [~/my-vault] [--resume] [--host 0.0.0.0] [--port 8002] [--show-sour
   falling back to the given path (or the Vaults & Documents page) when no
   recent vault is usable. This is how the container image starts.
 - `--show-source-paths` shows source file paths in search results and serves
-  those files over HTTP; hidden by default.
+  those files over HTTP; hidden by default. Opening documents via the Open
+  link on results and citations does not need this flag — it identifies the
+  file by its index entry without exposing the path.
 - `--no-browser` skips opening a browser on startup (headless servers,
   services, containers).
 

@@ -62,7 +62,8 @@ Routes in `apps/query.py`:
   `GET /vaults` is a redirect alias for `/documents`.
 - `/settings`: embedding + chat source/model overrides, persisted and applied immediately.
 - `/`, `/search`, `/keyword-search` (+ index creation), `/chat`, `/chunk-content`,
-  `/source-file`, `/refresh`.
+  `/source-file`, `/open-file` (streams the source document behind a result/citation,
+  resolved by lookup key — works without `--show-source-paths`), `/refresh`.
 - Pages that need a vault redirect to `/documents` when none is selected.
 
 State lives in the module-level `_state: AppState` singleton; pipelines are rebuilt by
