@@ -401,6 +401,15 @@ class TestVaultDeletion:
         assert 'id="vault-open-progress"' in response.text
         assert "may download the embedding model" in response.text
 
+    def test_documents_page_stacks_its_steps_vertically(self, client):
+        """The panel-wide `.search-box form` rule lays forms out as a row, which
+        crushed the two steps side by side. The override has to be qualified the
+        same way to win on specificity."""
+        page = client.get("/documents").text
+
+        assert ".search-box form.index-form" in page
+        assert ".search-box .btn-danger" in page
+
 
 class TestDirectoryPicker:
     """Tests for the folder-picker dialog and its listing endpoint."""

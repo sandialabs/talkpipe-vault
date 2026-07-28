@@ -13,7 +13,7 @@ TalkPipe dependency.
 ### `makevectordatabase`
 
 Builds the LanceDB `docs` table that `vault-server` reads — the same layout
-the **Add Documents** page produces. Embedding configuration is required:
+the **Vaults & Documents** page produces. Embedding configuration is required:
 pass it explicitly or set it in the TalkPipe config.
 
 ```bash
@@ -214,7 +214,7 @@ creation.
 (full-text search), Watchdog (filesystem events), FastAPI + Jinja2 (web),
 model2vec / Ollama / OpenAI / Anthropic (models).
 
-The stable path: the **Add Documents** page (or `makevectordatabase`) builds
+The stable path: the **Vaults & Documents** page (or `makevectordatabase`) builds
 a LanceDB `docs` table via TalkPipe's document pipeline — read, chunk,
 shingle, embed, store — and `vault-server` searches it.
 
@@ -244,7 +244,7 @@ simple pipeline operators.
 > They are useful for understanding composition, but the watcher pipelines
 > write the experimental `full_documents`/`shingled_chunks` layout, **not**
 > the `docs` table that `vault-server` reads. For the stable path, index
-> with `makevectordatabase` or the **Add Documents** page.
+> with `makevectordatabase` or the **Vaults & Documents** page.
 
 **Example 1: Simple file watching pipeline**
 
@@ -343,7 +343,7 @@ Documents** page and by `makevectordatabase`:
 - `vault_metadata.json` — records the embedding source/model (and vector
   dimension) the vault was indexed with, so reopening the vault
   automatically uses a matching embedder; it travels with the vault if the
-  folder is copied or moved. Written by the **Add Documents** page; vaults
+  folder is copied or moved. Written by the **Vaults & Documents** page; vaults
   built with `makevectordatabase` alone don't have it and are treated as
   legacy vaults.
 

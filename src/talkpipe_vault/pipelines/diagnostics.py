@@ -194,7 +194,7 @@ def _check_embedding_index_match(
     )
     base["fix"] = (
         f"Set the embedding model back to {recorded_source}/{recorded_model}, or "
-        "re-index this vault with the current embedder (Add Documents → Overwrite)."
+        "re-index this vault with the current embedder (Vaults & Documents → Overwrite)."
     )
     return base
 

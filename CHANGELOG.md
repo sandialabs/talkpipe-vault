@@ -9,6 +9,7 @@
 - With no vault open, choosing a documents folder suggests a vault name derived from it (`~/notes` → `~/notes-vault`, under `TALKPIPE_VAULT_ROOT` when set). The suggestion skips names whose folder already holds unrelated files and reuses an existing vault of that name, so a single submit creates the vault and indexes into it.
 - With a vault open, the same form adds documents to it; "Use a different vault…" reveals the vault field to create or switch to another one for that run.
 - Indexing refuses to use the folder being indexed as the vault, and validates the documents path before creating anything, so a typo no longer leaves an empty vault behind. Creating a vault in a folder that already holds other files still requires confirmation, and confirming resumes the indexing run.
+- Laid the page out top to bottom: the documents step and the vault step are stacked, labelled cards instead of columns squeezed side by side, with the overwrite option and the submit button on their own row (and everything stacking on narrow windows). Delete/confirm buttons now render in the warning style they were meant to have.
 
 #### Vault Management from the Web Interface
 - Added a Vaults page to create a new vault or choose an existing one from the browser; recently used vaults are remembered (persisted under `~/.talkpipe-vault`, overridable with `TALKPIPE_VAULT_HOME`).
