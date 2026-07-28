@@ -14,6 +14,7 @@ import argparse
 import glob as globlib
 import logging
 import os
+import re
 import shutil
 import socket
 import sys
@@ -713,11 +714,11 @@ def _vault_selected(state: AppState) -> bool:
 
 
 def _require_vault(state: AppState) -> RedirectResponse | None:
-    """Redirect to the vault manager when no vault is selected."""
+    """Redirect to the documents page (vault + indexing) when none is selected."""
     if _vault_selected(state):
         return None
     return _redirect_with_message(
-        "/vaults", error="Choose or create a vault to get started."
+        "/documents", error="Choose the documents to index to get started."
     )
 
 
@@ -866,53 +867,33 @@ def _existing_non_vault_entries(vault_path: Path) -> int:
 
 @app.get("/vaults", response_class=HTMLResponse)
 async def vaults_page(
-    request: Request,
     message: str | None = None,
     error: str | None = None,
     confirm_path: str | None = None,
-    state: AppState = Depends(get_state),
 ) -> HTMLResponse:
-    """Render the vault manager for creating or choosing a vault."""
-    # Suggest an example path the server will actually accept: with a vault
-    # root configured (e.g. in the container, where ~ is ephemeral and outside
-    # the fence), point under the root instead of the home directory.
-    root = access_control.vault_root()
-    vault_example = str(root / "my-vault") if root else "~/my-vault"
-    # Re-count instead of trusting a count in the URL; if the folder no longer
-    # needs confirmation (emptied, deleted, or now a vault), drop the panel.
-    confirm_entry_count = (
-        _existing_non_vault_entries(Path(confirm_path)) if confirm_path else 0
-    )
-    return _render_page(
-        request,
-        state,
-        "vaults.html",
-        require_vault=False,
-        recent_vaults=user_settings.get_recent_vaults(),
-        vault_example=vault_example,
-        confirm_vault_path=confirm_path if confirm_entry_count else None,
-        confirm_entry_count=confirm_entry_count,
-        flash_message=message,
-        flash_error=error,
-    )
+    """Redirect the former vault manager to the combined documents page.
 
-
-@app.post("/vaults/open", response_class=HTMLResponse)
-async def open_vault(
-    new_vault_path: Annotated[str, Form()] = "",
-    confirm_non_vault: Annotated[str, Form()] = "",
-    state: AppState = Depends(get_state),
-) -> HTMLResponse:
-    """Open an existing vault, or create a new one when the path doesn't exist.
-
-    Expects form data with:
-        - new_vault_path: str - Directory for the vault (created if missing)
-        - confirm_non_vault: str - "yes" to confirm creating a vault inside a
-          non-empty folder that holds no vault data
+    Choosing a vault and indexing documents now live on one page; this alias
+    keeps bookmarks and older links working.
     """
-    raw_path = new_vault_path.strip()
+    return _redirect_with_message(
+        "/documents",
+        message=message or "",
+        error=error or "",
+        confirm_path=confirm_path or "",
+    )
+
+
+def _resolve_vault_request(raw_vault_path: str) -> tuple[Path | None, str, str]:
+    """Validate a user-supplied vault path.
+
+    Returns (vault_path, placement_note, error): the path is None when the
+    error message is non-empty. The note explains any automatic relocation and
+    belongs in the success message shown to the user.
+    """
+    raw_path = raw_vault_path.strip()
     if not raw_path:
-        return _redirect_with_message("/vaults", error="Enter a vault path.")
+        return None, "", "Enter a vault path."
 
     vault_path = Path(raw_path).expanduser()
 
@@ -932,37 +913,62 @@ async def open_vault(
     )
 
     if not access_control.vault_path_allowed(vault_path):
-        return _redirect_with_message(
-            "/vaults",
-            error=(
-                "Vaults on this server must live under "
-                f"{access_control.vault_root()}."
-            ),
+        return (
+            None,
+            "",
+            f"Vaults on this server must live under {access_control.vault_root()}.",
         )
     if vault_path.is_file():
-        return _redirect_with_message(
-            "/vaults",
-            error=f"{vault_path} is a file. A vault must be a directory.",
-        )
+        return None, "", f"{vault_path} is a file. A vault must be a directory."
+    return vault_path, placement_note, ""
 
-    created = not vault_path.is_dir()
 
-    # A folder of ordinary files (e.g. the user's documents folder) is easy to
-    # confuse with a vault folder — the create-a-vault and add-documents forms
-    # look alike. Opening it as a vault writes index scaffolding alongside the
-    # user's files, and deleting the vault later removes the whole folder, so
-    # nothing is touched until the user explicitly confirms on the vaults page.
-    non_empty_non_vault = _existing_non_vault_entries(vault_path) > 0
-    if non_empty_non_vault and confirm_non_vault != "yes":
-        return _redirect_with_message("/vaults", confirm_path=str(vault_path))
+def _activate_vault(vault_path: Path) -> str:
+    """Create the vault folder if needed, open it, and remember it.
 
+    Returns an error message, or an empty string when the vault is open.
+    """
     try:
         vault_path.mkdir(parents=True, exist_ok=True)
         init_pipelines(str(vault_path))
     except (OSError, ValueError) as exc:
-        return _redirect_with_message("/vaults", error=str(exc))
-
+        return str(exc)
     user_settings.remember_vault(str(vault_path))
+    return ""
+
+
+@app.post("/vaults/open", response_class=HTMLResponse)
+async def open_vault(
+    new_vault_path: Annotated[str, Form()] = "",
+    confirm_non_vault: Annotated[str, Form()] = "",
+    state: AppState = Depends(get_state),
+) -> HTMLResponse:
+    """Open an existing vault, or create a new one when the path doesn't exist.
+
+    Expects form data with:
+        - new_vault_path: str - Directory for the vault (created if missing)
+        - confirm_non_vault: str - "yes" to confirm creating a vault inside a
+          non-empty folder that holds no vault data
+    """
+    vault_path, placement_note, error = _resolve_vault_request(new_vault_path)
+    if vault_path is None:
+        return _redirect_with_message("/documents", error=error)
+
+    created = not vault_path.is_dir()
+
+    # A folder of ordinary files (e.g. the user's documents folder) is easy to
+    # confuse with a vault folder — the vault and documents fields sit on the
+    # same page. Opening it as a vault writes index scaffolding alongside the
+    # user's files, and deleting the vault later removes the whole folder, so
+    # nothing is touched until the user explicitly confirms.
+    non_empty_non_vault = _existing_non_vault_entries(vault_path) > 0
+    if non_empty_non_vault and confirm_non_vault != "yes":
+        return _redirect_with_message("/documents", confirm_path=str(vault_path))
+
+    error = _activate_vault(vault_path)
+    if error:
+        return _redirect_with_message("/documents", error=error)
+
     if created:
         return _redirect_with_message(
             "/documents",
@@ -1019,9 +1025,9 @@ async def delete_vault(
     """
     raw_path = vault_path.strip()
     if not raw_path:
-        return _redirect_with_message("/vaults", error="No vault specified.")
+        return _redirect_with_message("/documents", error="No vault specified.")
     if confirm != "delete":
-        return _redirect_with_message("/vaults", error="Deletion was not confirmed.")
+        return _redirect_with_message("/documents", error="Deletion was not confirmed.")
 
     resolved = str(Path(raw_path).expanduser())
 
@@ -1029,7 +1035,7 @@ async def delete_vault(
     # arbitrary path supplied to this endpoint.
     if resolved not in user_settings.get_recent_vaults():
         return _redirect_with_message(
-            "/vaults", error="That vault is not in the recent list."
+            "/documents", error="That vault is not in the recent list."
         )
 
     # Refuse to delete the vault currently open in the app.
@@ -1037,7 +1043,7 @@ async def delete_vault(
         resolved
     ):
         return _redirect_with_message(
-            "/vaults",
+            "/documents",
             error="Cannot delete the vault that is currently open. "
             "Open a different vault first.",
         )
@@ -1045,7 +1051,7 @@ async def delete_vault(
     real_path = Path(os.path.realpath(resolved))
     if _is_dangerous_delete_target(real_path):
         return _redirect_with_message(
-            "/vaults",
+            "/documents",
             error=f"Refusing to delete {resolved}: path is too broad to be a vault.",
         )
 
@@ -1055,7 +1061,7 @@ async def delete_vault(
     if not access_control.vault_path_allowed(resolved):
         user_settings.forget_vault(resolved)
         return _redirect_with_message(
-            "/vaults",
+            "/documents",
             message=(
                 f"Removed {resolved} from the list. It is outside "
                 f"{access_control.vault_root()}, so its files were left untouched."
@@ -1068,7 +1074,7 @@ async def delete_vault(
             shutil.rmtree(resolved)
     except OSError as exc:
         return _redirect_with_message(
-            "/vaults", error=f"Failed to delete {resolved}: {exc}"
+            "/documents", error=f"Failed to delete {resolved}: {exc}"
         )
 
     user_settings.forget_vault(resolved)
@@ -1079,7 +1085,7 @@ async def delete_vault(
             f"Removed {resolved} from the list "
             "(its folder was already gone from disk)."
         )
-    return _redirect_with_message("/vaults", message=message)
+    return _redirect_with_message("/documents", message=message)
 
 
 @app.get("/documents", response_class=HTMLResponse)
@@ -1087,17 +1093,81 @@ async def documents_page(
     request: Request,
     message: str | None = None,
     error: str | None = None,
+    confirm_path: str | None = None,
+    source_path: str | None = None,
+    overwrite: bool = False,
     state: AppState = Depends(get_state),
 ) -> HTMLResponse:
-    """Render the page for indexing documents into the current vault."""
+    """Render the combined page for choosing a vault and indexing documents.
+
+    Works with or without an open vault: without one, the vault field carries a
+    suggested name derived from the chosen documents folder, so a single submit
+    creates the vault and indexes into it.
+    """
+    # Suggest an example path the server will actually accept: with a vault
+    # root configured (e.g. in the container, where ~ is ephemeral and outside
+    # the fence), point under the root instead of the home directory.
+    root = access_control.vault_root()
+    vault_example = str(root / "my-vault") if root else "~/my-vault"
+    # Re-count instead of trusting a count in the URL; if the folder no longer
+    # needs confirmation (emptied, deleted, or now a vault), drop the panel.
+    confirm_entry_count = (
+        _existing_non_vault_entries(Path(confirm_path)) if confirm_path else 0
+    )
     return _render_page(
         request,
         state,
         "documents.html",
+        require_vault=False,
         models=_effective_models(state),
+        recent_vaults=user_settings.get_recent_vaults(),
+        vault_example=vault_example,
+        confirm_vault_path=confirm_path if confirm_entry_count else None,
+        confirm_entry_count=confirm_entry_count,
+        pending_source_path=source_path or "",
+        pending_overwrite=overwrite,
         flash_message=message,
         flash_error=error,
     )
+
+
+def suggest_vault_path(source_path: str) -> str:
+    """Suggest a vault folder to create for a chosen documents folder.
+
+    The name follows the documents folder ("~/notes" -> "<root>/notes-vault")
+    so the vault is recognizable, and lands beside it under the configured
+    vault root (the home directory when unrestricted). An existing folder is
+    only suggested when it is empty or already holds vault data — otherwise the
+    name is numbered until it is free, so the suggestion never proposes writing
+    index files into a folder of someone's documents. Returns "" when no
+    sensible name can be derived.
+    """
+    prefix = _nonglob_prefix(os.path.expanduser(source_path.strip()))
+    if not prefix or prefix == ".":
+        return ""
+    base = Path(prefix)
+    if base.is_file():
+        base = base.parent
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "-", base.name).strip("-._")
+    if not stem:
+        return ""
+
+    parent = access_control.vault_root() or Path.home()
+    for attempt in range(1, 51):
+        name = f"{stem}-vault" if attempt == 1 else f"{stem}-vault-{attempt}"
+        candidate = parent / name
+        if not candidate.exists():
+            return str(candidate)
+        # Reusable: an empty folder, or one that already holds this vault.
+        if candidate.is_dir() and _existing_non_vault_entries(candidate) == 0:
+            return str(candidate)
+    return ""
+
+
+@app.get("/api/suggest-vault")
+async def suggest_vault(source: str = "") -> JSONResponse:
+    """Suggest a vault path for a documents folder, for the combined form."""
+    return JSONResponse(content={"path": suggest_vault_path(source) if source else ""})
 
 
 def _resolve_source_pattern(raw_source: str) -> str:
@@ -1543,28 +1613,118 @@ def _vault_has_documents(vault_path: str) -> bool:
         return False
 
 
+def _open_vault_for_indexing(
+    new_vault_path: str,
+    pattern: str,
+    *,
+    source: str,
+    confirm_non_vault: str,
+    overwrite: bool,
+    state: AppState,
+) -> tuple[RedirectResponse | None, str]:
+    """Open (creating if needed) the vault an indexing run was aimed at.
+
+    Returns (redirect, note): a redirect back to the documents page when the
+    vault cannot be used or needs confirmation, otherwise None and a sentence
+    for the success message. The pending documents folder rides along on every
+    redirect so the form comes back filled in.
+    """
+    vault_path, placement_note, error = _resolve_vault_request(new_vault_path)
+    if vault_path is None:
+        return (
+            _redirect_with_message("/documents", error=error, source_path=source),
+            "",
+        )
+
+    # The vault stores the index, not the documents; indexing a folder into
+    # itself would sweep the index files back in on the next run.
+    if vault_path.resolve() == Path(_nonglob_prefix(pattern)).resolve():
+        return (
+            _redirect_with_message(
+                "/documents",
+                error=(
+                    f"The vault cannot be the folder being indexed ({vault_path}). "
+                    "The vault holds the search index; choose a different, empty "
+                    "folder for it."
+                ),
+                source_path=source,
+            ),
+            "",
+        )
+
+    # Already open: nothing to create, and re-opening would needlessly rebuild
+    # the pipelines (and reload the embedding model).
+    if state.vault_path and os.path.realpath(state.vault_path) == os.path.realpath(
+        vault_path
+    ):
+        return None, ""
+
+    created = not vault_path.is_dir()
+
+    # A folder of ordinary files is easy to confuse with a vault folder, and a
+    # vault created there interleaves index files with the user's own — and
+    # deleting the vault later would take the whole folder. Confirm first.
+    if _existing_non_vault_entries(vault_path) > 0 and confirm_non_vault != "yes":
+        return (
+            _redirect_with_message(
+                "/documents",
+                confirm_path=str(vault_path),
+                source_path=source,
+                overwrite="true" if overwrite else "",
+            ),
+            "",
+        )
+
+    error = _activate_vault(vault_path)
+    if error:
+        return (
+            _redirect_with_message("/documents", error=error, source_path=source),
+            "",
+        )
+    note = (
+        f"Created vault {vault_path}.{placement_note} "
+        if created
+        else f"Indexing into vault {vault_path}.{placement_note} "
+    )
+    return None, note
+
+
 @app.post("/documents/index", response_class=HTMLResponse)
 async def index_documents(
     source_path: Annotated[str, Form()] = "",
+    new_vault_path: Annotated[str, Form()] = "",
+    confirm_non_vault: Annotated[str, Form()] = "",
     overwrite: Annotated[bool, Form()] = False,
     state: AppState = Depends(get_state),
 ) -> HTMLResponse:
-    """Index documents from a folder or glob pattern into the current vault.
+    """Index documents into a vault, creating or switching to it when asked.
 
     Expects form data with:
         - source_path: str - Folder path or glob pattern of documents to index
+        - new_vault_path: str - Vault to index into (created if missing);
+          empty means the vault already open
+        - confirm_non_vault: str - "yes" to confirm creating a vault inside a
+          non-empty folder that holds no vault data
         - overwrite: bool - Replace the existing index instead of adding to it
     """
-    redirect = _require_vault(state)
-    if redirect:
-        return redirect
-
-    if not source_path.strip():
+    source = source_path.strip()
+    if not source:
+        # A vault with no documents is the "just open this vault" case — the
+        # form's submit button says so — not an error.
+        if new_vault_path.strip():
+            return await open_vault(
+                new_vault_path=new_vault_path,
+                confirm_non_vault=confirm_non_vault,
+                state=state,
+            )
         return _redirect_with_message(
             "/documents", error="Enter a folder or glob pattern to index."
         )
 
-    pattern = _resolve_source_pattern(source_path)
+    pattern = _resolve_source_pattern(source)
+
+    # Validate the documents before touching the vault, so a mistyped source
+    # never leaves a freshly created, empty vault behind.
     doc_roots = access_control.document_roots()
     if doc_roots and not access_control.is_allowed(_nonglob_prefix(pattern), doc_roots):
         return _redirect_with_message(
@@ -1580,15 +1740,34 @@ async def index_documents(
         return _redirect_with_message(
             "/documents",
             error=(
-                f"'{source_path.strip()}' matched no files. Check the folder "
+                f"'{source}' matched no files. Check the folder "
                 "path or glob pattern."
             ),
+        )
+
+    vault_note = ""
+    if new_vault_path.strip():
+        redirect, vault_note = _open_vault_for_indexing(
+            new_vault_path,
+            pattern,
+            source=source,
+            confirm_non_vault=confirm_non_vault,
+            overwrite=overwrite,
+            state=state,
+        )
+        if redirect:
+            return redirect
+    elif not _vault_selected(state):
+        return _redirect_with_message(
+            "/documents",
+            error="Choose a vault to index these documents into.",
+            source_path=source,
         )
 
     models = _effective_models(state)
     started = start_index_job(
         vault_path=state.vault_path,
-        source=source_path.strip(),
+        source=source,
         pattern=pattern,
         embedding_model=models["embedding_model"],
         embedding_source=models["embedding_source"],
@@ -1605,8 +1784,9 @@ async def index_documents(
     return _redirect_with_message(
         "/documents",
         message=(
-            "Indexing started in the background — progress is shown below. "
-            f"Embedding with {models['embedding_source']}/{models['embedding_model']}."
+            f"{vault_note}Indexing started in the background — progress is shown "
+            "below. Embedding with "
+            f"{models['embedding_source']}/{models['embedding_model']}."
         ),
     )
 
@@ -2115,7 +2295,7 @@ def run_app(
             print(
                 f"Warning: could not open vault at {vault_path}: {exc}\n"
                 "Starting without a vault - check Settings -> Configuration "
-                "status, then reopen the vault from the Vaults page.",
+                "status, then reopen the vault from the Vaults & Documents page.",
                 file=sys.stderr,
             )
             _state.vault_path = ""

@@ -4,6 +4,12 @@
 
 ### Features
 
+#### One Page for Vaults and Documents
+- Merged the Vaults and Add Documents pages into a single **Vaults & Documents** page: choose the documents to index and the vault to index them into, then submit once. `/vaults` redirects there, and pages that need a vault now send you there too.
+- With no vault open, choosing a documents folder suggests a vault name derived from it (`~/notes` → `~/notes-vault`, under `TALKPIPE_VAULT_ROOT` when set). The suggestion skips names whose folder already holds unrelated files and reuses an existing vault of that name, so a single submit creates the vault and indexes into it.
+- With a vault open, the same form adds documents to it; "Use a different vault…" reveals the vault field to create or switch to another one for that run.
+- Indexing refuses to use the folder being indexed as the vault, and validates the documents path before creating anything, so a typo no longer leaves an empty vault behind. Creating a vault in a folder that already holds other files still requires confirmation, and confirming resumes the indexing run.
+
 #### Vault Management from the Web Interface
 - Added a Vaults page to create a new vault or choose an existing one from the browser; recently used vaults are remembered (persisted under `~/.talkpipe-vault`, overridable with `TALKPIPE_VAULT_HOME`).
 - Made `vault-server`'s vault path argument optional: starting with no arguments opens the vault manager so everything can be done from the browser.

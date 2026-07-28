@@ -3,26 +3,110 @@
 {% block title %}Add Documents - Talkpipe Vault{% endblock %}
 
 {% block content %}
-<div class="search-box">
-    <h2>Add Documents to This Vault</h2>
-    <p class="panel-hint">
-        Index files from a folder (searched recursively) or a glob pattern such as
-        <code>~/notes/**/*.md</code>. Documents are embedded with
-        <strong>{{ models.embedding_source }}/{{ models.embedding_model }}</strong>
-        (change this under Settings) into the vault at
-        <code>{{ vault_path }}</code>.
+{% if confirm_vault_path %}
+<div class="search-box vault-confirm-box">
+    <h3>This folder already contains files &mdash; create a vault here?</h3>
+    <p>
+        <strong>{{ confirm_vault_path }}</strong> holds
+        {{ confirm_entry_count }} item{{ 's' if confirm_entry_count != 1 }}
+        that {{ 'are' if confirm_entry_count != 1 else 'is' }} not vault data.
+        A vault is the folder that stores the search index &mdash; not the
+        documents you want to search. Creating a vault here will write index
+        files alongside your existing files, and deleting the vault later
+        would delete this entire folder.
     </p>
-    <form method="post" action="/documents/index" id="index-form">
-        <input type="text" name="source_path" id="source-path-input"
-               placeholder="No folder chosen yet &mdash; click Browse, or type a path or glob"
-               required autofocus>
-        <button type="button" id="source-browse-btn" class="btn-secondary">Browse&hellip;</button>
-        <button type="submit" id="index-btn">Index Documents</button>
+    <p>
+        To make these documents searchable, put the vault in a new, empty
+        folder instead and index this folder into it.
+    </p>
+    <div class="vault-confirm-actions">
+        <a href="/documents" class="btn-secondary vault-confirm-cancel">Choose a different folder</a>
+        <form method="post" action="{{ '/documents/index' if pending_source_path else '/vaults/open' }}">
+            <input type="hidden" name="new_vault_path" value="{{ confirm_vault_path }}">
+            <input type="hidden" name="confirm_non_vault" value="yes">
+            {% if pending_source_path %}
+            <input type="hidden" name="source_path" value="{{ pending_source_path }}">
+            {% if pending_overwrite %}<input type="hidden" name="overwrite" value="true">{% endif %}
+            {% endif %}
+            <button type="submit" class="btn-danger">Create the vault here anyway</button>
+        </form>
+    </div>
+</div>
+{% endif %}
+
+<div class="search-box">
+    <h2>Add Documents</h2>
+    <p class="panel-hint">
+        Pick the documents to index and the vault to index them into. Documents
+        are embedded with
+        <strong>{{ models.embedding_source }}/{{ models.embedding_model }}</strong>
+        (change this under Settings).
+    </p>
+    <form method="post" action="/documents/index" id="index-form" class="index-form">
+        <div class="index-step">
+            <label class="index-step-label" for="source-path-input">
+                1. Documents to index
+            </label>
+            <div class="index-field-row">
+                <input type="text" name="source_path" id="source-path-input"
+                       placeholder="No folder chosen yet &mdash; click Browse, or type a path or glob"
+                       value="{{ pending_source_path }}" autofocus>
+                <button type="button" id="source-browse-btn" class="btn-secondary">Browse&hellip;</button>
+            </div>
+            <p class="index-step-hint">
+                A folder (searched recursively) or a glob pattern such as
+                <code>~/notes/**/*.md</code>.
+            </p>
+        </div>
+
+        <div class="index-step">
+            <label class="index-step-label" for="vault-path-input">
+                2. Vault to index into
+            </label>
+            {% if vault_path %}
+            <div class="vault-current" id="vault-current">
+                <span class="vault-current-path">
+                    Open vault: <code>{{ vault_path }}</code>
+                    &middot; {{ shingled_chunks_count|default(0)|int }} chunk(s) indexed
+                </span>
+                <button type="button" id="vault-change-btn" class="btn-secondary">
+                    Use a different vault&hellip;
+                </button>
+            </div>
+            {% endif %}
+            <div class="index-field-row" id="vault-field"
+                 {% if vault_path %}style="display: none;"{% endif %}>
+                <input type="text" name="new_vault_path" id="vault-path-input"
+                       placeholder="Suggested once you choose documents &mdash; or type a path like {{ vault_example }}"
+                       value="">
+                <button type="button" id="vault-browse-btn" class="btn-secondary">Browse&hellip;</button>
+            </div>
+            <p class="index-step-hint" id="vault-hint"
+               {% if vault_path %}style="display: none;"{% endif %}>
+                The vault is a <em>separate</em> folder holding the search index
+                &mdash; not your documents. A name is suggested from the folder you
+                pick above; edit it or Browse to an existing vault. Leave the
+                documents field empty to just open a vault.
+            </p>
+        </div>
+
+        <label class="overwrite-option">
+            <input type="checkbox" name="overwrite" value="true"
+                   {% if pending_overwrite %}checked{% endif %}>
+            Overwrite: replace the vault's existing index instead of adding to it
+        </label>
+
+        <div class="index-submit">
+            <button type="submit" id="index-btn">
+                {% if vault_path %}Index Documents{% else %}Create Vault &amp; Index{% endif %}
+            </button>
+        </div>
     </form>
-    <label class="overwrite-option">
-        <input type="checkbox" name="overwrite" value="true" form="index-form">
-        Overwrite: replace the vault's existing index instead of adding to it
-    </label>
+    <div id="vault-open-progress" class="search-loading" style="display: none">
+        <div class="spinner"></div>
+        <span>Opening vault&hellip; first use may download the embedding model,
+              which can take a few minutes.</span>
+    </div>
 </div>
 
 <div class="search-box" id="index-progress" style="display: none;" aria-live="polite">
@@ -36,7 +120,113 @@
     <p class="progress-text" id="progress-text"></p>
 </div>
 
+<div class="search-box">
+    <h3>Recent Vaults</h3>
+    {% if recent_vaults %}
+    <ul class="vault-list">
+        {% for recent in recent_vaults %}
+        <li class="vault-entry">
+            <span class="vault-entry-path">
+                {{ recent }}
+                {% if recent == vault_path %}<span class="vault-entry-current">current</span>{% endif %}
+            </span>
+            {% if recent != vault_path %}
+            <span class="vault-entry-actions">
+                <form method="post" action="/vaults/open">
+                    <input type="hidden" name="new_vault_path" value="{{ recent }}">
+                    <button type="submit" class="btn-secondary">Open</button>
+                </form>
+                <form method="post" action="/vaults/delete" class="delete-vault-form"
+                      data-vault-path="{{ recent }}">
+                    <input type="hidden" name="vault_path" value="{{ recent }}">
+                    <input type="hidden" name="confirm" value="delete">
+                    <button type="submit" class="btn-danger">Delete</button>
+                </form>
+            </span>
+            {% endif %}
+        </li>
+        {% endfor %}
+    </ul>
+    {% else %}
+    <p class="panel-hint">No vaults opened yet — indexing documents creates your first one.</p>
+    {% endif %}
+</div>
+
+{% include "_dir_picker.html" %}
+
 <style>
+    .index-form {
+        display: block;
+    }
+    .index-step {
+        margin-bottom: 18px;
+    }
+    .index-step-label {
+        color: var(--heading);
+        display: block;
+        font-size: 0.95rem;
+        font-weight: 650;
+        margin-bottom: 8px;
+    }
+    .index-field-row {
+        display: flex;
+        gap: 10px;
+    }
+    .index-step-hint {
+        color: var(--muted);
+        font-size: 0.86rem;
+        margin-top: 8px;
+    }
+    .vault-current {
+        align-items: center;
+        background: var(--field-bg);
+        border: 1px solid var(--field-border);
+        border-radius: var(--radius-sm);
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        justify-content: space-between;
+        padding: 10px 14px;
+    }
+    .vault-current-path {
+        color: var(--muted);
+        font-size: 0.9rem;
+        overflow-wrap: anywhere;
+    }
+    .index-submit {
+        margin-top: 18px;
+    }
+    .vault-confirm-box {
+        border: 1px solid var(--danger-border);
+        background: var(--danger-bg);
+    }
+    .vault-confirm-box h3 {
+        color: var(--danger-ink);
+    }
+    .vault-confirm-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+    .vault-confirm-cancel {
+        display: inline-block;
+        text-decoration: none;
+    }
+    .vault-entry-actions {
+        display: flex;
+        flex-shrink: 0;
+        gap: 8px;
+    }
+    .btn-danger {
+        background: var(--danger-bg);
+        border: 1px solid var(--danger-border);
+        color: var(--danger-ink);
+    }
+    .btn-danger:hover {
+        background: var(--danger);
+        border-color: var(--danger);
+        color: #fff;
+    }
     .progress-header {
         align-items: center;
         display: flex;
@@ -79,10 +269,124 @@
     }
 </style>
 
-{% include "_dir_picker.html" %}
 <script>
     attachDirPicker('source-browse-btn', 'source-path-input', { allowNewFolder: false });
-    requireValue('source-path-input', 'index-btn');
+    attachDirPicker('vault-browse-btn', 'vault-path-input', { allowNewFolder: true });
+
+    (function () {
+        const sourceInput = document.getElementById('source-path-input');
+        const vaultInput = document.getElementById('vault-path-input');
+        const vaultField = document.getElementById('vault-field');
+        const vaultHint = document.getElementById('vault-hint');
+        const vaultCurrent = document.getElementById('vault-current');
+        const changeBtn = document.getElementById('vault-change-btn');
+        const indexBtn = document.getElementById('index-btn');
+        const hasOpenVault = !!vaultCurrent;
+        // Only suggest into a field the user has not taken over, and never
+        // while an open vault is the target.
+        let vaultEdited = false;
+        let suggestFor = '';
+
+        function vaultFieldVisible() {
+            return vaultField.style.display !== 'none';
+        }
+
+        function updateSubmitState() {
+            const hasSource = !!sourceInput.value.trim();
+            const hasVault = !!vaultInput.value.trim();
+            const needsVault = vaultFieldVisible();
+            // A vault with no documents opens that vault and stops there.
+            if (needsVault && hasVault && !hasSource) {
+                indexBtn.disabled = false;
+                indexBtn.textContent = 'Open Vault';
+                return;
+            }
+            indexBtn.disabled = !hasSource || (needsVault && !hasVault);
+            indexBtn.textContent = needsVault
+                ? 'Create Vault & Index'
+                : 'Index Documents';
+        }
+
+        async function suggestVault() {
+            const source = sourceInput.value.trim();
+            if (!source || vaultEdited || !vaultFieldVisible() || source === suggestFor) {
+                return;
+            }
+            suggestFor = source;
+            try {
+                const response = await fetch(
+                    '/api/suggest-vault?source=' + encodeURIComponent(source));
+                const data = await response.json();
+                // The field may have been edited while the request was in flight.
+                if (!vaultEdited && data.path && sourceInput.value.trim() === source) {
+                    vaultInput.value = data.path;
+                    updateSubmitState();
+                }
+            } catch (err) {
+                /* Suggestion is a convenience; typing a path still works. */
+            }
+        }
+
+        sourceInput.addEventListener('input', function () {
+            updateSubmitState();
+            suggestVault();
+        });
+        vaultInput.addEventListener('input', function () {
+            // The folder picker fires 'input' too, which counts as the user
+            // choosing the vault themselves.
+            vaultEdited = true;
+            updateSubmitState();
+        });
+        if (changeBtn) {
+            changeBtn.addEventListener('click', function () {
+                vaultCurrent.style.display = 'none';
+                vaultField.style.display = 'flex';
+                vaultHint.style.display = '';
+                vaultInput.focus();
+                suggestVault();
+                updateSubmitState();
+            });
+        }
+        // Creating/opening a vault happens inline on submit and can block on
+        // first-time setup (e.g. downloading the embedding model).
+        document.getElementById('index-form').addEventListener('submit', function () {
+            if (vaultFieldVisible()) {
+                document.getElementById('vault-open-progress').style.display = '';
+            }
+            indexBtn.disabled = true;
+        });
+
+        updateSubmitState();
+        if (!hasOpenVault && sourceInput.value.trim()) {
+            suggestVault();
+        }
+    })();
+
+    // Confirm before the destructive, irreversible vault deletion.
+    document.querySelectorAll('.delete-vault-form').forEach(function (form) {
+        form.addEventListener('submit', function (event) {
+            const path = form.getAttribute('data-vault-path');
+            const ok = window.confirm(
+                'Permanently delete this vault and its index files from disk?\n\n' +
+                path + '\n\nThis cannot be undone.'
+            );
+            if (!ok) {
+                event.preventDefault();
+            }
+        });
+    });
+
+    // Opening a vault can block on first-time setup (e.g. downloading the
+    // embedding model), so show progress and stop double submits while the
+    // browser waits for the redirect.
+    document.querySelectorAll('form[action="/vaults/open"]').forEach(function (form) {
+        form.addEventListener('submit', function () {
+            document.getElementById('vault-open-progress').style.display = '';
+            document.querySelectorAll(
+                'form[action="/vaults/open"] button[type="submit"]'
+            ).forEach(function (btn) { btn.disabled = true; });
+        });
+    });
 
     (function () {
         const panel = document.getElementById('index-progress');

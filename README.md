@@ -57,12 +57,11 @@ vault-server
 
 Open http://127.0.0.1:8002, then:
 
-1. **Vaults** — create a vault (any new or empty folder; it holds the index,
-   not your documents).
-2. **Add Documents** — pick a folder or glob pattern to index. The first
-   index downloads the default embedding model from Hugging Face (~30 MB,
-   cached afterward).
-3. **Search** and **Ask** away.
+1. **Vaults & Documents** — pick the folder (or glob pattern) to index. A
+   vault name is suggested for you; one click creates the vault and indexes
+   into it. The first index downloads the default embedding model from
+   Hugging Face (~30 MB, cached afterward).
+2. **Search** and **Ask** away.
 
 Answers on the Ask page need a chat provider — any one that TalkPipe
 supports. Pick it on the **Settings** page: a local Ollama server (the
@@ -90,7 +89,7 @@ What each piece does:
 - `-v vault_data:/app/data` — persistent storage for vaults, settings, and
   the embedding-model cache, so the model downloads once and your data
   survives container recreation. On start the container reopens the vault
-  you last used; the first run starts on the Vaults page.
+  you last used; the first run starts on the Vaults & Documents page.
 - `-v ~/Documents:/documents:ro,Z` — host documents to index; the folder
   picker only sees what you mount. Mount `~` instead to browse your whole
   home directory. Keep `:Z` on SELinux Linux hosts (e.g. Fedora); **drop it
@@ -121,10 +120,11 @@ A compose service and instructions for deriving your own customized image
 
 ## The web interface
 
-- **Vaults** — create or choose a vault with a built-in folder browser;
-  recent vaults are remembered for one-click reopening.
-- **Add Documents** — index a folder or glob into the current vault, with
-  live progress.
+- **Vaults & Documents** — choose the documents to index and the vault to
+  index them into, on one page with a built-in folder browser. With no vault
+  open, a vault name is suggested from the documents folder and created on
+  submit; with one open, the same form adds documents to it. Recent vaults
+  are remembered for one-click reopening, and indexing shows live progress.
 - **Settings** — choose embedding and chat providers/models, with a live
   **Configuration status** panel that tests your selection (and can download
   an uncached embedding model via Re-test), plus **Connections &

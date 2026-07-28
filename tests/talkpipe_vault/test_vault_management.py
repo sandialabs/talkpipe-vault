@@ -100,22 +100,37 @@ class TestUserSettings:
 class TestVaultSelection:
     """Tests for choosing and creating vaults from the interface."""
 
-    def test_home_redirects_to_vault_manager_without_vault(self, client):
+    def test_home_redirects_to_documents_page_without_vault(self, client):
         response = client.get("/")
 
         assert response.status_code == 303
-        assert response.headers["location"].startswith("/vaults")
+        assert response.headers["location"].startswith("/documents")
 
     def test_search_pages_redirect_without_vault(self, client):
-        for path in ("/search", "/keyword-search", "/chat", "/documents"):
+        for path in ("/search", "/keyword-search", "/chat"):
             response = client.get(path)
             assert response.status_code == 303, path
-            assert response.headers["location"].startswith("/vaults"), path
+            assert response.headers["location"].startswith("/documents"), path
 
-    def test_vaults_page_lists_recent_vaults(self, client):
+    def test_documents_page_works_without_a_vault(self, client):
+        """The combined page is the entry point, so it must render vault-less."""
+        response = client.get("/documents")
+
+        assert response.status_code == 200
+        assert 'name="source_path"' in response.text
+        assert 'name="new_vault_path"' in response.text
+
+    def test_vaults_url_redirects_to_the_combined_page(self, client):
+        response = client.get("/vaults?error=nope")
+
+        assert response.status_code == 303
+        assert response.headers["location"].startswith("/documents")
+        assert "error=nope" in response.headers["location"]
+
+    def test_documents_page_lists_recent_vaults(self, client):
         user_settings.remember_vault("/vault/alpha")
 
-        response = client.get("/vaults")
+        response = client.get("/documents")
 
         assert response.status_code == 200
         assert "/vault/alpha" in response.text
@@ -161,7 +176,7 @@ class TestVaultSelection:
         )
 
         assert response.status_code == 303
-        assert response.headers["location"].startswith("/vaults?confirm_path=")
+        assert response.headers["location"].startswith("/documents?confirm_path=")
         assert query._state.vault_path == ""
         assert user_settings.get_recent_vaults() == []
         assert sorted(p.name for p in docs_folder.iterdir()) == ["notes.txt"]
@@ -171,7 +186,7 @@ class TestVaultSelection:
         docs_folder.mkdir()
         (docs_folder / "notes.txt").write_text("Plain user document.")
 
-        response = client.get(f"/vaults?confirm_path={docs_folder}")
+        response = client.get(f"/documents?confirm_path={docs_folder}")
 
         assert response.status_code == 200
         assert str(docs_folder) in response.text
@@ -187,7 +202,7 @@ class TestVaultSelection:
         gone = tmp_path / "emptied"
         gone.mkdir()
 
-        response = client.get(f"/vaults?confirm_path={gone}")
+        response = client.get(f"/documents?confirm_path={gone}")
 
         assert response.status_code == 200
         assert "confirm_non_vault" not in response.text
@@ -368,20 +383,20 @@ class TestVaultDeletion:
         assert response.status_code == 303
         assert str(vault) not in user_settings.get_recent_vaults()
 
-    def test_vaults_page_shows_delete_button_for_non_current_vault(
+    def test_documents_page_shows_delete_button_for_non_current_vault(
         self, client, tmp_path
     ):
         user_settings.remember_vault("/vault/other")
 
-        response = client.get("/vaults")
+        response = client.get("/documents")
 
         assert 'action="/vaults/delete"' in response.text
         assert "This cannot be undone" in response.text
 
-    def test_vaults_page_has_open_progress_indicator(self, client):
+    def test_documents_page_has_open_progress_indicator(self, client):
         """Opening a vault can block on a first-time model download, so the
         page must carry the progress element the submit handler reveals."""
-        response = client.get("/vaults")
+        response = client.get("/documents")
 
         assert 'id="vault-open-progress"' in response.text
         assert "may download the embedding model" in response.text
@@ -421,23 +436,14 @@ class TestDirectoryPicker:
             assert response.status_code == 400, bad
             assert "error" in response.json(), bad
 
-    def test_vaults_page_wires_picker_and_disabled_button(self, client):
-        page = client.get("/vaults").text
-
-        assert 'id="vault-browse-btn"' in page
-        assert 'id="dir-picker-overlay"' in page
-        assert "attachDirPicker('vault-browse-btn', 'vault-path-input'" in page
-        assert "requireValue('vault-path-input', 'open-vault-btn')" in page
-
-    def test_documents_page_wires_picker_and_disabled_button(self, client, tmp_path):
-        client.post("/vaults/open", data={"new_vault_path": str(tmp_path / "v")})
-
+    def test_combined_page_wires_both_pickers(self, client):
         page = client.get("/documents").text
 
-        assert 'id="source-browse-btn"' in page
         assert 'id="dir-picker-overlay"' in page
+        assert 'id="source-browse-btn"' in page
+        assert 'id="vault-browse-btn"' in page
         assert "attachDirPicker('source-browse-btn', 'source-path-input'" in page
-        assert "requireValue('source-path-input', 'index-btn')" in page
+        assert "attachDirPicker('vault-browse-btn', 'vault-path-input'" in page
 
 
 class TestModelSettings:
@@ -553,6 +559,223 @@ class TestModelSettings:
 
         assert response.status_code == 303
         assert "re-index" not in response.headers["location"]
+
+
+class TestVaultSuggestion:
+    """Tests for suggesting a vault name from the chosen documents folder."""
+
+    def test_suggests_a_vault_named_after_the_documents_folder(
+        self, monkeypatch, tmp_path
+    ):
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.setattr(query.Path, "home", staticmethod(lambda: home))
+        docs = tmp_path / "field-notes"
+        docs.mkdir()
+
+        assert query.suggest_vault_path(str(docs)) == str(home / "field-notes-vault")
+
+    def test_suggestion_uses_the_folder_a_glob_walks(self, monkeypatch, tmp_path):
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.setattr(query.Path, "home", staticmethod(lambda: home))
+
+        suggestion = query.suggest_vault_path(str(tmp_path / "notes") + "/**/*.md")
+
+        assert suggestion == str(home / "notes-vault")
+
+    def test_suggestion_skips_folders_holding_other_files(self, monkeypatch, tmp_path):
+        """Never propose writing index files into someone's own folder."""
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.setattr(query.Path, "home", staticmethod(lambda: home))
+        taken = home / "notes-vault"
+        taken.mkdir()
+        (taken / "unrelated.txt").write_text("x")
+        docs = tmp_path / "notes"
+        docs.mkdir()
+
+        assert query.suggest_vault_path(str(docs)) == str(home / "notes-vault-2")
+
+    def test_suggestion_reuses_an_existing_vault_of_the_same_name(
+        self, monkeypatch, tmp_path
+    ):
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.setattr(query.Path, "home", staticmethod(lambda: home))
+        (home / "notes-vault" / "docs.lance").mkdir(parents=True)
+        docs = tmp_path / "notes"
+        docs.mkdir()
+
+        assert query.suggest_vault_path(str(docs)) == str(home / "notes-vault")
+
+    def test_suggestion_lands_under_the_configured_vault_root(
+        self, monkeypatch, tmp_path
+    ):
+        root = tmp_path / "app-data"
+        root.mkdir()
+        monkeypatch.setenv("TALKPIPE_VAULT_ROOT", str(root))
+        docs = tmp_path / "notes"
+        docs.mkdir()
+
+        assert query.suggest_vault_path(str(docs)) == str(root / "notes-vault")
+
+    def test_suggest_endpoint_returns_a_path(self, client, tmp_path):
+        docs = tmp_path / "papers"
+        docs.mkdir()
+
+        response = client.get(f"/api/suggest-vault?source={docs}")
+
+        assert response.status_code == 200
+        assert response.json()["path"].endswith("papers-vault")
+
+    def test_suggest_endpoint_without_a_source_returns_nothing(self, client):
+        assert client.get("/api/suggest-vault").json() == {"path": ""}
+
+
+class TestCombinedVaultAndIndexing:
+    """Tests for creating a vault and indexing documents in one submit."""
+
+    def test_creates_the_vault_and_starts_indexing(self, client, tmp_path):
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        (docs / "a.txt").write_text("hello")
+        vault = tmp_path / "docs-vault"
+
+        response = client.post(
+            "/documents/index",
+            data={"source_path": str(docs), "new_vault_path": str(vault)},
+        )
+
+        assert response.status_code == 303
+        location = response.headers["location"]
+        assert "Created+vault" in location
+        assert "Indexing+started" in location
+        assert vault.is_dir()
+        assert query._state.vault_path == str(vault)
+        assert user_settings.get_recent_vaults() == [str(vault)]
+
+    def test_switches_to_another_vault_for_this_run(self, client, tmp_path):
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        (docs / "a.txt").write_text("hello")
+        first = tmp_path / "first-vault"
+        client.post("/vaults/open", data={"new_vault_path": str(first)})
+        second = tmp_path / "second-vault"
+        second.mkdir()
+
+        client.post(
+            "/documents/index",
+            data={"source_path": str(docs), "new_vault_path": str(second)},
+        )
+
+        assert query._state.vault_path == str(second)
+
+    def test_blank_vault_field_keeps_the_open_vault(self, client, tmp_path):
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        (docs / "a.txt").write_text("hello")
+        vault = tmp_path / "open-vault"
+        client.post("/vaults/open", data={"new_vault_path": str(vault)})
+
+        response = client.post(
+            "/documents/index", data={"source_path": str(docs), "new_vault_path": ""}
+        )
+
+        assert "Indexing+started" in response.headers["location"]
+        assert query._state.vault_path == str(vault)
+
+    def test_a_vault_with_no_documents_just_opens_it(self, client, tmp_path):
+        """The same form opens an existing vault when no documents are given."""
+        vault = tmp_path / "existing-vault"
+        (vault / "docs.lance").mkdir(parents=True)
+
+        response = client.post(
+            "/documents/index", data={"source_path": "", "new_vault_path": str(vault)}
+        )
+
+        assert response.status_code == 303
+        assert "Opened+vault" in response.headers["location"]
+        assert query._state.vault_path == str(vault)
+        assert client.get("/api/index-status").json()["running"] is False
+
+    def test_indexing_without_any_vault_asks_for_one(self, client, tmp_path):
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        (docs / "a.txt").write_text("hello")
+
+        response = client.post("/documents/index", data={"source_path": str(docs)})
+
+        assert response.status_code == 303
+        location = response.headers["location"]
+        assert "Choose+a+vault" in location
+        # The chosen documents come back with the form so nothing is retyped.
+        assert "source_path=" in location
+        assert query._state.vault_path == ""
+
+    def test_rejects_a_vault_inside_the_documents_folder_itself(self, client, tmp_path):
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        (docs / "a.txt").write_text("hello")
+
+        response = client.post(
+            "/documents/index",
+            data={"source_path": str(docs), "new_vault_path": str(docs)},
+        )
+
+        assert response.status_code == 303
+        assert "error=" in response.headers["location"]
+        assert query._state.vault_path == ""
+        assert sorted(p.name for p in docs.iterdir()) == ["a.txt"]
+
+    def test_bad_source_never_creates_the_vault(self, client, tmp_path):
+        """A typo in the documents field must not leave a stray empty vault."""
+        vault = tmp_path / "would-be-vault"
+
+        response = client.post(
+            "/documents/index",
+            data={
+                "source_path": str(tmp_path / "nothing-here"),
+                "new_vault_path": str(vault),
+            },
+        )
+
+        assert "matched+no+files" in response.headers["location"]
+        assert not vault.exists()
+
+    def test_non_empty_vault_folder_confirms_and_then_indexes(self, client, tmp_path):
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        (docs / "a.txt").write_text("hello")
+        crowded = tmp_path / "crowded"
+        crowded.mkdir()
+        (crowded / "someone-elses.txt").write_text("x")
+
+        response = client.post(
+            "/documents/index",
+            data={"source_path": str(docs), "new_vault_path": str(crowded)},
+        )
+
+        assert response.headers["location"].startswith("/documents?confirm_path=")
+        # The pending documents ride along so the confirm panel can resume.
+        assert "source_path=" in response.headers["location"]
+        assert query._state.vault_path == ""
+
+        page = client.get(f"/documents?confirm_path={crowded}&source_path={docs}").text
+        assert 'action="/documents/index"' in page
+        assert 'name="confirm_non_vault" value="yes"' in page
+
+        confirmed = client.post(
+            "/documents/index",
+            data={
+                "source_path": str(docs),
+                "new_vault_path": str(crowded),
+                "confirm_non_vault": "yes",
+            },
+        )
+
+        assert "Indexing+started" in confirmed.headers["location"]
+        assert query._state.vault_path == str(crowded)
 
 
 class TestDocumentIndexing:

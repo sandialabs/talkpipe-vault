@@ -36,10 +36,11 @@ not match the index.
 vault-server [~/my-vault] [--resume] [--host 0.0.0.0] [--port 8002] [--show-source-paths] [--no-browser]
 ```
 
-- The vault path is optional; without it the app starts on the Vaults page.
+- The vault path is optional; without it the app starts on the
+  Vaults & Documents page.
 - `--resume` opens the vault most recently used in the web interface,
-  falling back to the given path (or the Vaults page) when no recent vault
-  is usable. This is how the container image starts.
+  falling back to the given path (or the Vaults & Documents page) when no
+  recent vault is usable. This is how the container image starts.
 - `--show-source-paths` shows source file paths in search results and serves
   those files over HTTP; hidden by default.
 - `--no-browser` skips opening a browser on startup (headless servers,

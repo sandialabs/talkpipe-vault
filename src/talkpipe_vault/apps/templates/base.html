@@ -383,7 +383,7 @@
             opacity: 0.5;
         }
 
-        /* ---------- Vault list (Vaults page) ---------- */
+        /* ---------- Vault list (Vaults & Documents page) ---------- */
         .vault-list {
             list-style: none;
             margin-top: 8px;
@@ -894,7 +894,7 @@
             <nav>
                 {% for href, label in [('/', 'Home'), ('/search', 'Semantic Search'),
                                        ('/keyword-search', 'Keyword Search'), ('/chat', 'Ask'),
-                                       ('/documents', 'Add Documents'), ('/vaults', 'Vaults'),
+                                       ('/documents', 'Vaults & Documents'),
                                        ('/settings', 'Settings')] -%}
                 <a href="{{ href }}" {% if request.url.path == href %}class="active"{% endif %}>{{ label }}</a>
                 {% endfor -%}

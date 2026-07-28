@@ -33,7 +33,7 @@ src/talkpipe_vault/
 │   ├── query.py                # FastAPI web application (all routes + run_app)
 │   ├── vault_server.py         # vault-server CLI entry point
 │   ├── user_settings.py        # Persisted UI settings (recent vaults, model overrides)
-│   ├── templates/              # Jinja2 templates (base, home, vaults, documents,
+│   ├── templates/              # Jinja2 templates (base, home, documents,
 │   │                           #   settings, search, keyword_search, chat, partials)
 │   └── static/                 # favicon.svg, logo.jpg
 └── pipelines/
@@ -47,19 +47,23 @@ src/talkpipe_vault/
 
 `vault-server [vault_path] [--resume] [--host] [--port] [--show-source-paths]` —
 `--resume` opens the most recently used vault (fallback: vault_path); the vault path is
-optional; without it the UI starts on the Vaults page.
+optional; without it the UI starts on the Vaults & Documents page.
 
 Routes in `apps/query.py`:
-- `/vaults` (+ `/vaults/open`): create or choose a vault; recents persisted via
-  `user_settings.py` in `$TALKPIPE_VAULT_HOME` (default `~/.talkpipe-vault`).
-- `/documents` (+ `/documents/index`): index a folder/glob into the current vault using
-  TalkPipe's `build_rag_database()` driver (writes the
+- `/documents` (+ `/documents/index`): the combined **Vaults & Documents** page — pick the
+  documents to index *and* the vault to index them into, in one submit. Works with no
+  vault open: `/api/suggest-vault` proposes a vault name derived from the chosen documents
+  folder (`suggest_vault_path`), and `/documents/index` creates/opens that vault before
+  indexing. Indexing uses TalkPipe's `build_rag_database()` driver (writes the
   `docs` table — the same driver behind TalkPipe's `makevectordatabase` CLI, with
   embedder preflight, dimension checking, overflow truncation, and skip counting).
+- `/vaults/open` and `/vaults/delete` back the recent-vaults list on that page; recents are
+  persisted via `user_settings.py` in `$TALKPIPE_VAULT_HOME` (default `~/.talkpipe-vault`).
+  `GET /vaults` is a redirect alias for `/documents`.
 - `/settings`: embedding + chat source/model overrides, persisted and applied immediately.
 - `/`, `/search`, `/keyword-search` (+ index creation), `/chat`, `/chunk-content`,
   `/source-file`, `/refresh`.
-- Pages that need a vault redirect to `/vaults` when none is selected.
+- Pages that need a vault redirect to `/documents` when none is selected.
 
 State lives in the module-level `_state: AppState` singleton; pipelines are rebuilt by
 `_refresh_pipelines()` (throttled to every 5s unless forced).
@@ -158,9 +162,9 @@ podman run --rm -p 8002:8002 --userns=keep-id \
 ```
 
 Default CMD runs `vault-server --resume` on port 8002 (no default vault): it
-reopens the vault last used in the web interface, starting on the Vaults page
-on the first run before any vault has been opened. Mount documents somewhere readable
-(e.g. `/documents`) and index them from the Add Documents page. Compose services (`vault`,
+reopens the vault last used in the web interface, starting on the Vaults & Documents
+page on the first run before any vault has been opened. Mount documents somewhere readable
+(e.g. `/documents`) and index them from that page. Compose services (`vault`,
 `vault-dev`) exist in docker-compose.yml; with podman, install a compose provider
 (`pip install podman-compose`) and run `podman compose up -d`.
 
