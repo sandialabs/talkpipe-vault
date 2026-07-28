@@ -330,7 +330,10 @@ def init_pipelines(vault_path: str) -> None:
     ensure_supported_vault_layout(vault_path)
     _state.vault_path = vault_path
     _apply_vault_embedding_config(vault_path)
-    _refresh_pipelines()
+    # Forced: the vault just changed, so the throttled refresh must never
+    # no-op and leave pipelines (and keyword_search_enabled) pointing at a
+    # previously opened vault.
+    _refresh_pipelines(force=True)
 
     # Get document counts from storage locations
     _update_document_counts(vault_path)

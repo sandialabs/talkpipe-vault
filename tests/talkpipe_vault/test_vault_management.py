@@ -147,6 +147,38 @@ class TestVaultSelection:
         assert query._state.vault_path == str(new_vault)
         assert user_settings.get_recent_vaults() == [str(new_vault)]
 
+    def test_open_new_vault_drops_previous_vault_keyword_search(self, client, tmp_path):
+        """Switching vaults must not inherit the old vault's Whoosh state.
+
+        Opening vault B right after vault A used to hit the 5-second refresh
+        throttle, leaving keyword_search_enabled and the search pipelines
+        pointing at vault A.
+        """
+        from talkpipe.search.whoosh import WhooshFullTextIndex
+
+        from talkpipe_vault.pipelines.config import get_whoosh_index_path
+
+        vault_a = tmp_path / "vault-with-whoosh"
+        vault_a.mkdir()
+        with WhooshFullTextIndex(
+            get_whoosh_index_path(str(vault_a)), fields=query.WHOOSH_INDEX_FIELDS
+        ) as ix:
+            ix.add_document({"content": "hello", "path": "/x", "filename": "x"})
+
+        client.post("/vaults/open", data={"new_vault_path": str(vault_a)})
+        assert query._state.keyword_search_enabled
+
+        vault_b = tmp_path / "fresh-vault"
+        client.post("/vaults/open", data={"new_vault_path": str(vault_b)})
+
+        assert query._state.vault_path == str(vault_b)
+        assert not query._state.keyword_search_enabled
+        assert query._state.keyword_search_pipeline is None
+
+        page = client.get("/keyword-search", follow_redirects=True)
+        assert "Create Full-Text Index" in page.text
+        assert "Rebuild Full-Text Index" not in page.text
+
     def test_open_existing_vault_redirects_home(self, client, tmp_path):
         existing = tmp_path / "existing-vault"
         existing.mkdir()
