@@ -119,7 +119,17 @@ non-authoritative `indexed_via_url` breadcrumb).
 
 Sources: `fileWatcher`, `watchIntoVectorDB`, `listIntoVectorDB` (watcher ones experimental).
 Segments: `buildVectorDBFromPaths`, `vaultSearch`, `vaultChat`, `vaultTextSearch`,
-`searchLance`.
+`searchLance`, `extractSearchKeywords`, `mergeSearchResults`.
+
+**Keyword-augmented Ask** (issue #11): `vaultChat[keyword_search=True]` composes the
+reusable pipeline prompt → `extractSearchKeywords` (LLM distills the question into a
+quoted Whoosh OR-query; falls back to the raw question on failure) → `vaultTextSearch`
+→ vector search → `mergeSearchResults` (normalizes both hit shapes to SearchResult,
+dedupes by doc_id — the Whoosh index reuses LanceDB row ids — and renames
+path/filename → source/title so keyword hits are citable) → RAG prompt → completion.
+The Ask page shows a "Boost retrieval with keyword search" checkbox when the vault
+has a Whoosh index; `_refresh_pipelines` keeps a separate `keyword_chat_pipeline`
+and Ask degrades to the plain pipeline when it can't be built.
 
 ## Development Commands
 

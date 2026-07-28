@@ -94,6 +94,7 @@ class AppState:
     vault_path: str = ""
     search_pipeline: Callable[[str], Any] | None = None
     chat_pipeline: Callable[[str], str] | None = None
+    keyword_chat_pipeline: Callable[[str], str] | None = None
     keyword_search_pipeline: Callable[[str], list[Any]] | None = None
     shingled_chunks_count: int = 0
     keyword_search_enabled: bool = False
@@ -407,8 +408,28 @@ def _refresh_pipelines(force: bool = False) -> None:
         _state.keyword_search_pipeline = VaultTextSearch(
             vault_path=vault_path
         ).as_function(single_in=True, single_out=False)
+        try:
+            _state.keyword_chat_pipeline = VaultChat(
+                vault_path=vault_path,
+                embedding_model=_state.embedding_model,
+                embedding_source=_state.embedding_source,
+                chat_model=_state.chat_model,
+                chat_source=_state.chat_source,
+                limit=_state.rag_result_limit or DEFAULT_RAG_RESULT_LIMIT,
+                keyword_search=True,
+            ).as_function(single_in=True, single_out=True)
+        except Exception:
+            # Unlike the plain chat pipeline, this one instantiates the chat
+            # LLM eagerly (for keyword extraction), which can fail on a bad
+            # model configuration. Ask must keep working without the option.
+            logger.warning(
+                "Could not build the keyword-augmented Ask pipeline",
+                exc_info=True,
+            )
+            _state.keyword_chat_pipeline = None
     else:
         _state.keyword_search_pipeline = None
+        _state.keyword_chat_pipeline = None
     _state.last_refresh_time = current_time
 
 
@@ -2165,6 +2186,7 @@ async def chat_page(
 async def chat_response(
     request: Request,
     message: Annotated[str, Form()] = "",
+    use_keyword_search: Annotated[str, Form()] = "",
     state: AppState = Depends(get_state),
 ) -> HTMLResponse:
     """
@@ -2172,6 +2194,8 @@ async def chat_response(
 
     Expects form data with:
         - message: str - The user's question
+        - use_keyword_search: str - If truthy, augment retrieval with
+          LLM-extracted keyword search over the full-text index
 
     Returns HTML page with the question and AI-generated answer.
     """
@@ -2188,8 +2212,11 @@ async def chat_response(
             # Update document counts to reflect latest state
             _update_document_counts(state.vault_path)
             citations = _chat_citations(state, message)
+            pipeline = state.chat_pipeline
+            if use_keyword_search and state.keyword_chat_pipeline:
+                pipeline = state.keyword_chat_pipeline
             # Perform chat with refreshed pipeline
-            response = state.chat_pipeline(message)
+            response = pipeline(message)
             if not state.show_source_paths:
                 # The RAG answer text ends with a "Sources:" list of absolute
                 # paths; hide them unless --show-source-paths was given, to
@@ -2301,6 +2328,7 @@ def run_app(
             _state.vault_path = ""
             _state.search_pipeline = None
             _state.chat_pipeline = None
+            _state.keyword_chat_pipeline = None
             _state.keyword_search_pipeline = None
         user_settings.remember_vault(vault_path)
     if open_browser:

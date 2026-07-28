@@ -54,6 +54,7 @@ def reset_app_state(tmp_path, monkeypatch):
     query._state.vault_path = str(tmp_path)
     query._state.search_pipeline = None
     query._state.chat_pipeline = None
+    query._state.keyword_chat_pipeline = None
     query._state.keyword_search_pipeline = None
     query._state.shingled_chunks_count = 0
     query._state.keyword_search_enabled = False
@@ -771,6 +772,57 @@ def test_chat_citations_hide_source_paths_by_default(monkeypatch):
     assert "/original/secret-dir/source.txt" not in response.text
     # Chunk lookup still works through the stable row id.
     assert '"lookup_path": "row-uuid"' in response.text
+
+
+def test_chat_page_offers_keyword_toggle_only_with_whoosh_index():
+    """The keyword-boost checkbox should appear only when a Whoosh index exists."""
+    client = TestClient(query.app)
+
+    response = client.get("/chat")
+    assert response.status_code == 200
+    assert 'id="use-keyword-search"' not in response.text
+
+    query._state.keyword_search_enabled = True
+    response = client.get("/chat")
+    assert response.status_code == 200
+    assert 'id="use-keyword-search"' in response.text
+    assert "Boost retrieval with keyword search" in response.text
+
+
+def test_chat_uses_keyword_pipeline_when_requested(monkeypatch):
+    """Checking the keyword option must route the question to the keyword-augmented pipeline."""
+    query._state.chat_pipeline = lambda _message: "Plain answer."
+    query._state.keyword_chat_pipeline = lambda _message: "Keyword-augmented answer."
+    query._state.search_pipeline = lambda _message: []
+    query._state.keyword_search_enabled = True
+    monkeypatch.setattr(query, "_refresh_pipelines", lambda: None)
+    monkeypatch.setattr(query, "_update_document_counts", lambda vault_path: None)
+    client = TestClient(query.app)
+
+    response = client.post(
+        "/chat", data={"message": "What matters?", "use_keyword_search": "on"}
+    )
+
+    assert response.status_code == 200
+    assert "Keyword-augmented answer." in response.text
+    assert "Plain answer." not in response.text
+
+
+def test_chat_falls_back_to_plain_pipeline_without_keyword_pipeline(monkeypatch):
+    """Requesting keyword search must degrade gracefully when unavailable."""
+    query._state.chat_pipeline = lambda _message: "Plain answer."
+    query._state.keyword_chat_pipeline = None
+    query._state.search_pipeline = lambda _message: []
+    monkeypatch.setattr(query, "_refresh_pipelines", lambda: None)
+    monkeypatch.setattr(query, "_update_document_counts", lambda vault_path: None)
+    client = TestClient(query.app)
+
+    response = client.post(
+        "/chat", data={"message": "What matters?", "use_keyword_search": "on"}
+    )
+
+    assert response.status_code == 200
+    assert "Plain answer." in response.text
 
 
 def test_chat_page_includes_full_chunk_modal():

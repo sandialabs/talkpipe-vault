@@ -135,6 +135,10 @@ A compose service and instructions for deriving your own customized image
   case-insensitive but on exact word tokens (`apple` won't match `apples`);
   use semantic search for meaning-based lookups.
 - **Ask** — single-turn Q&A with source citations you can open and copy.
+  Once a full-text index exists, a **Boost retrieval with keyword search**
+  checkbox appears: the chat model distills your question into index
+  keywords, the keyword matches are merged with the vector-search results,
+  and the combined context is used to answer.
 
 ## Configuring models
 

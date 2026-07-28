@@ -200,6 +200,34 @@ class TestVaultChat:
         assert segment.pipeline is not None
         assert callable(segment.pipeline)
 
+    def test_keyword_search_chat_returns_response(self, populated_vector_db):
+        """Keyword-augmented chat should answer even without a Whoosh index.
+
+        The vault has no full-text index here, so the keyword leg contributes
+        nothing and the answer must still come from vector retrieval alone.
+        """
+        segment = VaultChat(vault_path=populated_vector_db, keyword_search=True)
+
+        result = segment.process_value("What is Python used for?")
+
+        assert result is not None
+        assert isinstance(result, str)
+        assert len(result) > 0
+
+    def test_keyword_search_chat_with_whoosh_index(self, populated_vector_db):
+        """Keyword-augmented chat should answer with the full merged pipeline."""
+        from talkpipe_vault.apps import query as query_app
+
+        documents = query_app._iter_lancedb_docs_for_whoosh(populated_vector_db)
+        query_app._build_whoosh_index(populated_vector_db, documents)
+        segment = VaultChat(vault_path=populated_vector_db, keyword_search=True)
+
+        result = segment.process_value("What is FastAPI used for?")
+
+        assert result is not None
+        assert isinstance(result, str)
+        assert len(result) > 0
+
 
 class TestVaultTextSearch:
     """Tests for the VaultTextSearch segment."""

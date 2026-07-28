@@ -214,6 +214,14 @@ RAG_PROMPT_DIRECTIVE = (
     "by file name or title only (no directory paths)."
 )
 
+# System prompt for turning a user question into full-text index keywords
+# (used by the extractSearchKeywords segment when keyword-augmented retrieval
+# is enabled). Kept as a plain system_prompt string for the same reason as
+# RAG_SYSTEM_PROMPT above.
+KEYWORD_EXTRACTION_SYSTEM_PROMPT = """You convert questions into search keywords for a full-text document index.
+Given a question, reply with 3 to 8 short keywords or multi-word phrases that would match documents relevant to the question. Prefer specific nouns, names, and technical terms taken from or implied by the question.
+Reply with only the keywords, one per line. Do not number them, do not add bullets, and do not add any explanation."""
+
 
 # Default template values (used if not specified in TalkPipe config)
 DOCUMENT_TEMPLATE = """title: {title} | text: {content}"""
