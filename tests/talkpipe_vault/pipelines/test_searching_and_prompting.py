@@ -228,6 +228,35 @@ class TestVaultChat:
         assert isinstance(result, str)
         assert len(result) > 0
 
+    def test_include_background_requires_keyword_search(self, tmp_path):
+        """Only the keyword pipeline can report its merged retrieval."""
+        import pytest
+
+        with pytest.raises(ValueError, match="keyword_search"):
+            VaultChat(vault_path=str(tmp_path), include_background=True)
+
+    def test_keyword_chat_include_background_reports_retrieval(
+        self, populated_vector_db
+    ):
+        """With include_background, the answer comes with the merged chunks."""
+        from talkpipe_vault.apps import query as query_app
+
+        documents = query_app._iter_lancedb_docs_for_whoosh(populated_vector_db)
+        query_app._build_whoosh_index(populated_vector_db, documents)
+        segment = VaultChat(
+            vault_path=populated_vector_db,
+            keyword_search=True,
+            include_background=True,
+        )
+
+        result = segment.process_value("What is FastAPI used for?")
+
+        assert isinstance(result, dict)
+        assert isinstance(result["response"], str)
+        assert len(result["response"]) > 0
+        assert isinstance(result["background"], list)
+        assert len(result["background"]) > 0
+
 
 class TestVaultTextSearch:
     """Tests for the VaultTextSearch segment."""

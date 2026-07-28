@@ -792,7 +792,10 @@ def test_chat_page_offers_keyword_toggle_only_with_whoosh_index():
 def test_chat_uses_keyword_pipeline_when_requested(monkeypatch):
     """Checking the keyword option must route the question to the keyword-augmented pipeline."""
     query._state.chat_pipeline = lambda _message: "Plain answer."
-    query._state.keyword_chat_pipeline = lambda _message: "Keyword-augmented answer."
+    query._state.keyword_chat_pipeline = lambda _message: {
+        "response": "Keyword-augmented answer.",
+        "background": [],
+    }
     query._state.search_pipeline = lambda _message: []
     query._state.keyword_search_enabled = True
     monkeypatch.setattr(query, "_refresh_pipelines", lambda: None)
@@ -806,6 +809,62 @@ def test_chat_uses_keyword_pipeline_when_requested(monkeypatch):
     assert response.status_code == 200
     assert "Keyword-augmented answer." in response.text
     assert "Plain answer." not in response.text
+
+
+def test_chat_keyword_citations_show_the_merged_retrieval(monkeypatch):
+    """Keyword-boosted Ask must display the chunks the RAG prompt actually used.
+
+    Citations previously came from a separately run vector-only search, so the
+    keyword-search hits merged into the prompt never appeared in the browser.
+    """
+    from talkpipe.search.abstract import SearchResult
+
+    query._state.chat_pipeline = lambda _message: "Plain answer."
+    query._state.keyword_chat_pipeline = lambda _message: {
+        "response": "Keyword-augmented answer.",
+        "background": [
+            SearchResult(
+                score=0.9,
+                doc_id="vector-row",
+                document={
+                    "source": "/notes/semantic.txt",
+                    "title": "semantic.txt",
+                    "content": "Chunk found by vector search",
+                },
+            ),
+            SearchResult(
+                score=4.2,
+                doc_id="keyword-row",
+                document={
+                    "source": "/notes/keyword.txt",
+                    "title": "keyword.txt",
+                    "content": "Chunk found only by keyword search",
+                },
+            ),
+        ],
+    }
+    query._state.search_pipeline = lambda _message: [
+        {
+            "_distance": 0.1,
+            "_doc_id": "vector-row",
+            "source": "/notes/semantic.txt",
+            "title": "semantic.txt",
+            "content": "Chunk found by vector search",
+        }
+    ]
+    query._state.keyword_search_enabled = True
+    monkeypatch.setattr(query, "_refresh_pipelines", lambda: None)
+    monkeypatch.setattr(query, "_update_document_counts", lambda vault_path: None)
+    client = TestClient(query.app)
+
+    response = client.post(
+        "/chat", data={"message": "What matters?", "use_keyword_search": "on"}
+    )
+
+    assert response.status_code == 200
+    assert "Chunk found by vector search" in response.text
+    assert "Chunk found only by keyword search" in response.text
+    assert '"lookup_path": "keyword-row"' in response.text
 
 
 def test_chat_falls_back_to_plain_pipeline_without_keyword_pipeline(monkeypatch):

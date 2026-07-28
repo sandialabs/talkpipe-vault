@@ -330,10 +330,7 @@ def init_pipelines(vault_path: str) -> None:
     ensure_supported_vault_layout(vault_path)
     _state.vault_path = vault_path
     _apply_vault_embedding_config(vault_path)
-    # Forced: the vault just changed, so the throttled refresh must never
-    # no-op and leave pipelines (and keyword_search_enabled) pointing at a
-    # previously opened vault.
-    _refresh_pipelines(force=True)
+    _refresh_pipelines()
 
     # Get document counts from storage locations
     _update_document_counts(vault_path)
@@ -421,6 +418,7 @@ def _refresh_pipelines(force: bool = False) -> None:
                 chat_source=_state.chat_source,
                 limit=_state.rag_result_limit or DEFAULT_RAG_RESULT_LIMIT,
                 keyword_search=True,
+                include_background=True,
             ).as_function(single_in=True, single_out=True)
         except Exception:
             # Unlike the plain chat pipeline, this one instantiates the chat
@@ -2322,12 +2320,17 @@ async def chat_response(
             _refresh_pipelines()
             # Update document counts to reflect latest state
             _update_document_counts(state.vault_path)
-            citations = _chat_citations(state, message)
-            pipeline = state.chat_pipeline
             if use_keyword_search and state.keyword_chat_pipeline:
-                pipeline = state.keyword_chat_pipeline
-            # Perform chat with refreshed pipeline
-            response = pipeline(message)
+                # The keyword-augmented pipeline reports the merged
+                # vector+keyword retrieval it actually prompted with, so the
+                # displayed chunks match what the model saw instead of a
+                # separately run vector-only search.
+                result = state.keyword_chat_pipeline(message)
+                response = result["response"]
+                citations = _process_semantic_results(result["background"])
+            else:
+                citations = _chat_citations(state, message)
+                response = state.chat_pipeline(message)
             if not state.show_source_paths:
                 # The RAG answer text ends with a "Sources:" list of absolute
                 # paths; hide them unless --show-source-paths was given, to

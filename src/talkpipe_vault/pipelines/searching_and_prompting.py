@@ -441,8 +441,17 @@ class VaultChat(AbstractFieldSegment):
             int | None,
             "Number of keyword-search results to merge in. If None, uses limit.",
         ] = None,
+        include_background: Annotated[
+            bool,
+            "If True (requires keyword_search), emit a dict with 'response' and "
+            "'background' (the merged search results the RAG prompt was built "
+            "from) instead of the answer string.",
+        ] = False,
     ):
         super().__init__(field=field, set_as=set_as, multi_emit=multi_emit)
+        if include_background and not keyword_search:
+            raise ValueError("include_background requires keyword_search=True")
+        self.include_background = include_background
         embedding_model, embedding_source = resolve_embedding_config(
             embedding_model, embedding_source
         )
@@ -509,7 +518,6 @@ class VaultChat(AbstractFieldSegment):
                     partial_answer_field="_partial_rag_response",
                     set_as="chat_response",
                 )
-                | EvalExpression(field="chat_response", expression="item")
             ).as_function(single_in=True, single_out=True)
         else:
             self.pipeline = (
@@ -531,9 +539,20 @@ class VaultChat(AbstractFieldSegment):
                 )
                 | EvalExpression(field="chat_response", expression="item")
             ).as_function(single_in=True, single_out=True)
+        self.keyword_search = keyword_search
 
-    def process_value(self, value: str) -> str:
-        return self.pipeline(value)
+    def process_value(self, value: str) -> Any:
+        result = self.pipeline(value)
+        if not self.keyword_search:
+            return result
+        # The keyword pipeline yields its full working item so callers can see
+        # the retrieval, not just the answer.
+        if self.include_background:
+            return {
+                "response": result.get("chat_response", ""),
+                "background": result.get("_background") or [],
+            }
+        return result.get("chat_response", "")
 
 
 @register_segment("vaultTextSearch")
