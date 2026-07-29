@@ -6,7 +6,7 @@
 
 > Turn folders of documents into a searchable, question-answerable vault — on your own machine.
 
-[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.11.4+](https://img.shields.io/badge/python-3.11.4+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Development Status](https://img.shields.io/badge/status-alpha-yellow.svg)](https://github.com/sandialabs/talkpipe-vault)
 
@@ -39,7 +39,10 @@ pipeline framework and doubles as a real-world example of composing document
 processing, vector search, and RAG from reusable components — see the
 [Advanced Guide](docs/ADVANCED.md) if that side interests you.
 
-**Status:** alpha, under active development.
+**Status:** alpha, under active development. The PyPI release can lag this
+README — if something described here is missing from a `pip install`,
+install from source ([Development setup](docs/ADVANCED.md#development-setup))
+to get the documented behavior.
 
 ## Run the web app
 
@@ -67,8 +70,11 @@ Answers on the Ask page need a chat provider — any one that TalkPipe
 supports. Pick it on the **Settings** page: a local Ollama server (the
 default setting; enter its URL under **Connections & credentials**), or
 OpenAI or Anthropic (enter an API key there — no environment variables
-needed). With no chat provider at all, Ask falls back to a built-in scripted
-responder (eliza) that is only useful for checking that the plumbing works.
+needed). The default setting is Ollama, so until a reachable provider is
+configured, Ask shows a connection error that explains how to fix it. To
+try the Ask page without any provider, select the built-in scripted
+responder (**eliza**) as the chat source on the Settings page — it needs
+no server or key but is only useful for checking that the plumbing works.
 
 ### Option 2: Container (Podman or Docker)
 
@@ -98,7 +104,8 @@ What each piece does:
 - The `TALKPIPE_OLLAMA_SERVER_URL` line is **optional** and only matters if
   you use the default Ollama chat setting — drop it if you configure OpenAI
   or Anthropic in the browser instead. Without any provider, search and
-  indexing still work and Ask falls back to the scripted responder.
+  indexing still work; for Ask, either configure a provider or select the
+  scripted **eliza** responder on the Settings page.
 
 **macOS/Windows notes:** containers run inside the podman machine VM
 (Podman Desktop sets this up). In PowerShell, replace the `\` line

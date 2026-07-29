@@ -70,7 +70,16 @@
 #### Keyword Search No-Results Hint
 - The keyword-search empty state now explains that matching is on exact word forms (no stemming, so "apple" will not match "apples") and points at Semantic Search for meaning-based matches, instead of only suggesting a shorter or broader query.
 
+#### Empty Full-Text Index Folder
+- Checking whether a vault supports keyword search no longer creates an empty `fulltext_vault/` folder inside the vault. Opening or indexing a vault probed for the Whoosh index by constructing it, which created the directory as a side effect — so every vault appeared to have a full-text index on disk while the Keyword Search page correctly reported that none existed. The folder is now only created when the index is actually built.
+
 ### Documentation
+
+- The README no longer claims Ask "falls back" to the scripted eliza responder when no chat provider is configured. The default chat setting is Ollama, so out of the box Ask reports a connection error (with guidance) until a provider is reachable; the README now says so and explains that eliza is selected as the chat source on the Settings page to smoke-test without any provider.
+- The README's alpha status note now warns that the PyPI release can lag the README and points at the source install for the documented behavior, since `pip install talkpipe-vault` can deliver an older release whose first-run flow differs from the current docs.
+- The OpenAI provider notes now document the **OpenAI base URL** field (Settings → Connections & credentials, or `OPENAI_BASE_URL`), which points the provider at any OpenAI-compatible endpoint such as vLLM, LM Studio, or a llama.cpp server. The field existed in the UI but was undocumented.
+- The file-watching example now warns that events raised right after the watcher starts can arrive late, and that redirected output needs `python -u` (the `Print()` segment's output is block-buffered off-terminal), so a silent first run isn't mistaken for a broken example.
+- The README's Python badge now matches the Requirements section and `pyproject.toml` (3.11.4+).
 
 - The first `vault-server` launch snippet now points readers to the Installation section, so skimmers don't run the command before anything is installed.
 - The "Overriding in Code" example is now complete and runnable: it shows that `build_vector_db_from_paths(...)` only constructs a pipeline segment and demonstrates feeding items through it, instead of a bare constructor call that silently indexes nothing.

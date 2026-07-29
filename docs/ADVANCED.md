@@ -173,7 +173,10 @@ export OPENAI_API_KEY="sk-your-key-here"
   `~/.talkpipe.toml` (default `http://localhost:11434`). The model must
   already be pulled on that server.
 - **OpenAI**: set `OPENAI_API_KEY` in the environment or enter it in the
-  Settings page.
+  Settings page. A custom base URL — the **OpenAI base URL** field under
+  **Settings → Connections & credentials**, or `OPENAI_BASE_URL` in the
+  environment — points this provider at any OpenAI-compatible endpoint
+  (vLLM, LM Studio, llama.cpp server, a proxy).
 - **Anthropic** (chat only): model name such as `claude-sonnet-4-5`; key via
   Settings page or `ANTHROPIC_API_KEY`.
 - **eliza** (chat only, built-in): a rule-based responder needing no server
@@ -262,6 +265,12 @@ pipeline = file_watcher(path="/path/to/watch") | Print()
 for event in pipeline():
     pass
 ```
+
+Give the watcher a few seconds after startup before expecting output —
+events raised immediately after it starts can arrive noticeably late. And
+if you redirect or pipe the output, run with `python -u`: `Print()` writes
+to stdout, which Python block-buffers when it isn't a terminal, so events
+can otherwise sit unseen in the buffer.
 
 **Example 2: Complete document processing**
 

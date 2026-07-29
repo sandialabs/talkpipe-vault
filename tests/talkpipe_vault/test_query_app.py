@@ -84,6 +84,29 @@ def test_keyword_search_page_is_disabled_without_whoosh():
     assert "Create Full-Text Index" in response.text
 
 
+def test_keyword_search_probe_does_not_create_fulltext_dir(tmp_path):
+    """Probing for keyword search must not leave an empty fulltext_vault/."""
+    assert query._keyword_search_enabled(str(tmp_path)) is False
+    assert not (tmp_path / "fulltext_vault").exists()
+
+
+def test_keyword_search_probe_detects_built_index(tmp_path):
+    """The probe should still detect a real Whoosh index once one is built."""
+    query._build_whoosh_index(
+        str(tmp_path),
+        [
+            {
+                "doc_id": "row-1",
+                "content": "probe detection text",
+                "path": "/notes/a.txt",
+                "filename": "a.txt",
+            }
+        ],
+    )
+
+    assert query._keyword_search_enabled(str(tmp_path)) is True
+
+
 def test_keyword_search_page_can_rebuild_existing_whoosh_index():
     """Keyword search UI should expose index rebuild when Whoosh is available."""
     query._state.keyword_search_enabled = True

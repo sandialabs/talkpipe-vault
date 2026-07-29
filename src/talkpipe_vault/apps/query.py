@@ -238,6 +238,13 @@ def _keyword_search_enabled(vault_path: str) -> bool:
 
     whoosh_index_path = get_whoosh_index_path(vault_path)
 
+    # Opening WhooshFullTextIndex creates the index directory as a side
+    # effect, which would leave every vault with a confusing empty
+    # fulltext_vault/ folder just from checking whether keyword search is
+    # available. Only probe when the directory already exists.
+    if not os.path.isdir(whoosh_index_path):
+        return False
+
     try:
         with WhooshFullTextIndex(whoosh_index_path):
             return True
