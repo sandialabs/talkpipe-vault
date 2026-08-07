@@ -41,7 +41,7 @@ def test_config_load_failure_falls_back_to_default(monkeypatch):
 
 
 class TestRetrievalFilterFlags:
-    """Activation of a vault's retrieval filter is per machine, not per vault."""
+    """Retrieval-filter activation is a per-machine choice, made per vault."""
 
     @pytest.fixture(autouse=True)
     def isolated_home(self, tmp_path, monkeypatch):

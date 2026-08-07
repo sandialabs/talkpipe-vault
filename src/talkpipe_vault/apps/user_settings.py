@@ -41,10 +41,11 @@ INTEGER_SETTING_MINIMUMS = {
     "rag_result_limit": 1,
 }
 
-# Per-vault retrieval-filter activation, keyed by resolved vault path. The
-# script itself travels inside the vault directory; whether it *runs* is this
-# machine's decision, so a vault copied from elsewhere never executes its
-# bundled script until the user enables it here.
+# Retrieval-filter activation, keyed by resolved vault path: the flags are this
+# machine's decision, made separately for each vault, so enabling one vault's
+# filter never enables another's. The script itself travels inside the vault
+# directory; whether it *runs* is decided here, so a vault copied from elsewhere
+# never executes its bundled script until the user enables it.
 RETRIEVAL_FILTER_KEY = "retrieval_filters"
 
 
@@ -142,8 +143,9 @@ def _resolve_vault_key(vault_path: str) -> str:
 
 
 def get_retrieval_filter_flags(vault_path: str) -> dict:
-    """Return this machine's activation flags for a vault's retrieval filter.
+    """Return this machine's activation flags for one vault's retrieval filter.
 
+    Flags are stored per vault path, so they say nothing about any other vault.
     Returns {"enabled": bool, "strict": bool}; both default to False for a
     vault with no saved entry — a filter script is inert until enabled here.
     """
@@ -155,7 +157,7 @@ def get_retrieval_filter_flags(vault_path: str) -> dict:
 
 
 def set_retrieval_filter_flags(vault_path: str, *, enabled: bool, strict: bool) -> None:
-    """Persist the activation flags for a vault's retrieval filter."""
+    """Persist the activation flags for one vault's retrieval filter."""
     settings = load_settings()
     filters = settings.get(RETRIEVAL_FILTER_KEY)
     if not isinstance(filters, dict):

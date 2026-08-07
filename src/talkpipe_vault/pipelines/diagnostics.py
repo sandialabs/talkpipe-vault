@@ -157,15 +157,16 @@ def _check_retrieval_filter(info: dict[str, Any]) -> dict[str, Any]:
         )
         base["fix"] = (
             "Fix or remove the script under Vaults & Documents → "
-            "Retrieval filter."
+            "Retrieval filter for this vault."
         )
         return base
     if not info.get("enabled"):
         base["status"] = "ok"
         base["summary"] = (
             "This vault carries a retrieval-filter script, but it is not "
-            "enabled on this machine, so it does not run. Enable it under "
-            "Vaults & Documents → Retrieval filter if it is yours."
+            "enabled on this machine for this vault, so it does not run. "
+            "Enable it under Vaults & Documents → Retrieval filter for this "
+            "vault if it is yours."
         )
         return base
     base["status"] = "ok"
