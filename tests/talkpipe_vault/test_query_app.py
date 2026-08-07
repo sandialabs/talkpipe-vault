@@ -84,6 +84,57 @@ def test_keyword_search_page_is_disabled_without_whoosh():
     assert "Create Full-Text Index" in response.text
 
 
+def test_refresh_pipelines_applies_result_limit_to_keyword_search(monkeypatch):
+    """Keyword search must be built with the configured result count (issue #18)."""
+    captured: dict[str, dict] = {}
+
+    def _fake_segment(name):
+        class _Fake:
+            def __init__(self, **kwargs):
+                captured[name] = kwargs
+
+            def as_function(self, **_kwargs):
+                return lambda *_a, **_k: []
+
+        return _Fake
+
+    monkeypatch.setattr(query, "VaultSearch", _fake_segment("search"))
+    monkeypatch.setattr(query, "VaultChat", _fake_segment("chat"))
+    monkeypatch.setattr(query, "VaultTextSearch", _fake_segment("text_search"))
+    monkeypatch.setattr(query, "_keyword_search_enabled", lambda _vault_path: True)
+    query._state.rag_result_limit = 3
+
+    query._refresh_pipelines(force=True)
+
+    assert captured["text_search"]["limit"] == 3
+    assert captured["chat"]["limit"] == 3
+
+
+def test_refresh_pipelines_keyword_search_defaults_result_limit(monkeypatch):
+    """Without a saved setting, keyword search uses the default result count."""
+    captured: dict[str, dict] = {}
+
+    def _fake_segment(name):
+        class _Fake:
+            def __init__(self, **kwargs):
+                captured[name] = kwargs
+
+            def as_function(self, **_kwargs):
+                return lambda *_a, **_k: []
+
+        return _Fake
+
+    monkeypatch.setattr(query, "VaultSearch", _fake_segment("search"))
+    monkeypatch.setattr(query, "VaultChat", _fake_segment("chat"))
+    monkeypatch.setattr(query, "VaultTextSearch", _fake_segment("text_search"))
+    monkeypatch.setattr(query, "_keyword_search_enabled", lambda _vault_path: True)
+    query._state.rag_result_limit = None
+
+    query._refresh_pipelines(force=True)
+
+    assert captured["text_search"]["limit"] == query.DEFAULT_RAG_RESULT_LIMIT
+
+
 def test_keyword_search_probe_does_not_create_fulltext_dir(tmp_path):
     """Probing for keyword search must not leave an empty fulltext_vault/."""
     assert query._keyword_search_enabled(str(tmp_path)) is False

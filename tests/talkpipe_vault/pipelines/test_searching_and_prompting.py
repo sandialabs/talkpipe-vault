@@ -296,6 +296,27 @@ class TestVaultTextSearch:
         assert isinstance(result, list)
         assert result == []
 
+    def test_keyword_search_respects_result_limit(self, tmp_path):
+        """A configured limit should cap how many keyword hits are returned."""
+        from talkpipe_vault.apps import query as query_app
+
+        documents = [
+            {
+                "doc_id": f"row-{i}",
+                "content": f"talkpipe indexing note number {i}",
+                "path": f"/notes/{i}.txt",
+                "filename": f"{i}.txt",
+            }
+            for i in range(5)
+        ]
+        query_app._build_whoosh_index(str(tmp_path), documents)
+
+        unlimited = VaultTextSearch(vault_path=str(tmp_path))
+        limited = VaultTextSearch(vault_path=str(tmp_path), limit=2)
+
+        assert len(unlimited.process_value("talkpipe")) == 5
+        assert len(limited.process_value("talkpipe")) == 2
+
 
 class TestVaultSearchAdvanced:
     """Advanced tests for VaultSearch functionality."""

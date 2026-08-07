@@ -417,7 +417,8 @@ def _refresh_pipelines(force: bool = False) -> None:
     _state.keyword_search_enabled = _keyword_search_enabled(vault_path)
     if _state.keyword_search_enabled:
         _state.keyword_search_pipeline = VaultTextSearch(
-            vault_path=vault_path
+            vault_path=vault_path,
+            limit=_state.rag_result_limit or DEFAULT_RAG_RESULT_LIMIT,
         ).as_function(single_in=True, single_out=False)
         try:
             _state.keyword_chat_pipeline = VaultChat(
