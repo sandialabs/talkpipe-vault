@@ -6,7 +6,6 @@ the LLM where one is structurally required), so they run in every environment.
 """
 
 import pytest
-
 from talkpipe import compile
 from talkpipe.search.abstract import SearchResult
 
@@ -174,8 +173,11 @@ class TestSearchResultFilter:
             SearchResult(
                 score=0.9,
                 doc_id="row-1",
-                document={"content": "keep this", "path": "/docs/a.txt",
-                          "filename": "a.txt"},
+                document={
+                    "content": "keep this",
+                    "path": "/docs/a.txt",
+                    "filename": "a.txt",
+                },
             ),
             {
                 "doc_id": "row-2",

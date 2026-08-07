@@ -433,8 +433,7 @@ class SearchResultFilter(AbstractSegment):
         prepared = [
             entry
             for entry in (
-                search_result_to_dict(raw, self.rename_fields)
-                for raw in results or []
+                search_result_to_dict(raw, self.rename_fields) for raw in results or []
             )
             if entry is not None
         ]

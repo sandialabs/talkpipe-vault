@@ -77,7 +77,9 @@ class TestRetrievalFilterFlags:
         )
         user_settings.clear_retrieval_filter_flags(str(tmp_path))
 
-        assert user_settings.get_retrieval_filter_flags(str(tmp_path))["enabled"] is False
+        assert (
+            user_settings.get_retrieval_filter_flags(str(tmp_path))["enabled"] is False
+        )
 
     def test_clearing_an_unknown_vault_is_harmless(self, tmp_path):
         user_settings.clear_retrieval_filter_flags(str(tmp_path))
@@ -88,4 +90,6 @@ class TestRetrievalFilterFlags:
         )
         user_settings.remember_vault(str(tmp_path))
 
-        assert user_settings.get_retrieval_filter_flags(str(tmp_path))["enabled"] is True
+        assert (
+            user_settings.get_retrieval_filter_flags(str(tmp_path))["enabled"] is True
+        )

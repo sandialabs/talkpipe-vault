@@ -1648,7 +1648,9 @@ class TestRetrievalFilter:
         self._save(client)
 
         assert retrieval_filter.load_script(str(tmp_path)) == self.DROP_DRAFTS
-        assert user_settings.get_retrieval_filter_flags(str(tmp_path))["enabled"] is False
+        assert (
+            user_settings.get_retrieval_filter_flags(str(tmp_path))["enabled"] is False
+        )
 
     def test_strict_flag_is_persisted(self, tmp_path):
         client = TestClient(query.app)
@@ -1695,7 +1697,9 @@ class TestRetrievalFilter:
 
         assert response.status_code in (302, 303)
         assert retrieval_filter.load_script(str(tmp_path)) is None
-        assert user_settings.get_retrieval_filter_flags(str(tmp_path))["enabled"] is False
+        assert (
+            user_settings.get_retrieval_filter_flags(str(tmp_path))["enabled"] is False
+        )
 
     def test_configuring_without_an_open_vault_is_refused(self):
         query._state.vault_path = ""

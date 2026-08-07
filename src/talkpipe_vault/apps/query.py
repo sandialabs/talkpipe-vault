@@ -1465,9 +1465,7 @@ async def save_retrieval_filter(
     )
     _refresh_pipelines(force=True)
     outcome = "enabled" if enabled else "saved but not enabled"
-    return _redirect_with_message(
-        "/documents", message=f"Retrieval filter {outcome}."
-    )
+    return _redirect_with_message("/documents", message=f"Retrieval filter {outcome}.")
 
 
 def suggest_vault_path(source_path: str) -> str:

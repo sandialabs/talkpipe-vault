@@ -150,7 +150,11 @@ def get_retrieval_filter_flags(vault_path: str) -> dict:
     vault with no saved entry — a filter script is inert until enabled here.
     """
     filters = load_settings().get(RETRIEVAL_FILTER_KEY)
-    entry = filters.get(_resolve_vault_key(vault_path)) if isinstance(filters, dict) else None
+    entry = (
+        filters.get(_resolve_vault_key(vault_path))
+        if isinstance(filters, dict)
+        else None
+    )
     if not isinstance(entry, dict):
         entry = {}
     return {"enabled": bool(entry.get("enabled")), "strict": bool(entry.get("strict"))}
@@ -174,7 +178,10 @@ def clear_retrieval_filter_flags(vault_path: str) -> None:
     """Drop the saved activation flags for a vault's retrieval filter."""
     settings = load_settings()
     filters = settings.get(RETRIEVAL_FILTER_KEY)
-    if isinstance(filters, dict) and filters.pop(_resolve_vault_key(vault_path), None) is not None:
+    if (
+        isinstance(filters, dict)
+        and filters.pop(_resolve_vault_key(vault_path), None) is not None
+    ):
         settings[RETRIEVAL_FILTER_KEY] = filters
         save_settings(settings)
 
