@@ -406,10 +406,10 @@ def _load_active_filter(vault_path: str) -> str | None:
     """Resolve the vault's retrieval filter and record its state on the app.
 
     Returns the script text only when it should actually run: present in the
-    vault, enabled on this machine, and compiling cleanly. A script that no
-    longer compiles is recorded as an error and *not* applied — Ask and the
-    search pages keep working unfiltered, and the state is surfaced on the
-    Vaults & Documents page and in the configuration status.
+    vault, enabled on this machine for this vault, and compiling cleanly. A
+    script that no longer compiles is recorded as an error and *not* applied —
+    Ask and the search pages keep working unfiltered, and the state is surfaced
+    on the Vaults & Documents page and in the configuration status.
     """
     script = retrieval_filter.load_script(vault_path)
     flags = user_settings.get_retrieval_filter_flags(vault_path)
@@ -1415,7 +1415,7 @@ async def save_retrieval_filter(
     Expects form data with:
         - action: str - "save", "validate", or "remove"
         - script: str - The ChatterLang filter script text
-        - enabled: str - If truthy, run the filter on this machine
+        - enabled: str - If truthy, run this vault's filter on this machine
         - strict: str - If truthy, a runtime filter failure fails the request
           instead of falling back to unfiltered results
 

@@ -5,18 +5,27 @@ without a vault, an embedding model, or a reachable LLM, so they run in every
 environment.
 """
 
+import html
+import re
+from pathlib import Path
+
 import pytest
 
+import talkpipe_vault.apps
 from talkpipe_vault.pipelines import retrieval_filter
 
 KEEP_NON_DRAFT = (
-    "| lambdaFilter[expression=\"'draft' not in document.get('content', '')\"]"
+    "| lambdaFilter[expression=\"'draft' not in item['document'].get('content', '')\"]"
 )
 
 RESULTS = [
     {"doc_id": "a", "score": 0.9, "document": {"content": "keep this"}},
     {"doc_id": "b", "score": 0.2, "document": {"content": "draft notes"}},
 ]
+
+DOCUMENTS_TEMPLATE = (
+    Path(talkpipe_vault.apps.__file__).parent / "templates" / "documents.html"
+)
 
 
 class TestScriptStorage:
@@ -94,3 +103,53 @@ class TestCompileScript:
     def test_unusable_script_raises_the_validation_message(self):
         with pytest.raises(ValueError, match="noSuchSegmentExists"):
             retrieval_filter.compile_script("| noSuchSegmentExists")
+
+
+class TestExpressionNaming:
+    """Both ways of naming a result in a lambda expression must keep working.
+
+    ``item`` is TalkPipe's name for the value flowing through a lambda; because
+    each result is a dict, TalkPipe additionally exposes its top-level keys as
+    bare names. The UI help documents ``item`` and mentions the shorthand, so
+    both are pinned here (issue #25).
+    """
+
+    @pytest.mark.parametrize(
+        "expression",
+        [
+            "'draft' not in item['document'].get('content', '')",
+            "'draft' not in document.get('content', '')",
+            "item['score'] > 0.5",
+            "score > 0.5",
+        ],
+    )
+    def test_expression_selects_the_first_result(self, expression):
+        script = f'| lambdaFilter[expression="{expression}"]'
+        assert retrieval_filter.validate_script(script) is None
+        filter_fn = retrieval_filter.compile_script(script)
+        kept = list(filter_fn(iter([dict(entry) for entry in RESULTS])))
+        assert [entry["doc_id"] for entry in kept] == ["a"]
+
+
+class TestDocumentedRecipes:
+    """The one-click starter recipes in the UI must actually run (issue #25)."""
+
+    @staticmethod
+    def _recipes() -> list[str]:
+        markup = DOCUMENTS_TEMPLATE.read_text(encoding="utf-8")
+        return [
+            html.unescape(match)
+            for match in re.findall(
+                r'class="btn-secondary filter-insert"\s+data-script="([^"]*)"', markup
+            )
+        ]
+
+    def test_recipes_are_present(self):
+        assert len(self._recipes()) >= 3
+
+    def test_every_recipe_compiles_and_runs(self):
+        for recipe in self._recipes():
+            assert retrieval_filter.validate_script(recipe) is None, recipe
+            filter_fn = retrieval_filter.compile_script(recipe)
+            kept = list(filter_fn(iter([dict(entry) for entry in RESULTS])))
+            assert all(isinstance(entry, dict) for entry in kept), recipe

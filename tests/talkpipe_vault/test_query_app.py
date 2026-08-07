@@ -1707,6 +1707,47 @@ class TestRetrievalFilter:
         assert "Open+a+vault" in response.headers["location"]
 
 
+class TestRetrievalFilterSection:
+    """The filter must read as a setting of the open vault, not of the app.
+
+    It is stored per vault path, so the page has to say so: issue #25 reported
+    that a standalone panel with "enable on this machine" wording read like a
+    machine-wide switch covering every vault.
+    """
+
+    def _documents_page(self, tmp_path) -> str:
+        response = TestClient(query.app).get("/documents")
+        assert response.status_code == 200
+        return response.text
+
+    def test_section_sits_inside_the_vault_panel(self, tmp_path):
+        body = self._documents_page(tmp_path)
+
+        assert body.index('id="retrieval-filter"') > body.index(
+            'id="vault-open-progress"'
+        )
+        assert body.index('id="retrieval-filter"') < body.index("Recent Vaults")
+
+    def test_section_names_the_vault_it_applies_to(self, tmp_path):
+        body = self._documents_page(tmp_path)
+
+        assert "Retrieval filter for this vault" in body
+        assert str(tmp_path) in body
+        assert "It applies to this vault" in body
+
+    def test_enable_checkbox_is_scoped_to_the_vault(self, tmp_path):
+        body = self._documents_page(tmp_path)
+
+        assert "on this machine for this vault" in body
+
+    def test_section_is_absent_without_an_open_vault(self):
+        query._state.vault_path = ""
+
+        response = TestClient(query.app).get("/documents")
+
+        assert 'id="retrieval-filter"' not in response.text
+
+
 class TestLoadActiveFilter:
     """A script only runs when it is present, enabled here, and compiling."""
 

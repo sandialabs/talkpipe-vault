@@ -8,11 +8,17 @@ describes something about this vault's data ("these results need pruning"),
 not about the machine.
 
 Whether the script actually *runs* is deliberately not stored here: activation
-is a per-machine flag in the app's user settings
-(``user_settings.get_retrieval_filter_flags``). A vault received from someone
-else therefore never executes its bundled script until the user reviews and
+is a per-machine flag, kept per vault, in the app's user settings
+(``user_settings.get_retrieval_filter_flags``, keyed by vault path). Enabling
+one vault's filter therefore never enables another's. A vault received from
+someone else never executes its bundled script until the user reviews and
 enables it — ChatterLang segments can call LLMs and evaluate expressions, so
 running one on open would let a copied vault execute someone else's code.
+
+Scripts see each result as a plain dict — ``{"doc_id", "score", "document"}``
+— so a ``lambda``/``lambdaFilter`` expression can address it as ``item``
+(``item['document']``), the usual TalkPipe name, or through the bare top-level
+keys TalkPipe exposes for dict items (``document``, ``score``, ``doc_id``).
 
 Scripts must be a single segment-only pipeline: no sources (the retrieval
 stream is the input), no loops, no forks. ``validate_script`` enforces this
