@@ -19,8 +19,24 @@ KEEP_NON_DRAFT = (
 )
 
 RESULTS = [
-    {"doc_id": "a", "score": 0.9, "document": {"content": "keep this"}},
-    {"doc_id": "b", "score": 0.2, "document": {"content": "draft notes"}},
+    {
+        "doc_id": "a",
+        "score": 0.9,
+        "document": {
+            "content": "keep this",
+            "source": "/notes/a.txt",
+            "title": "a.txt",
+        },
+    },
+    {
+        "doc_id": "b",
+        "score": 0.2,
+        "document": {
+            "content": "draft notes",
+            "source": "/notes/b.txt",
+            "title": "b.txt",
+        },
+    },
 ]
 
 DOCUMENTS_TEMPLATE = (
@@ -131,6 +147,48 @@ class TestExpressionNaming:
         assert [entry["doc_id"] for entry in kept] == ["a"]
 
 
+class TestContainmentSegments:
+    """``isIn``/``isNotIn`` as the expression-free form of a containment filter.
+
+    The UI and ADVANCED.md offer these as the simple way to say "keep/drop
+    results whose field contains this text" (issue #27), so their behaviour —
+    including the two ways they differ from ``lambdaFilter`` — is pinned here.
+    """
+
+    @staticmethod
+    def _run(script: str, results=None) -> list[str]:
+        assert retrieval_filter.validate_script(script) is None, script
+        filter_fn = retrieval_filter.compile_script(script)
+        entries = [dict(entry) for entry in (results if results else RESULTS)]
+        return [entry["doc_id"] for entry in filter_fn(iter(entries))]
+
+    def test_is_not_in_drops_results_whose_content_contains_the_text(self):
+        assert self._run('| isNotIn[field="document.content", value="draft"]') == ["a"]
+
+    def test_is_in_keeps_results_whose_content_contains_the_text(self):
+        assert self._run('| isIn[field="document.content", value="draft"]') == ["b"]
+
+    def test_dotted_path_reaches_the_source_of_a_result(self):
+        assert self._run('| isIn[field="document.source", value="/notes/b"]') == ["b"]
+
+    def test_containment_segments_chain(self):
+        script = (
+            '| isIn[field="document.source", value="/notes/"]'
+            ' | isNotIn[field="document.content", value="draft"]'
+        )
+        assert self._run(script) == ["a"]
+
+    def test_matching_is_case_sensitive(self):
+        """Documented difference from the .lower() lambdaFilter recipe."""
+        assert self._run('| isIn[field="document.content", value="Draft"]') == []
+
+    def test_a_missing_field_fails_the_script(self):
+        """The other documented difference: no .get(...) default to fall back on."""
+        results = [{"doc_id": "c", "score": 0.5, "document": {"source": "/notes/c"}}]
+        with pytest.raises(TypeError):
+            self._run('| isNotIn[field="document.content", value="draft"]', results)
+
+
 class TestDocumentedRecipes:
     """The one-click starter recipes in the UI must actually run (issue #25)."""
 
@@ -146,6 +204,12 @@ class TestDocumentedRecipes:
 
     def test_recipes_are_present(self):
         assert len(self._recipes()) >= 3
+
+    def test_containment_recipes_are_offered(self):
+        """The expression-free form has starter recipes too (issue #27)."""
+        assert any(
+            "isIn[" in recipe or "isNotIn[" in recipe for recipe in self._recipes()
+        )
 
     def test_every_recipe_compiles_and_runs(self):
         for recipe in self._recipes():

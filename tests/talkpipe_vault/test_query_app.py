@@ -1740,6 +1740,13 @@ class TestRetrievalFilterSection:
 
         assert "on this machine for this vault" in body
 
+    def test_help_offers_the_containment_recipes(self, tmp_path):
+        """isIn/isNotIn are shown next to the lambdaFilter recipes (issue #27)."""
+        body = self._documents_page(tmp_path)
+
+        assert "isNotIn[field=" in body
+        assert "isIn[field=" in body
+
     def test_section_is_absent_without_an_open_vault(self):
         query._state.vault_path = ""
 

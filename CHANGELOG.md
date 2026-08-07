@@ -12,6 +12,7 @@
 - With keyword search on, each retrieval stream is filtered **independently**: both streams over-fetch 3×, each is filtered and truncated back to its own limit, and only then are they merged and deduplicated — so surviving keyword hits can't be squeezed out by vector hits.
 - The Semantic Search and Keyword Search pages show an **Apply custom transform** checkbox (unchecked by default) when the vault has an active filter, and report how many results survived.
 - Ask's meta line always states the filter outcome — applied, failed and skipped (with the reason), or present but not compiling — so filtered retrieval is never silently different from what you asked for. A filter that stops compiling is reported on the Configuration status panel and retrieval keeps working unfiltered.
+- Documented `isIn`/`isNotIn` as the expression-free way to write a containment filter — `| isNotIn[field="document.content", value="draft"]` says what a `lambdaFilter` expression says, with the field as a dotted path. The filter help and `docs/ADVANCED.md` now show them alongside the `lambdaFilter` recipes, including the two ways they differ: they match case-sensitively and raise on a result that lacks the named field, so `lambdaFilter` remains the tool for optional fields, case-insensitive matches, and anything past containment.
 - Added the `filterSearchResults` segment, which runs a ChatterLang script over a list of search results held on a field.
 
 #### One Page for Vaults and Documents

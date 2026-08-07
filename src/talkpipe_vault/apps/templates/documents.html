@@ -202,6 +202,39 @@
                 </li>
             </ul>
             <p>
+                For the common case &mdash; <em>is this text inside that
+                field?</em> &mdash; <code>isIn</code> and <code>isNotIn</code>
+                say the same thing without an expression. Name the field with a
+                dotted path (<code>document.content</code>,
+                <code>document.source</code>) and the text to look for:
+            </p>
+            <ul class="filter-recipes">
+                <li>
+                    <code>| isNotIn[field="document.content", value="some term"]</code>
+                    <button type="button" class="btn-secondary filter-insert"
+                            data-script="| isNotIn[field=&quot;document.content&quot;, value=&quot;some term&quot;]">Insert</button>
+                    <span class="filter-recipe-hint">drop results whose content mentions a term
+                        (the first recipe above, without the expression)</span>
+                </li>
+                <li>
+                    <code>| isIn[field="document.source", value="/notes/"]</code>
+                    <button type="button" class="btn-secondary filter-insert"
+                            data-script="| isIn[field=&quot;document.source&quot;, value=&quot;/notes/&quot;]">Insert</button>
+                    <span class="filter-recipe-hint">keep only results whose source path
+                        contains a folder</span>
+                </li>
+            </ul>
+            <p>
+                <code>isIn</code>/<code>isNotIn</code> match exactly, so they are
+                case-sensitive, and the named field has to exist on every result
+                &mdash; a result missing it makes the script fail, which means
+                unfiltered results (or, with <strong>Strict</strong> checked, a failed
+                question). Reach for <code>lambdaFilter</code> when the field may
+                be absent (<code>.get('source', '')</code>), when the match
+                should ignore case (<code>.lower()</code>), or when the test is
+                anything more than containment.
+            </p>
+            <p>
                 Any registered ChatterLang segment works — including LLM
                 transforms — but the script must be a single pipeline of
                 segments: no <code>INPUT FROM</code> source, loops, or forks.

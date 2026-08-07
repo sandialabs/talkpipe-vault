@@ -19,6 +19,11 @@ Scripts see each result as a plain dict — ``{"doc_id", "score", "document"}``
 — so a ``lambda``/``lambdaFilter`` expression can address it as ``item``
 (``item['document']``), the usual TalkPipe name, or through the bare top-level
 keys TalkPipe exposes for dict items (``document``, ``score``, ``doc_id``).
+Containment tests need no expression at all: ``isIn``/``isNotIn`` take the
+field as a dotted path (``field="document.content"``) and the text to look
+for. They match case-sensitively and raise when a result lacks the named
+field, so a filter over a field that may be absent, or one that should ignore
+case, still wants ``lambdaFilter``.
 
 Scripts must be a single segment-only pipeline: no sources (the retrieval
 stream is the input), no loops, no forks. ``validate_script`` enforces this

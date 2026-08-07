@@ -243,6 +243,46 @@ shingle, embed, store — and `vault-server` searches it.
   results held on a field, keeping, dropping, or rewriting each one; backs
   the per-vault retrieval filter
 
+### Writing a retrieval filter
+
+The per-vault retrieval filter (**Vaults & Documents → Retrieval filter for
+this vault**) is a segment-only ChatterLang pipeline — no `INPUT FROM`
+source, loops, or forks — that sees one retrieved result at a time as a
+dict:
+
+```
+{"doc_id": "…", "score": 0.87,
+ "document": {"content": "…", "source": "…", "title": "…"}}
+```
+
+Emit a result to keep it, drop it to filter it, modify it to transform it.
+`lambdaFilter` handles arbitrary tests, with the result bound to `item`:
+
+```
+| lambdaFilter[expression="'draft' not in item['document'].get('content', '').lower()"]
+```
+
+For plain containment — *is this text inside that field?* — `isIn` and
+`isNotIn` express the same filter without an expression, taking the field as
+a dotted path:
+
+```
+| isNotIn[field="document.content", value="draft"]
+| isIn[field="document.source", value="/notes/"]
+```
+
+Both segments also chain, so several containment rules read as a pipeline:
+
+```
+| isNotIn[field="document.content", value="draft"] | isIn[field="document.source", value="/notes/"]
+```
+
+They match case-sensitively and require the named field to be present on
+every result — a missing field raises, which leaves retrieval unfiltered
+(or fails the question when the filter is marked strict). Use
+`lambdaFilter` when a field may be absent, when case should be ignored, or
+when the test is more than containment.
+
 ### Building your own pipelines
 
 TalkPipe's strength is composability — complex functionality built from

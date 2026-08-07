@@ -23,6 +23,8 @@ FAILING_SCRIPT = '| lambdaFilter[expression="1/0"]'
 DROP_DRAFTS = (
     "| lambdaFilter[expression=\"'draft' not in document.get('content', '')\"]"
 )
+# The same filter written without an expression (issue #27).
+DROP_DRAFTS_CONTAINMENT = '| isNotIn[field="document.content", value="draft"]'
 
 
 def _eliza_extractor() -> ExtractSearchKeywords:
@@ -210,6 +212,33 @@ class TestSearchResultFilter:
         assert kept[0].document["source"] == "/docs/a.txt"
         assert kept[0].document["title"] == "a.txt"
         assert "path" not in kept[0].document
+
+    def test_containment_script_filters_without_an_expression(self):
+        """isNotIn is the expression-free form of DROP_DRAFTS (issue #27)."""
+        segment = SearchResultFilter(
+            script=DROP_DRAFTS_CONTAINMENT,
+            field="_background",
+            rename_fields=SEARCH_RESULT_RENAMES,
+        )
+
+        (result,) = list(segment([{"_background": self._results()}]))
+        kept = result["_background"]
+
+        assert [r.doc_id for r in kept] == ["row-1"]
+        assert all(isinstance(r, SearchResult) for r in kept)
+
+    def test_containment_script_reads_renamed_document_fields(self):
+        """Renames land before the script, so document.source is filterable."""
+        segment = SearchResultFilter(
+            script='| isIn[field="document.source", value="/docs/"]',
+            field="_background",
+            rename_fields=SEARCH_RESULT_RENAMES,
+        )
+        results = [self._results()[0]]
+
+        (result,) = list(segment([{"_background": results}]))
+
+        assert [r.doc_id for r in result["_background"]] == ["row-1"]
 
     def test_transforms_are_carried_through(self):
         segment = SearchResultFilter(
