@@ -4,6 +4,16 @@
 
 ### Features
 
+#### Per-Vault Retrieval Filter
+- Added an advanced, per-vault **ChatterLang retrieval filter**: a script that filters or transforms retrieved results before they reach the Ask answer. Each result reaches the script as `{"doc_id", "score", "document"}` — emit it to keep it, drop it to filter it, modify it to transform it — so any registered segment (including LLM transforms) can prune noisy documents or rewrite them in flight.
+- Edit it under **Vaults & Documents → Retrieval filter (advanced)**, a folded section with Save/Validate/Remove, worked starter recipes you can insert with one click, and help describing the result structure. Scripts must be a single segment-only pipeline (no `INPUT FROM` source, loops, or forks); Validate reports compile errors without saving.
+- The script lives in the vault folder (`retrieval_filter.tps`) so it travels with the vault, but **whether it runs is a per-machine choice**: a filter is inert until enabled here, so a vault received from someone else never executes its bundled script on open.
+- A **Strict** option makes a filter fail closed — if the script errors while answering, the question fails instead of being answered from unfiltered results. Off by default (a broken relevance filter shouldn't take down Ask); turn it on when the filter removes sensitive content, where failing open would leak exactly what it exists to remove.
+- With keyword search on, each retrieval stream is filtered **independently**: both streams over-fetch 3×, each is filtered and truncated back to its own limit, and only then are they merged and deduplicated — so surviving keyword hits can't be squeezed out by vector hits.
+- The Semantic Search and Keyword Search pages show an **Apply custom transform** checkbox (unchecked by default) when the vault has an active filter, and report how many results survived.
+- Ask's meta line always states the filter outcome — applied, failed and skipped (with the reason), or present but not compiling — so filtered retrieval is never silently different from what you asked for. A filter that stops compiling is reported on the Configuration status panel and retrieval keeps working unfiltered.
+- Added the `filterSearchResults` segment, which runs a ChatterLang script over a list of search results held on a field.
+
 #### One Page for Vaults and Documents
 - Merged the Vaults and Add Documents pages into a single **Vaults & Documents** page: choose the documents to index and the vault to index them into, then submit once. `/vaults` redirects there, and pages that need a vault now send you there too.
 - With no vault open, choosing a documents folder suggests a vault name derived from it (`~/notes` → `~/notes-vault`, under `TALKPIPE_VAULT_ROOT` when set). The suggestion skips names whose folder already holds unrelated files and reuses an existing vault of that name, so a single submit creates the vault and indexes into it.

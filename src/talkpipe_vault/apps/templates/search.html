@@ -8,6 +8,16 @@
         <input type="text" name="query" id="search-input" placeholder="Search your vault. Works best with a full question..." value="{{ query }}" autofocus>
         <button type="submit" id="search-btn">Search</button>
     </form>
+    {% if result_filter_active %}
+    <label class="overwrite-option">
+        <input type="checkbox" name="apply_filter" value="1" form="search-form"
+               {% if apply_filter %}checked{% endif %}>
+        Apply custom transform (this vault's retrieval filter)
+    </label>
+    {% endif %}
+    {% if filter_note %}
+    <p class="search-hint filter-note">{{ filter_note }}</p>
+    {% endif %}
     <p class="search-hint">Best for natural-language questions and conceptual matches across indexed chunks.</p>
 </div>
 

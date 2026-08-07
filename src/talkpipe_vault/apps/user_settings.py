@@ -41,6 +41,12 @@ INTEGER_SETTING_MINIMUMS = {
     "rag_result_limit": 1,
 }
 
+# Per-vault retrieval-filter activation, keyed by resolved vault path. The
+# script itself travels inside the vault directory; whether it *runs* is this
+# machine's decision, so a vault copied from elsewhere never executes its
+# bundled script until the user enables it here.
+RETRIEVAL_FILTER_KEY = "retrieval_filters"
+
 
 def _configured_vault_home() -> str | None:
     """Return a ``VAULT_HOME`` value from TalkPipe config (~/.talkpipe.toml)."""
@@ -128,6 +134,47 @@ def forget_vault(vault_path: str) -> bool:
     settings["recent_vaults"] = remaining
     save_settings(settings)
     return True
+
+
+def _resolve_vault_key(vault_path: str) -> str:
+    """Normalize a vault path the same way the recent-vault list does."""
+    return str(Path(vault_path).expanduser())
+
+
+def get_retrieval_filter_flags(vault_path: str) -> dict:
+    """Return this machine's activation flags for a vault's retrieval filter.
+
+    Returns {"enabled": bool, "strict": bool}; both default to False for a
+    vault with no saved entry — a filter script is inert until enabled here.
+    """
+    filters = load_settings().get(RETRIEVAL_FILTER_KEY)
+    entry = filters.get(_resolve_vault_key(vault_path)) if isinstance(filters, dict) else None
+    if not isinstance(entry, dict):
+        entry = {}
+    return {"enabled": bool(entry.get("enabled")), "strict": bool(entry.get("strict"))}
+
+
+def set_retrieval_filter_flags(vault_path: str, *, enabled: bool, strict: bool) -> None:
+    """Persist the activation flags for a vault's retrieval filter."""
+    settings = load_settings()
+    filters = settings.get(RETRIEVAL_FILTER_KEY)
+    if not isinstance(filters, dict):
+        filters = {}
+    filters[_resolve_vault_key(vault_path)] = {
+        "enabled": bool(enabled),
+        "strict": bool(strict),
+    }
+    settings[RETRIEVAL_FILTER_KEY] = filters
+    save_settings(settings)
+
+
+def clear_retrieval_filter_flags(vault_path: str) -> None:
+    """Drop the saved activation flags for a vault's retrieval filter."""
+    settings = load_settings()
+    filters = settings.get(RETRIEVAL_FILTER_KEY)
+    if isinstance(filters, dict) and filters.pop(_resolve_vault_key(vault_path), None) is not None:
+        settings[RETRIEVAL_FILTER_KEY] = filters
+        save_settings(settings)
 
 
 def get_model_overrides() -> dict:

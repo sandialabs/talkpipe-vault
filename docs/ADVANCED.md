@@ -239,6 +239,9 @@ shingle, embed, store — and `vault-server` searches it.
 - `vaultSearch` — semantic search on a vault's vector database
 - `vaultTextSearch` — full-text keyword search using the Whoosh index
 - `vaultChat` — RAG-based Q&A using vault contents
+- `filterSearchResults` — runs a ChatterLang script over a list of search
+  results held on a field, keeping, dropping, or rewriting each one; backs
+  the per-vault retrieval filter
 
 ### Building your own pipelines
 

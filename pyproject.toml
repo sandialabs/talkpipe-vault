@@ -170,6 +170,7 @@ listIntoVectorDB = "talkpipe_vault.pipelines.building_and_watching:list_into_vec
 [project.entry-points."talkpipe.segments"]
 buildVectorDBFromPaths = "talkpipe_vault.pipelines.building_and_watching:build_vector_db_from_paths"
 extractSearchKeywords = "talkpipe_vault.pipelines.searching_and_prompting:ExtractSearchKeywords"
+filterSearchResults = "talkpipe_vault.pipelines.searching_and_prompting:SearchResultFilter"
 mergeSearchResults = "talkpipe_vault.pipelines.searching_and_prompting:MergeSearchResults"
 searchLance = "talkpipe_vault.pipelines.searching_and_prompting:searchLance"
 vaultChat = "talkpipe_vault.pipelines.searching_and_prompting:VaultChat"

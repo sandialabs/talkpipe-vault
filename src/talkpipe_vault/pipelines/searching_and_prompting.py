@@ -26,6 +26,7 @@ from talkpipe.search.whoosh import WhooshIndexError, searchWhoosh
 from talkpipe.util.config import parse_key_value_str
 from talkpipe.util.data_manipulation import assign_property, extract_property
 
+from . import retrieval_filter
 from .config import (
     DEFAULT_VECTOR_TABLE_NAME,
     KEYWORD_EXTRACTION_SYSTEM_PROMPT,
@@ -41,6 +42,49 @@ from .config import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Document-field renames applied when search results are normalized: Whoosh
+# hits carry path/filename while the RAG prompt and sources list cite
+# source/title. Used by both the merge (issue #11) and the retrieval filter
+# (issue #22), so filter scripts see one document shape from either search.
+SEARCH_RESULT_RENAMES = "path:source,filename:title"
+
+
+def normalize_search_result(
+    entry: Any, rename_fields: dict[str, str] | None = None
+) -> SearchResult | None:
+    """Normalize a search hit (SearchResult or dict) to a SearchResult.
+
+    A field in ``rename_fields`` is only renamed when the new name is absent
+    from the document. Returns None for entries of any other shape.
+    """
+    if isinstance(entry, SearchResult):
+        score, doc_id = entry.score, entry.doc_id
+        document = dict(entry.document or {})
+    elif isinstance(entry, dict):
+        score = float(entry.get("score", 0.0))
+        doc_id = str(entry.get("doc_id", ""))
+        document = dict(entry.get("document") or {})
+    else:
+        return None
+    for old, new in (rename_fields or {}).items():
+        if old in document and new not in document:
+            document[new] = document.pop(old)
+    return SearchResult(score=score, doc_id=doc_id, document=document)
+
+
+def search_result_to_dict(
+    entry: Any, rename_fields: dict[str, str] | None = None
+) -> dict[str, Any] | None:
+    """Normalize a search hit into the plain dict shape filter scripts consume."""
+    result = normalize_search_result(entry, rename_fields)
+    if result is None:
+        return None
+    return {
+        "doc_id": result.doc_id,
+        "score": result.score,
+        "document": dict(result.document or {}),
+    }
 
 
 def normalize_document_cell(raw: Any) -> Any:
@@ -293,19 +337,7 @@ class MergeSearchResults(AbstractSegment):
         self.limit = limit
 
     def _normalize(self, entry: Any) -> SearchResult | None:
-        if isinstance(entry, SearchResult):
-            score, doc_id = entry.score, entry.doc_id
-            document = dict(entry.document or {})
-        elif isinstance(entry, dict):
-            score = float(entry.get("score", 0.0))
-            doc_id = str(entry.get("doc_id", ""))
-            document = dict(entry.get("document") or {})
-        else:
-            return None
-        for old, new in self.rename_fields.items():
-            if old in document and new not in document:
-                document[new] = document.pop(old)
-        return SearchResult(score=score, doc_id=doc_id, document=document)
+        return normalize_search_result(entry, self.rename_fields)
 
     def transform(self, input_iter):
         for item in input_iter:
@@ -327,6 +359,127 @@ class MergeSearchResults(AbstractSegment):
             if self.limit is not None:
                 merged = merged[: self.limit]
             assign_property(item, self.set_as, merged)
+            yield item
+
+
+@register_segment("filterSearchResults")
+class SearchResultFilter(AbstractSegment):
+    """
+    Segment that runs a user-supplied ChatterLang script over search results.
+
+    Expects dict-like input items where a named field holds a list of search
+    results (SearchResult objects or dicts with doc_id, score, and document
+    keys). Each result is normalized to the plain dict shape
+    {"doc_id": ..., "score": ..., "document": {...}} and streamed through the
+    script one result per item; the script keeps a result by emitting it,
+    filters it by dropping it, and transforms it by modifying it. The script's
+    output is normalized back to SearchResult objects (unusable emissions are
+    dropped with a warning), optionally truncated, and stored on the item.
+
+    When the script fails at run time, the unfiltered results are used and the
+    error is recorded on the item as _filter_error — unless strict is set, in
+    which case the failure propagates. Strict exists for redaction-style
+    filters, where silently proceeding with unfiltered results would leak the
+    very content the filter removes.
+    """
+
+    def __init__(
+        self,
+        script: Annotated[
+            str,
+            "ChatterLang filter script: a single segment-only pipeline "
+            "(no INPUT FROM source, loops, or forks).",
+        ],
+        field: Annotated[str, "The field holding the search-result list."],
+        set_as: Annotated[
+            str | None,
+            "The field to set the filtered list as. If None, uses field.",
+        ] = None,
+        limit: Annotated[
+            int | None,
+            "Maximum number of results to keep after filtering.",
+        ] = None,
+        strict: Annotated[
+            bool,
+            "If True, a script failure at run time raises instead of "
+            "falling back to the unfiltered results.",
+        ] = False,
+        rename_fields: Annotated[
+            str | None,
+            "Document fields to rename during normalization, as 'old:new,"
+            "old:new'. A field is only renamed when the new name is absent.",
+        ] = None,
+    ):
+        super().__init__()
+        self.field = field
+        self.set_as = set_as if set_as is not None else field
+        self.limit = limit
+        self.strict = strict
+        self.rename_fields = (
+            parse_key_value_str(rename_fields, require_value=True)
+            if rename_fields
+            else {}
+        )
+        # Raises ValueError with a user-readable message on an unusable
+        # script, so a broken filter surfaces at pipeline-build time.
+        self._compiled = retrieval_filter.compile_script(script)
+
+    def apply(self, results: list[Any]) -> tuple[list[SearchResult], str | None]:
+        """Run the script over a result list; return (filtered, error).
+
+        The error is None when the script ran, and the failure message when it
+        did not and the unfiltered results were kept (non-strict mode).
+        """
+        prepared = [
+            entry
+            for entry in (
+                search_result_to_dict(raw, self.rename_fields)
+                for raw in results or []
+            )
+            if entry is not None
+        ]
+        try:
+            filtered = []
+            for emitted in self._compiled(iter(prepared)):
+                normalized = normalize_search_result(emitted)
+                if normalized is None:
+                    logger.warning(
+                        "The retrieval filter emitted a %s instead of a "
+                        "search result; dropping it",
+                        type(emitted).__name__,
+                    )
+                    continue
+                filtered.append(normalized)
+            error = None
+        except Exception as exc:
+            if self.strict:
+                raise RuntimeError(
+                    f"The vault's retrieval filter failed: {exc}"
+                ) from exc
+            logger.warning(
+                "Retrieval filter failed; using the unfiltered results",
+                exc_info=True,
+            )
+            filtered = [
+                entry
+                for entry in (
+                    normalize_search_result(raw, self.rename_fields)
+                    for raw in results or []
+                )
+                if entry is not None
+            ]
+            error = str(exc)
+        if self.limit is not None:
+            filtered = filtered[: self.limit]
+        return filtered, error
+
+    def transform(self, input_iter):
+        for item in input_iter:
+            results = extract_property(item, self.field, fail_on_missing=False)
+            filtered, error = self.apply(results or [])
+            assign_property(item, self.set_as, filtered)
+            if error:
+                assign_property(item, "_filter_error", error)
             yield item
 
 
@@ -360,6 +513,10 @@ class VaultSearch(AbstractFieldSegment):
             str | None,
             "Source/provider for the embedding model (e.g., 'ollama', 'openai'). If None, uses TalkPipe config or default.",
         ] = None,
+        limit: Annotated[
+            int | None,
+            "Maximum number of results. If None, uses the vector store default.",
+        ] = None,
     ):
         super().__init__(field=field, set_as=set_as, multi_emit=multi_emit)
         embedding_model, embedding_source = resolve_embedding_config(
@@ -371,6 +528,7 @@ class VaultSearch(AbstractFieldSegment):
 
         self.vault_path = vault_path
         vectordb_path = get_vector_db_path(vault_path)
+        limit_kwargs = {} if limit is None else {"limit": limit}
         self.pipeline = (
             ToDict(field_list="_:query")
             | fillTemplate(template=retrieval_template, set_as="templated_query")
@@ -380,6 +538,7 @@ class VaultSearch(AbstractFieldSegment):
                 query_field="templated_query",
                 embedding_model=embedding_model,
                 embedding_source=embedding_source,
+                **limit_kwargs,
             )
         ).as_function(single_in=True, single_out=True)
 
@@ -398,6 +557,10 @@ class VaultChat(AbstractFieldSegment):
     keyword_search enabled, an LLM additionally distills the query into
     full-text index keywords, the vault's Whoosh index is searched with them,
     and those hits are merged into the retrieved context before answering.
+    With a result_filter_script, each retrieval stream is over-fetched, run
+    through the vault's ChatterLang filter independently, and truncated back
+    to its result limit before the streams are merged (issue #22), so both
+    keyword and semantic hits stay represented after filtering.
 
     Emits AI-generated response strings based on retrieved vault context.
     """
@@ -443,15 +606,30 @@ class VaultChat(AbstractFieldSegment):
         ] = None,
         include_background: Annotated[
             bool,
-            "If True (requires keyword_search), emit a dict with 'response', "
-            "'background' (the merged search results the RAG prompt was built "
-            "from), and 'keyword_hits' (how many chunks the keyword search "
-            "returned) instead of the answer string.",
+            "If True (requires keyword_search or result_filter_script), emit "
+            "a dict with 'response', 'background' (the search results the RAG "
+            "prompt was built from), 'filter_error' (why the retrieval filter "
+            "fell back to unfiltered results, or None), and — with "
+            "keyword_search — 'keyword_hits' (how many chunks the keyword "
+            "search returned) instead of the answer string.",
+        ] = False,
+        result_filter_script: Annotated[
+            str | None,
+            "ChatterLang script filtering/transforming each retrieval stream "
+            "before the RAG prompt (a single segment-only pipeline).",
+        ] = None,
+        result_filter_strict: Annotated[
+            bool,
+            "If True, a retrieval-filter failure at run time fails the "
+            "question instead of answering from unfiltered results.",
         ] = False,
     ):
         super().__init__(field=field, set_as=set_as, multi_emit=multi_emit)
-        if include_background and not keyword_search:
-            raise ValueError("include_background requires keyword_search=True")
+        if include_background and not (keyword_search or result_filter_script):
+            raise ValueError(
+                "include_background requires keyword_search=True or a "
+                "result_filter_script"
+            )
         self.include_background = include_background
         embedding_model, embedding_source = resolve_embedding_config(
             embedding_model, embedding_source
@@ -465,6 +643,15 @@ class VaultChat(AbstractFieldSegment):
         self.vault_path = vault_path
         vectordb_path = get_vector_db_path(vault_path)
         result_limit = limit if limit is not None else 10
+        keyword_result_limit = (
+            keyword_limit if keyword_limit is not None else result_limit
+        )
+        # With a filter, each stream over-fetches so it can still fill its
+        # result limit after the filter drops hits; the filter truncates its
+        # stream back to the limit before the merge (issue #22).
+        overfetch = (
+            retrieval_filter.FILTER_OVERFETCH_FACTOR if result_filter_script else 1
+        )
         if keyword_search:
             # prompt -> keyword-query creation -> keyword search -> add in
             # vector search -> RAG prompt -> completion, per issue #11. The
@@ -472,7 +659,7 @@ class VaultChat(AbstractFieldSegment):
             # deduplicates chunks found by both searches; path/filename are
             # renamed to source/title so keyword-only hits are citable by the
             # RAG prompt and the appended sources list.
-            self.pipeline = (
+            pipeline = (
                 ToDict(field_list="_:query")
                 | fillTemplate(template=retrieval_template, set_as="templated_query")
                 | ExtractSearchKeywords(
@@ -483,24 +670,85 @@ class VaultChat(AbstractFieldSegment):
                 )
                 | VaultTextSearch(
                     vault_path=vault_path,
-                    limit=keyword_limit if keyword_limit is not None else result_limit,
+                    limit=keyword_result_limit * overfetch,
                     field="_keyword_query",
                     set_as="_keyword_background",
                     multi_emit=False,
                 )
+            )
+            if result_filter_script:
+                pipeline = pipeline | SearchResultFilter(
+                    script=result_filter_script,
+                    field="_keyword_background",
+                    limit=keyword_result_limit,
+                    strict=result_filter_strict,
+                    rename_fields=SEARCH_RESULT_RENAMES,
+                )
+            pipeline = pipeline | SearchVectorDatabaseSegment(
+                path=vectordb_path,
+                table_name=DEFAULT_VECTOR_TABLE_NAME,
+                query_field="templated_query",
+                set_as="_background",
+                limit=result_limit * overfetch,
+                embedding_model=embedding_model,
+                embedding_source=embedding_source,
+            )
+            if result_filter_script:
+                pipeline = pipeline | SearchResultFilter(
+                    script=result_filter_script,
+                    field="_background",
+                    limit=result_limit,
+                    strict=result_filter_strict,
+                    rename_fields=SEARCH_RESULT_RENAMES,
+                )
+            self.pipeline = (
+                pipeline
+                | MergeSearchResults(
+                    field_list="_background,_keyword_background",
+                    set_as="_background",
+                    rename_fields=SEARCH_RESULT_RENAMES,
+                )
+                | ConstructRAGPrompt(
+                    prompt_directive=RAG_PROMPT_DIRECTIVE,
+                    background_field="_background",
+                    content_field="query",
+                    set_as="_ragprompt",
+                )
+                | LLMPrompt(
+                    model=chat_model,
+                    source=chat_source,
+                    system_prompt=RAG_SYSTEM_PROMPT,
+                    field="_ragprompt",
+                    set_as="_partial_rag_response",
+                )
+                | AppendRAGSources(
+                    partial_answer_field="_partial_rag_response",
+                    set_as="chat_response",
+                )
+            ).as_function(single_in=True, single_out=True)
+        elif result_filter_script:
+            # The RAGToText composite hides retrieval internally, so the
+            # filtered plain pipeline uses the decomposed equivalent: vector
+            # search into _background, the filter, then the same RAG prompt ->
+            # completion -> sources stages the keyword branch uses.
+            self.pipeline = (
+                ToDict(field_list="_:query")
+                | fillTemplate(template=retrieval_template, set_as="templated_query")
                 | SearchVectorDatabaseSegment(
                     path=vectordb_path,
                     table_name=DEFAULT_VECTOR_TABLE_NAME,
                     query_field="templated_query",
                     set_as="_background",
-                    limit=result_limit,
+                    limit=result_limit * overfetch,
                     embedding_model=embedding_model,
                     embedding_source=embedding_source,
                 )
-                | MergeSearchResults(
-                    field_list="_background,_keyword_background",
-                    set_as="_background",
-                    rename_fields="path:source,filename:title",
+                | SearchResultFilter(
+                    script=result_filter_script,
+                    field="_background",
+                    limit=result_limit,
+                    strict=result_filter_strict,
+                    rename_fields=SEARCH_RESULT_RENAMES,
                 )
                 | ConstructRAGPrompt(
                     prompt_directive=RAG_PROMPT_DIRECTIVE,
@@ -541,19 +789,23 @@ class VaultChat(AbstractFieldSegment):
                 | EvalExpression(field="chat_response", expression="item")
             ).as_function(single_in=True, single_out=True)
         self.keyword_search = keyword_search
+        # These branches keep the full working item so callers can see the
+        # retrieval and filter outcome, not just the answer.
+        self._emits_item = keyword_search or bool(result_filter_script)
 
     def process_value(self, value: str) -> Any:
         result = self.pipeline(value)
-        if not self.keyword_search:
+        if not self._emits_item:
             return result
-        # The keyword pipeline yields its full working item so callers can see
-        # the retrieval, not just the answer.
         if self.include_background:
-            return {
+            out = {
                 "response": result.get("chat_response", ""),
                 "background": result.get("_background") or [],
-                "keyword_hits": len(result.get("_keyword_background") or []),
+                "filter_error": result.get("_filter_error"),
             }
+            if self.keyword_search:
+                out["keyword_hits"] = len(result.get("_keyword_background") or [])
+            return out
         return result.get("chat_response", "")
 
 

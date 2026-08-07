@@ -73,6 +73,7 @@ def collect_config_status(
     vault_selected: bool = False,
     vault_embedding: dict[str, Any] | None = None,
     vault_indexed: bool = True,
+    retrieval_filter: dict[str, Any] | None = None,
     probe: bool = True,
     timeout: float = DEFAULT_PROBE_TIMEOUT,
     allow_download: bool = False,
@@ -92,6 +93,10 @@ def collect_config_status(
             Distinguishes a new, never-indexed vault (no record is expected)
             from a legacy vault whose index predates the record. Only
             consulted when ``vault_selected`` is True.
+        retrieval_filter: State of the open vault's retrieval-filter script
+            (``enabled``/``strict``/``error``), or None when the vault has no
+            script. Adds a row so a filter that silently stopped compiling —
+            or was never enabled on this machine — is visible.
         probe: When True, make live connectivity/credential calls. When False,
             report only what can be determined without touching the network.
         timeout: Per-call network timeout, in seconds.
@@ -127,7 +132,48 @@ def collect_config_status(
         checks.append(
             _check_embedding_index_match(models, vault_embedding, vault_indexed)
         )
+        if retrieval_filter is not None:
+            checks.append(_check_retrieval_filter(retrieval_filter))
     return {"overall": _rollup(checks), "checks": checks}
+
+
+def _check_retrieval_filter(info: dict[str, Any]) -> dict[str, Any]:
+    """Report the state of the open vault's retrieval-filter script.
+
+    Only called when the vault carries a script. A compile error is a warning
+    (not an error): Ask and the search pages keep working, just unfiltered,
+    and the row says exactly that so the degradation is never silent.
+    """
+    base: dict[str, Any] = {
+        "name": "Retrieval filter",
+        "value": "strict" if info.get("strict") else "best-effort",
+    }
+    error = info.get("error")
+    if error:
+        base["status"] = "warn"
+        base["summary"] = (
+            "This vault's retrieval filter does not compile, so retrieval "
+            f"runs unfiltered: {error}"
+        )
+        base["fix"] = (
+            "Fix or remove the script under Vaults & Documents → "
+            "Retrieval filter."
+        )
+        return base
+    if not info.get("enabled"):
+        base["status"] = "ok"
+        base["summary"] = (
+            "This vault carries a retrieval-filter script, but it is not "
+            "enabled on this machine, so it does not run. Enable it under "
+            "Vaults & Documents → Retrieval filter if it is yours."
+        )
+        return base
+    base["status"] = "ok"
+    base["summary"] = (
+        "The vault's retrieval filter compiles and is enabled; it runs on "
+        "Ask retrieval and, when requested, on the search pages."
+    )
+    return base
 
 
 def _check_embedding_index_match(

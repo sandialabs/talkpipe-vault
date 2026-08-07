@@ -7,8 +7,8 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
-from talkpipe_vault.apps import query
-from talkpipe_vault.pipelines import searching_and_prompting
+from talkpipe_vault.apps import query, user_settings
+from talkpipe_vault.pipelines import retrieval_filter, searching_and_prompting
 from talkpipe_vault.pipelines.searching_and_prompting import VaultTextSearch
 
 
@@ -68,6 +68,12 @@ def reset_app_state(tmp_path, monkeypatch):
     query._state.shingle_size = None
     query._state.shingle_overlap = None
     query._state.rag_result_limit = None
+    query._state.result_filter_script = None
+    query._state.result_filter_active = False
+    query._state.result_filter_strict = False
+    query._state.result_filter_error = None
+    query._state.filtered_search_pipeline = None
+    query._state.filtered_keyword_search_pipeline = None
     yield
 
 
@@ -1603,3 +1609,136 @@ def test_documents_page_sends_finished_index_job_to_home():
     assert "window.location = '/' + (params.toString() ? '?' + params : '')" in body
     # Failure: reload the Documents page so the error sits next to the form.
     assert "window.location = '/documents?' + params" in body
+
+
+class TestRetrievalFilter:
+    """Saving, gating, and applying the open vault's retrieval filter."""
+
+    DROP_DRAFTS = (
+        "| lambdaFilter[expression=\"'draft' not in document.get('content', '')\"]"
+    )
+
+    @pytest.fixture(autouse=True)
+    def no_pipeline_rebuild(self, monkeypatch):
+        """These tests cover storage and gating, not pipeline construction."""
+        monkeypatch.setattr(query, "_refresh_pipelines", lambda force=False: None)
+
+    def _save(self, client, **data):
+        payload = {"action": "save", "script": self.DROP_DRAFTS}
+        payload.update(data)
+        return client.post(
+            "/vaults/retrieval-filter", data=payload, follow_redirects=False
+        )
+
+    def test_save_writes_the_script_into_the_vault(self, tmp_path):
+        client = TestClient(query.app)
+
+        response = self._save(client, enabled="1")
+
+        assert response.status_code in (302, 303)
+        assert retrieval_filter.load_script(str(tmp_path)) == self.DROP_DRAFTS
+        assert user_settings.get_retrieval_filter_flags(str(tmp_path)) == {
+            "enabled": True,
+            "strict": False,
+        }
+
+    def test_save_without_enabling_leaves_the_filter_inert(self, tmp_path):
+        client = TestClient(query.app)
+
+        self._save(client)
+
+        assert retrieval_filter.load_script(str(tmp_path)) == self.DROP_DRAFTS
+        assert user_settings.get_retrieval_filter_flags(str(tmp_path))["enabled"] is False
+
+    def test_strict_flag_is_persisted(self, tmp_path):
+        client = TestClient(query.app)
+
+        self._save(client, enabled="1", strict="1")
+
+        assert user_settings.get_retrieval_filter_flags(str(tmp_path))["strict"] is True
+
+    def test_invalid_script_is_reported_and_not_saved(self, tmp_path):
+        client = TestClient(query.app)
+
+        response = self._save(client, script="| noSuchSegmentExists")
+
+        assert response.status_code == 200
+        assert "noSuchSegmentExists" in response.text
+        assert retrieval_filter.load_script(str(tmp_path)) is None
+
+    def test_validate_reports_success_without_saving(self, tmp_path):
+        client = TestClient(query.app)
+
+        response = self._save(client, action="validate")
+
+        assert response.status_code == 200
+        assert "compiles" in response.text
+        assert retrieval_filter.load_script(str(tmp_path)) is None
+
+    def test_blank_script_asks_for_remove_instead(self, tmp_path):
+        client = TestClient(query.app)
+
+        response = self._save(client, script="   ")
+
+        assert response.status_code == 200
+        assert "Remove" in response.text
+
+    def test_remove_deletes_the_script_and_its_flags(self, tmp_path):
+        client = TestClient(query.app)
+        self._save(client, enabled="1")
+
+        response = client.post(
+            "/vaults/retrieval-filter",
+            data={"action": "remove"},
+            follow_redirects=False,
+        )
+
+        assert response.status_code in (302, 303)
+        assert retrieval_filter.load_script(str(tmp_path)) is None
+        assert user_settings.get_retrieval_filter_flags(str(tmp_path))["enabled"] is False
+
+    def test_configuring_without_an_open_vault_is_refused(self):
+        query._state.vault_path = ""
+        client = TestClient(query.app)
+
+        response = self._save(client, enabled="1")
+
+        assert response.status_code in (302, 303)
+        assert "Open+a+vault" in response.headers["location"]
+
+
+class TestLoadActiveFilter:
+    """A script only runs when it is present, enabled here, and compiling."""
+
+    DROP_DRAFTS = TestRetrievalFilter.DROP_DRAFTS
+
+    def test_enabled_and_valid_script_is_applied(self, tmp_path):
+        retrieval_filter.save_script(str(tmp_path), self.DROP_DRAFTS)
+        user_settings.set_retrieval_filter_flags(
+            str(tmp_path), enabled=True, strict=False
+        )
+
+        assert query._load_active_filter(str(tmp_path)) == self.DROP_DRAFTS
+        assert query._state.result_filter_active is True
+
+    def test_script_that_is_not_enabled_does_not_run(self, tmp_path):
+        """A vault copied from elsewhere must not execute its bundled script."""
+        retrieval_filter.save_script(str(tmp_path), self.DROP_DRAFTS)
+
+        assert query._load_active_filter(str(tmp_path)) is None
+        assert query._state.result_filter_active is False
+        assert query._state.result_filter_error is None
+
+    def test_broken_script_is_recorded_and_not_applied(self, tmp_path):
+        retrieval_filter.save_script(str(tmp_path), "| noSuchSegmentExists")
+        user_settings.set_retrieval_filter_flags(
+            str(tmp_path), enabled=True, strict=False
+        )
+
+        assert query._load_active_filter(str(tmp_path)) is None
+        assert query._state.result_filter_active is False
+        assert "noSuchSegmentExists" in query._state.result_filter_error
+
+    def test_vault_without_a_script_is_unfiltered(self, tmp_path):
+        assert query._load_active_filter(str(tmp_path)) is None
+        assert query._state.result_filter_active is False

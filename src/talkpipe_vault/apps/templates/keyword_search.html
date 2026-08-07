@@ -9,6 +9,16 @@
         <button type="submit" id="search-btn" {% if not keyword_search_enabled %}disabled{% endif %}>Search</button>
     </form>
     {% if keyword_search_enabled %}
+    {% if result_filter_active %}
+    <label class="overwrite-option">
+        <input type="checkbox" name="apply_filter" value="1" form="search-form"
+               {% if apply_filter %}checked{% endif %}>
+        Apply custom transform (this vault's retrieval filter)
+    </label>
+    {% endif %}
+    {% if filter_note %}
+    <p class="search-hint filter-note">{{ filter_note }}</p>
+    {% endif %}
     <p class="search-hint">Uses the existing Whoosh index. Supports AND, OR, NOT, and "exact phrase".</p>
     <form method="post" action="/keyword-search/create-index" id="create-index-form">
         <button type="submit" id="create-index-btn" class="btn-secondary">Rebuild Full-Text Index</button>

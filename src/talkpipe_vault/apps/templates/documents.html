@@ -154,6 +154,104 @@
     {% endif %}
 </div>
 
+{% if retrieval_filter and retrieval_filter.available and vault_path %}
+<div class="search-box">
+    <details id="retrieval-filter" {% if retrieval_filter.open %}open{% endif %}>
+        <summary class="filter-summary">
+            Retrieval filter (advanced)
+            {% if retrieval_filter.error %}
+            <span class="filter-badge filter-badge-warn">not compiling</span>
+            {% elif retrieval_filter.active %}
+            <span class="filter-badge filter-badge-ok">active</span>
+            {% elif retrieval_filter.script %}
+            <span class="filter-badge">saved, not enabled</span>
+            {% endif %}
+        </summary>
+        <p class="panel-hint">
+            A ChatterLang script for <strong>this vault</strong> that filters or
+            transforms retrieved results before they reach the Ask answer. The
+            script is stored in the vault folder and travels with it; whether it
+            runs is decided here, on this machine.
+        </p>
+        {% if retrieval_filter.message %}
+        <div class="filter-flash">{{ retrieval_filter.message }}</div>
+        {% endif %}
+        {% if retrieval_filter.error %}
+        <div class="filter-error">{{ retrieval_filter.error }}</div>
+        {% endif %}
+        <form method="post" action="/vaults/retrieval-filter" class="filter-form">
+            <textarea name="script" id="filter-script" rows="6" spellcheck="false"
+                      placeholder='| lambdaFilter[expression="&#39;some term&#39; not in document.get(&#39;content&#39;, &#39;&#39;).lower()"]'>{{ retrieval_filter.script }}</textarea>
+            <label class="overwrite-option">
+                <input type="checkbox" name="enabled" value="1"
+                       {% if retrieval_filter.enabled %}checked{% endif %}>
+                Enable this filter on this machine (a filter never runs until
+                enabled here — review scripts that arrived with a copied vault)
+            </label>
+            <label class="overwrite-option">
+                <input type="checkbox" name="strict" value="1"
+                       {% if retrieval_filter.strict %}checked{% endif %}>
+                Strict: if the filter fails while answering, fail the question
+                instead of answering from unfiltered results (check this if your
+                filter removes sensitive content)
+            </label>
+            <div class="filter-actions">
+                <button type="submit" name="action" value="save">Save</button>
+                <button type="submit" name="action" value="validate"
+                        class="btn-secondary">Validate</button>
+                <button type="submit" name="action" value="remove"
+                        class="btn-danger" id="filter-remove-btn">Remove</button>
+            </div>
+        </form>
+        <details class="filter-help">
+            <summary>How to write a filter</summary>
+            <p>
+                Each retrieved result flows through your script one at a time;
+                emit it to keep it, drop it to filter it, modify it to transform
+                it. Every result is a dictionary shaped like:
+            </p>
+            <pre>{"doc_id": "…", "score": 0.87,
+ "document": {"content": "…", "source": "…", "title": "…"}}</pre>
+            <p>
+                In <code>lambdaFilter</code>/<code>lambda</code> expressions the
+                fields are available directly (<code>document</code>,
+                <code>score</code>, <code>doc_id</code>). Starter recipes:
+            </p>
+            <ul class="filter-recipes">
+                <li>
+                    <code>| lambdaFilter[expression="'some term' not in document.get('content', '').lower()"]</code>
+                    <button type="button" class="btn-secondary filter-insert"
+                            data-script="| lambdaFilter[expression=&quot;'some term' not in document.get('content', '').lower()&quot;]">Insert</button>
+                    <span class="filter-recipe-hint">drop results whose content mentions a term</span>
+                </li>
+                <li>
+                    <code>| lambdaFilter[expression="'/archive/' not in document.get('source', '')"]</code>
+                    <button type="button" class="btn-secondary filter-insert"
+                            data-script="| lambdaFilter[expression=&quot;'/archive/' not in document.get('source', '')&quot;]">Insert</button>
+                    <span class="filter-recipe-hint">drop results from a folder, by source path</span>
+                </li>
+                <li>
+                    <code>| lambdaFilter[expression="score &gt; 0.2"]</code>
+                    <button type="button" class="btn-secondary filter-insert"
+                            data-script="| lambdaFilter[expression=&quot;score > 0.2&quot;]">Insert</button>
+                    <span class="filter-recipe-hint">drop low-scoring results (only useful when your
+                        embedding backend reports similarity scores)</span>
+                </li>
+            </ul>
+            <p>
+                Any registered ChatterLang segment works — including LLM
+                transforms — but the script must be a single pipeline of
+                segments: no <code>INPUT FROM</code> source, loops, or forks.
+                When active, the filter runs on Ask retrieval (keyword and
+                semantic streams are filtered independently, then merged) and
+                can be applied on the search pages with their
+                &ldquo;Apply custom transform&rdquo; checkbox.
+            </p>
+        </details>
+    </details>
+</div>
+{% endif %}
+
 {% include "_dir_picker.html" %}
 
 <style>
@@ -311,6 +409,124 @@
     .progress-text code {
         font-size: 0.85em;
     }
+    .filter-summary {
+        color: var(--heading);
+        cursor: pointer;
+        font-size: 1.05rem;
+        font-weight: 650;
+    }
+    .filter-badge {
+        background: var(--field-bg);
+        border: 1px solid var(--field-border);
+        border-radius: 999px;
+        color: var(--muted);
+        font-size: 0.72rem;
+        font-weight: 650;
+        letter-spacing: 0.03em;
+        margin-left: 8px;
+        padding: 2px 10px;
+        text-transform: uppercase;
+        vertical-align: middle;
+    }
+    .filter-badge-ok {
+        background: var(--success-bg, var(--field-bg));
+        border-color: var(--success-border, var(--field-border));
+        color: var(--success-ink, var(--muted));
+    }
+    .filter-badge-warn {
+        background: var(--warning-bg);
+        border-color: var(--warning-border);
+        color: var(--warning-ink);
+    }
+    /* The base rule makes panel forms a horizontal row; the filter form
+       reads top to bottom like the index form above. */
+    .filter-form,
+    .search-box form.filter-form {
+        display: block;
+        margin-top: 12px;
+    }
+    .filter-form textarea {
+        background: var(--field-bg);
+        border: 1px solid var(--field-border);
+        border-radius: var(--radius-sm);
+        box-sizing: border-box;
+        color: inherit;
+        font-family: var(--mono, monospace);
+        font-size: 0.88rem;
+        padding: 10px 12px;
+        resize: vertical;
+        width: 100%;
+    }
+    .filter-actions {
+        display: flex;
+        gap: 8px;
+        margin-top: 14px;
+    }
+    .filter-flash,
+    .filter-error {
+        border-radius: var(--radius-sm);
+        font-size: 0.9rem;
+        margin-top: 10px;
+        padding: 10px 14px;
+        white-space: pre-wrap;
+    }
+    .filter-flash {
+        background: var(--field-bg);
+        border: 1px solid var(--field-border);
+        color: var(--muted);
+    }
+    .filter-error {
+        background: var(--warning-bg);
+        border: 1px solid var(--warning-border);
+        color: var(--warning-ink);
+        font-family: var(--mono, monospace);
+    }
+    .filter-help {
+        margin-top: 16px;
+    }
+    .filter-help summary {
+        color: var(--muted);
+        cursor: pointer;
+        font-size: 0.9rem;
+        font-weight: 650;
+    }
+    .filter-help p,
+    .filter-help ul {
+        color: var(--muted);
+        font-size: 0.88rem;
+        margin-top: 10px;
+    }
+    .filter-help pre {
+        background: var(--field-bg);
+        border: 1px solid var(--field-border);
+        border-radius: var(--radius-sm);
+        font-size: 0.82rem;
+        margin-top: 10px;
+        overflow-x: auto;
+        padding: 10px 12px;
+    }
+    .filter-recipes {
+        list-style: none;
+        padding-left: 0;
+    }
+    .filter-recipes li {
+        margin-top: 10px;
+        overflow-wrap: anywhere;
+    }
+    .filter-recipes code {
+        font-size: 0.82rem;
+    }
+    .filter-insert {
+        font-size: 0.78rem;
+        margin-left: 6px;
+        padding: 2px 10px;
+    }
+    .filter-recipe-hint {
+        color: var(--muted);
+        display: block;
+        font-size: 0.82rem;
+        margin-top: 2px;
+    }
 </style>
 
 <script>
@@ -406,6 +622,30 @@
         if (!hasOpenVault && sourceInput.value.trim()) {
             suggestVault();
         }
+    })();
+
+    // Retrieval filter: recipe insert buttons and remove confirmation.
+    (function () {
+        const scriptField = document.getElementById('filter-script');
+        if (!scriptField) {
+            return;
+        }
+        document.querySelectorAll('.filter-insert').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                scriptField.value = btn.getAttribute('data-script');
+                scriptField.focus();
+            });
+        });
+        const removeBtn = document.getElementById('filter-remove-btn');
+        removeBtn.addEventListener('click', function (event) {
+            const ok = window.confirm(
+                'Delete this vault\'s retrieval filter script?\n\n' +
+                'The script file is removed from the vault folder.'
+            );
+            if (!ok) {
+                event.preventDefault();
+            }
+        });
     })();
 
     // Confirm before the destructive, irreversible vault deletion.

@@ -588,3 +588,58 @@ def test_functional_probe_times_out_gracefully(monkeypatch):
     ok, result = diagnostics._run_bounded(slow, 0.1)
     assert ok is False
     assert isinstance(result, TimeoutError)
+
+
+class TestRetrievalFilterCheck:
+    """The open vault's retrieval-filter row (absent unless it has a script)."""
+
+    def test_no_row_without_a_script(self, probe_ok):
+        report = diagnostics.collect_config_status(
+            _models(), vault_selected=True, retrieval_filter=None
+        )
+        names = [check["name"] for check in report["checks"]]
+        assert "Retrieval filter" not in names
+
+    def test_active_filter_reports_ok(self, probe_ok):
+        report = diagnostics.collect_config_status(
+            _models(),
+            vault_selected=True,
+            retrieval_filter={"enabled": True, "strict": False, "error": None},
+        )
+        check = _find(report, "Retrieval filter")
+        assert check["status"] == "ok"
+        assert check["value"] == "best-effort"
+
+    def test_strict_filter_is_labelled(self, probe_ok):
+        report = diagnostics.collect_config_status(
+            _models(),
+            vault_selected=True,
+            retrieval_filter={"enabled": True, "strict": True, "error": None},
+        )
+        assert _find(report, "Retrieval filter")["value"] == "strict"
+
+    def test_disabled_filter_says_it_does_not_run(self, probe_ok):
+        report = diagnostics.collect_config_status(
+            _models(),
+            vault_selected=True,
+            retrieval_filter={"enabled": False, "strict": False, "error": None},
+        )
+        check = _find(report, "Retrieval filter")
+        assert check["status"] == "ok"
+        assert "not enabled" in check["summary"]
+
+    def test_broken_filter_warns_that_retrieval_is_unfiltered(self, probe_ok):
+        """A filter that stopped compiling must never degrade silently."""
+        report = diagnostics.collect_config_status(
+            _models(),
+            vault_selected=True,
+            retrieval_filter={
+                "enabled": True,
+                "strict": False,
+                "error": "Segment 'nope' not found.",
+            },
+        )
+        check = _find(report, "Retrieval filter")
+        assert check["status"] == "warn"
+        assert "unfiltered" in check["summary"]
+        assert "nope" in check["summary"]

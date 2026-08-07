@@ -53,7 +53,7 @@ from talkpipe.util.config import configure_logger
 
 from talkpipe_vault import memtune
 from talkpipe_vault.apps import access_control, credentials, user_settings
-from talkpipe_vault.pipelines import diagnostics, vault_metadata
+from talkpipe_vault.pipelines import diagnostics, retrieval_filter, vault_metadata
 from talkpipe_vault.pipelines.config import (
     DEFAULT_VECTOR_TABLE_NAME,
     FULLTEXT_VAULT_SUBDIR,
@@ -68,6 +68,8 @@ from talkpipe_vault.pipelines.config import (
     get_whoosh_index_path,
 )
 from talkpipe_vault.pipelines.searching_and_prompting import (
+    SEARCH_RESULT_RENAMES,
+    SearchResultFilter,
     VaultChat,
     VaultSearch,
     VaultTextSearch,
@@ -86,6 +88,9 @@ DEFAULT_CHUNK_SIZE = 300
 DEFAULT_SHINGLE_SIZE = 3
 DEFAULT_SHINGLE_OVERLAP = 1
 DEFAULT_RAG_RESULT_LIMIT = 5
+# Mirrors the vector store's own default result count, so the filtered
+# semantic-search pipeline can over-fetch and truncate back to it.
+DEFAULT_SEARCH_RESULT_LIMIT = 10
 
 
 @dataclass
@@ -97,6 +102,21 @@ class AppState:
     chat_pipeline: Callable[[str], str] | None = None
     keyword_chat_pipeline: Callable[[str], str] | None = None
     keyword_search_pipeline: Callable[[str], list[Any]] | None = None
+    # Retrieval filter (issue #22): the open vault's script, whether it is
+    # active (present + enabled + compiles), and the search-page pipelines
+    # that apply it on demand. Each filtered pipeline returns
+    # (results, filter_error) where filter_error is None unless the script
+    # failed at run time and the unfiltered results were kept.
+    result_filter_script: str | None = None
+    result_filter_active: bool = False
+    result_filter_strict: bool = False
+    result_filter_error: str | None = None
+    filtered_search_pipeline: Callable[[str], tuple[list[Any], str | None]] | None = (
+        None
+    )
+    filtered_keyword_search_pipeline: (
+        Callable[[str], tuple[list[Any], str | None]] | None
+    ) = None
     shingled_chunks_count: int = 0
     keyword_search_enabled: bool = False
     show_source_paths: bool = False
@@ -136,6 +156,7 @@ def _template_context(
         "shingled_chunks_count": state.shingled_chunks_count,
         "keyword_search_enabled": state.keyword_search_enabled,
         "show_source_paths": state.show_source_paths,
+        "result_filter_active": state.result_filter_active,
     }
     context.update(extra)
     return context
@@ -381,6 +402,36 @@ def _apply_vault_embedding_config(vault_path: str) -> None:
         _state.embedding_model = saved_model
 
 
+def _load_active_filter(vault_path: str) -> str | None:
+    """Resolve the vault's retrieval filter and record its state on the app.
+
+    Returns the script text only when it should actually run: present in the
+    vault, enabled on this machine, and compiling cleanly. A script that no
+    longer compiles is recorded as an error and *not* applied — Ask and the
+    search pages keep working unfiltered, and the state is surfaced on the
+    Vaults & Documents page and in the configuration status.
+    """
+    script = retrieval_filter.load_script(vault_path)
+    flags = user_settings.get_retrieval_filter_flags(vault_path)
+    _state.result_filter_script = script
+    _state.result_filter_strict = flags["strict"]
+    _state.result_filter_error = None
+    _state.result_filter_active = False
+    if not script or not flags["enabled"]:
+        return None
+    error = retrieval_filter.validate_script(script)
+    if error:
+        _state.result_filter_error = error
+        logger.warning(
+            "Retrieval filter for %s is unusable and was not applied: %s",
+            vault_path,
+            error,
+        )
+        return None
+    _state.result_filter_active = True
+    return script
+
+
 def _refresh_pipelines(force: bool = False) -> None:
     """
     Refresh/reinitialize the pipelines to ensure fresh database connections.
@@ -401,6 +452,7 @@ def _refresh_pipelines(force: bool = False) -> None:
     if not force and (current_time - _state.last_refresh_time) < 5.0:
         return
 
+    filter_script = _load_active_filter(vault_path)
     _state.search_pipeline = VaultSearch(
         vault_path=vault_path,
         embedding_model=_state.embedding_model,
@@ -413,6 +465,11 @@ def _refresh_pipelines(force: bool = False) -> None:
         chat_model=_state.chat_model,
         chat_source=_state.chat_source,
         limit=_state.rag_result_limit or DEFAULT_RAG_RESULT_LIMIT,
+        result_filter_script=filter_script,
+        result_filter_strict=_state.result_filter_strict,
+        # With a filter, the pipeline reports the retrieval it actually
+        # prompted with (and the filter outcome) instead of the answer string.
+        include_background=bool(filter_script),
     ).as_function(single_in=True, single_out=True)
     _state.keyword_search_enabled = _keyword_search_enabled(vault_path)
     if _state.keyword_search_enabled:
@@ -430,6 +487,8 @@ def _refresh_pipelines(force: bool = False) -> None:
                 limit=_state.rag_result_limit or DEFAULT_RAG_RESULT_LIMIT,
                 keyword_search=True,
                 include_background=True,
+                result_filter_script=filter_script,
+                result_filter_strict=_state.result_filter_strict,
             ).as_function(single_in=True, single_out=True)
         except Exception:
             # Unlike the plain chat pipeline, this one instantiates the chat
@@ -443,7 +502,78 @@ def _refresh_pipelines(force: bool = False) -> None:
     else:
         _state.keyword_search_pipeline = None
         _state.keyword_chat_pipeline = None
+    _refresh_filtered_search_pipelines(vault_path, filter_script)
     _state.last_refresh_time = current_time
+
+
+def _refresh_filtered_search_pipelines(
+    vault_path: str, filter_script: str | None
+) -> None:
+    """(Re)build the opt-in filtered variants of the search-page pipelines.
+
+    Each variant over-fetches, runs the vault's retrieval filter, truncates
+    back to the page's result count, and returns (results, filter_error).
+    Built only when a filter is active; the search pages show their "apply
+    custom transform" checkbox only when the matching variant exists.
+    """
+    _state.filtered_search_pipeline = None
+    _state.filtered_keyword_search_pipeline = None
+    if not filter_script:
+        return
+
+    overfetch = retrieval_filter.FILTER_OVERFETCH_FACTOR
+    try:
+        semantic_limit = DEFAULT_SEARCH_RESULT_LIMIT
+        semantic_search = VaultSearch(
+            vault_path=vault_path,
+            embedding_model=_state.embedding_model,
+            embedding_source=_state.embedding_source,
+            limit=semantic_limit * overfetch,
+        ).as_function(single_in=True, single_out=True)
+        semantic_filter = SearchResultFilter(
+            script=filter_script,
+            field="_background",
+            limit=semantic_limit,
+            strict=_state.result_filter_strict,
+            rename_fields=SEARCH_RESULT_RENAMES,
+        )
+
+        def _filtered_semantic(query: str) -> tuple[list[Any], str | None]:
+            raw = semantic_search(query)
+            if isinstance(raw, dict):
+                raw = [raw]
+            return semantic_filter.apply(list(raw or []))
+
+        _state.filtered_search_pipeline = _filtered_semantic
+    except Exception:
+        logger.warning(
+            "Could not build the filtered semantic-search pipeline", exc_info=True
+        )
+
+    if not _state.keyword_search_enabled:
+        return
+    try:
+        keyword_limit = _state.rag_result_limit or DEFAULT_RAG_RESULT_LIMIT
+        keyword_search = VaultTextSearch(
+            vault_path=vault_path,
+            limit=keyword_limit * overfetch,
+        ).as_function(single_in=True, single_out=False)
+        keyword_filter = SearchResultFilter(
+            script=filter_script,
+            field="_background",
+            limit=keyword_limit,
+            strict=_state.result_filter_strict,
+            rename_fields=SEARCH_RESULT_RENAMES,
+        )
+
+        def _filtered_keyword(query: str) -> tuple[list[Any], str | None]:
+            return keyword_filter.apply(list(keyword_search(query)))
+
+        _state.filtered_keyword_search_pipeline = _filtered_keyword
+    except Exception:
+        logger.warning(
+            "Could not build the filtered keyword-search pipeline", exc_info=True
+        )
 
 
 def _update_document_counts(vault_path: str) -> None:
@@ -1218,8 +1348,125 @@ async def documents_page(
         confirm_entry_count=confirm_entry_count,
         pending_source_path=source_path or "",
         pending_overwrite=overwrite,
+        retrieval_filter=_retrieval_filter_context(state),
         flash_message=message,
         flash_error=error,
+    )
+
+
+def _retrieval_filter_context(state: AppState, **pending: Any) -> dict[str, Any]:
+    """Build the retrieval-filter section context for the documents page.
+
+    ``pending`` overrides let the save/validate route re-render the page with
+    the submitted (possibly unsaved) values and outcome instead of what is on
+    disk, keeping the user's text in the editor.
+    """
+    if not state.vault_path:
+        return {"available": False}
+    script = retrieval_filter.load_script(state.vault_path) or ""
+    flags = user_settings.get_retrieval_filter_flags(state.vault_path)
+    error = retrieval_filter.validate_script(script) if script else None
+    context: dict[str, Any] = {
+        "available": True,
+        "script": script,
+        "enabled": flags["enabled"],
+        "strict": flags["strict"],
+        "error": error,
+        "active": bool(script) and flags["enabled"] and not error,
+        "open": False,
+        "message": "",
+    }
+    context.update(pending)
+    return context
+
+
+def _render_documents_with_filter(
+    request: Request, state: AppState, **pending: Any
+) -> Any:
+    """Re-render the documents page with pending retrieval-filter values."""
+    root = access_control.vault_root()
+    return _render_page(
+        request,
+        state,
+        "documents.html",
+        require_vault=False,
+        models=_effective_models(state),
+        recent_vaults=user_settings.get_recent_vaults(),
+        vault_example=str(root / "my-vault") if root else "~/my-vault",
+        confirm_vault_path=None,
+        confirm_entry_count=0,
+        pending_source_path="",
+        pending_overwrite=False,
+        retrieval_filter=_retrieval_filter_context(state, open=True, **pending),
+    )
+
+
+@app.post("/vaults/retrieval-filter", response_class=HTMLResponse)
+async def save_retrieval_filter(
+    request: Request,
+    action: Annotated[str, Form()] = "save",
+    script: Annotated[str, Form()] = "",
+    enabled: Annotated[str, Form()] = "",
+    strict: Annotated[str, Form()] = "",
+    state: AppState = Depends(get_state),
+) -> Any:
+    """Save, validate, or remove the open vault's retrieval filter.
+
+    Expects form data with:
+        - action: str - "save", "validate", or "remove"
+        - script: str - The ChatterLang filter script text
+        - enabled: str - If truthy, run the filter on this machine
+        - strict: str - If truthy, a runtime filter failure fails the request
+          instead of falling back to unfiltered results
+
+    The script is stored inside the vault (it travels with the vault's data);
+    the enabled/strict flags are stored in this machine's user settings, so a
+    copied vault never executes a bundled script without local consent.
+    """
+    if not state.vault_path:
+        return _redirect_with_message(
+            "/documents", error="Open a vault before configuring its retrieval filter."
+        )
+
+    if action == "remove":
+        retrieval_filter.remove_script(state.vault_path)
+        user_settings.clear_retrieval_filter_flags(state.vault_path)
+        _refresh_pipelines(force=True)
+        return _redirect_with_message("/documents", message="Retrieval filter removed.")
+
+    pending = {
+        "script": script,
+        "enabled": bool(enabled),
+        "strict": bool(strict),
+    }
+    if not script.strip():
+        return _render_documents_with_filter(
+            request,
+            state,
+            **pending,
+            error="Enter a script, or use Remove to delete the saved one.",
+        )
+
+    error = retrieval_filter.validate_script(script)
+    if action == "validate":
+        return _render_documents_with_filter(
+            request,
+            state,
+            **pending,
+            error=error,
+            message="" if error else "The script compiles.",
+        )
+    if error:
+        return _render_documents_with_filter(request, state, **pending, error=error)
+
+    retrieval_filter.save_script(state.vault_path, script)
+    user_settings.set_retrieval_filter_flags(
+        state.vault_path, enabled=bool(enabled), strict=bool(strict)
+    )
+    _refresh_pipelines(force=True)
+    outcome = "enabled" if enabled else "saved but not enabled"
+    return _redirect_with_message(
+        "/documents", message=f"Retrieval filter {outcome}."
     )
 
 
@@ -1678,11 +1925,22 @@ def _collect_config_status(
         if vault_selected
         else None
     )
+    filter_info = None
+    if vault_selected:
+        script = retrieval_filter.load_script(state.vault_path)
+        if script:
+            flags = user_settings.get_retrieval_filter_flags(state.vault_path)
+            filter_info = {
+                "enabled": flags["enabled"],
+                "strict": flags["strict"],
+                "error": retrieval_filter.validate_script(script),
+            }
     return diagnostics.collect_config_status(
         _effective_models(state),
         vault_selected=vault_selected,
         vault_embedding=vault_embedding,
         vault_indexed=vault_selected and _vault_has_documents(state.vault_path),
+        retrieval_filter=filter_info,
         probe=probe,
         allow_download=allow_download,
     )
@@ -2047,10 +2305,24 @@ async def search_page(
     return _render_page(request, state, "search.html", query="", results=None)
 
 
+def _filter_outcome_note(count: int, filter_error: str | None) -> str:
+    """Describe the outcome of an opt-in filtered search for the results page."""
+    if filter_error:
+        return (
+            "The custom transform failed and was skipped — showing unfiltered "
+            f"results ({filter_error})."
+        )
+    return (
+        f"Custom transform applied — {count} result{'s' if count != 1 else ''} "
+        "after filtering."
+    )
+
+
 @app.post("/search", response_class=HTMLResponse)
 async def search_results(
     request: Request,
     query: Annotated[str, Form()] = "",
+    apply_filter: Annotated[str, Form()] = "",
     state: AppState = Depends(get_state),
 ) -> HTMLResponse:
     """
@@ -2058,11 +2330,14 @@ async def search_results(
 
     Expects form data with:
         - query: str - The search query string
+        - apply_filter: str - If truthy, run the vault's retrieval filter over
+          the results (only honored while a filter is active)
 
     Returns HTML page with search results containing path, filename, snippet, and score.
     """
     results: list[dict[str, Any]] = []
     error: str | None = None
+    filter_note = ""
 
     if query.strip() and state.search_pipeline:
         try:
@@ -2071,8 +2346,13 @@ async def search_results(
             # Update document counts to reflect latest state
             _update_document_counts(state.vault_path)
             # Perform search with refreshed pipeline
-            raw_results = state.search_pipeline(query)
-            results = _process_semantic_results(raw_results)
+            if apply_filter and state.filtered_search_pipeline:
+                raw_results, filter_error = state.filtered_search_pipeline(query)
+                results = _process_semantic_results(raw_results)
+                filter_note = _filter_outcome_note(len(results), filter_error)
+            else:
+                raw_results = state.search_pipeline(query)
+                results = _process_semantic_results(raw_results)
         except Exception as e:
             error = str(e)
 
@@ -2085,6 +2365,8 @@ async def search_results(
             query=query,
             results=results,
             error=error,
+            apply_filter=bool(apply_filter),
+            filter_note=filter_note,
         ),
     )
 
@@ -2112,6 +2394,7 @@ async def keyword_search_page(
 async def keyword_search_results(
     request: Request,
     query: Annotated[str, Form()] = "",
+    apply_filter: Annotated[str, Form()] = "",
     state: AppState = Depends(get_state),
 ) -> HTMLResponse:
     """
@@ -2119,11 +2402,14 @@ async def keyword_search_results(
 
     Expects form data with:
         - query: str - The keyword search query (Whoosh query syntax)
+        - apply_filter: str - If truthy, run the vault's retrieval filter over
+          the results (only honored while a filter is active)
 
     Returns HTML page with search results containing path, filename, snippet, and score.
     """
     results: list[dict[str, Any]] = []
     error: str | None = None
+    filter_note = ""
 
     # Refresh before checking availability so the UI responds to newly added indexes.
     _refresh_pipelines()
@@ -2134,8 +2420,18 @@ async def keyword_search_results(
     elif query.strip() and state.keyword_search_pipeline:
         try:
             # Perform search with refreshed pipeline
-            raw_results = list(state.keyword_search_pipeline(query))
-            results = _process_keyword_results(raw_results)
+            if apply_filter and state.filtered_keyword_search_pipeline:
+                # Filtered results are normalized SearchResult objects (with
+                # path/filename renamed to source/title), so they render
+                # through the semantic-result processor.
+                raw_results, filter_error = state.filtered_keyword_search_pipeline(
+                    query
+                )
+                results = _process_semantic_results(raw_results)
+                filter_note = _filter_outcome_note(len(results), filter_error)
+            else:
+                raw_results = list(state.keyword_search_pipeline(query))
+                results = _process_keyword_results(raw_results)
         except Exception as e:
             error = str(e)
 
@@ -2148,6 +2444,8 @@ async def keyword_search_results(
             query=query,
             results=results,
             error=error,
+            apply_filter=bool(apply_filter),
+            filter_note=filter_note,
         ),
     )
 
@@ -2327,6 +2625,10 @@ async def chat_response(
     # retrieval), which reads as "it ignored my checkbox" (issue #19). The
     # answer's meta line therefore always states the keyword-boost outcome.
     retrieval_note = ""
+    # Same reasoning for the vault's retrieval filter (issue #22): filtered
+    # retrieval is invisible in the answer, so the meta line states whether
+    # the filter ran, fell back, or could not be applied at all.
+    filter_error: str | None = None
 
     if message.strip() and state.chat_pipeline:
         messages.append({"role": "user", "content": message})
@@ -2344,6 +2646,7 @@ async def chat_response(
                 result = state.keyword_chat_pipeline(message)
                 response = result["response"]
                 citations = _process_semantic_results(result["background"])
+                filter_error = result.get("filter_error")
                 hits = result.get("keyword_hits")
                 if hits:
                     retrieval_note = (
@@ -2361,8 +2664,17 @@ async def chat_response(
                         "keyword search is unavailable right now — "
                         "answered from semantic retrieval only"
                     )
-                citations = _chat_citations(state, message)
-                response = state.chat_pipeline(message)
+                result = state.chat_pipeline(message)
+                if isinstance(result, dict):
+                    # The filtered plain pipeline reports the retrieval it
+                    # prompted with, so the displayed chunks are the filtered
+                    # ones rather than a separately run unfiltered search.
+                    response = result["response"]
+                    citations = _process_semantic_results(result["background"])
+                    filter_error = result.get("filter_error")
+                else:
+                    response = result
+                    citations = _chat_citations(state, message)
             if not state.show_source_paths:
                 # The RAG answer text ends with a "Sources:" list of absolute
                 # paths; hide them unless --show-source-paths was given, to
@@ -2397,6 +2709,21 @@ async def chat_response(
     answered_by = _answered_by(state)
     if retrieval_note:
         answered_by = f"{answered_by} · {retrieval_note}"
+    filter_note = ""
+    if state.result_filter_active:
+        if filter_error:
+            filter_note = (
+                "the vault's retrieval filter failed and was skipped "
+                f"({filter_error})"
+            )
+        else:
+            filter_note = "the vault's retrieval filter was applied"
+    elif state.result_filter_error:
+        filter_note = (
+            "the vault's retrieval filter does not compile and was not applied"
+        )
+    if filter_note and messages:
+        answered_by = f"{answered_by} · {filter_note}"
 
     return templates.TemplateResponse(
         request=request,
@@ -2480,6 +2807,9 @@ def run_app(
             _state.chat_pipeline = None
             _state.keyword_chat_pipeline = None
             _state.keyword_search_pipeline = None
+            _state.result_filter_active = False
+            _state.filtered_search_pipeline = None
+            _state.filtered_keyword_search_pipeline = None
         user_settings.remember_vault(vault_path)
     if open_browser:
         _launch_browser_when_ready(host, port)
