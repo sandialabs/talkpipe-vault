@@ -130,7 +130,11 @@ dedupes by doc_id — the Whoosh index reuses LanceDB row ids — and renames
 path/filename → source/title so keyword hits are citable) → RAG prompt → completion.
 The Ask page shows a "Boost retrieval with keyword search" checkbox when the vault
 has a Whoosh index; `_refresh_pipelines` keeps a separate `keyword_chat_pipeline`
-and Ask degrades to the plain pipeline when it can't be built.
+and Ask degrades to the plain pipeline when it can't be built. The answer's
+"Answered by" meta line reports the keyword-boost outcome (applied with N keyword
+hits, applied but no extra hits, or unavailable — degradation is never silent),
+fed by the `keyword_hits` count `include_background` adds to the pipeline result
+(issue #19: dedup against vector hits made the boost look like it was ignored).
 
 ## Development Commands
 

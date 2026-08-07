@@ -2321,6 +2321,11 @@ async def chat_response(
     messages: list[dict[str, str]] = []
     citations: list[dict[str, Any]] = []
     error: str | None = None
+    # Whether keyword boost was actually applied is invisible in the answer
+    # itself (keyword hits are merged and deduplicated against the vector
+    # retrieval), which reads as "it ignored my checkbox" (issue #19). The
+    # answer's meta line therefore always states the keyword-boost outcome.
+    retrieval_note = ""
 
     if message.strip() and state.chat_pipeline:
         messages.append({"role": "user", "content": message})
@@ -2338,7 +2343,23 @@ async def chat_response(
                 result = state.keyword_chat_pipeline(message)
                 response = result["response"]
                 citations = _process_semantic_results(result["background"])
+                hits = result.get("keyword_hits")
+                if hits:
+                    retrieval_note = (
+                        f"keyword search boosted retrieval ({hits} keyword "
+                        f"hit{'s' if hits != 1 else ''} merged into the context)"
+                    )
+                else:
+                    retrieval_note = (
+                        "keyword search boosted retrieval "
+                        "(no extra keyword hits for this question)"
+                    )
             else:
+                if use_keyword_search:
+                    retrieval_note = (
+                        "keyword search is unavailable right now — "
+                        "answered from semantic retrieval only"
+                    )
                 citations = _chat_citations(state, message)
                 response = state.chat_pipeline(message)
             if not state.show_source_paths:
@@ -2372,6 +2393,10 @@ async def chat_response(
             for citation in citations
         ]
 
+    answered_by = _answered_by(state)
+    if retrieval_note:
+        answered_by = f"{answered_by} · {retrieval_note}"
+
     return templates.TemplateResponse(
         request=request,
         name="chat.html",
@@ -2381,7 +2406,7 @@ async def chat_response(
             messages=messages,
             citations=citations,
             error=error,
-            answered_by=_answered_by(state),
+            answered_by=answered_by,
         ),
     )
 

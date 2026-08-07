@@ -818,6 +818,7 @@ def test_chat_uses_keyword_pipeline_when_requested(monkeypatch):
     query._state.keyword_chat_pipeline = lambda _message: {
         "response": "Keyword-augmented answer.",
         "background": [],
+        "keyword_hits": 2,
     }
     query._state.search_pipeline = lambda _message: []
     query._state.keyword_search_enabled = True
@@ -832,6 +833,48 @@ def test_chat_uses_keyword_pipeline_when_requested(monkeypatch):
     assert response.status_code == 200
     assert "Keyword-augmented answer." in response.text
     assert "Plain answer." not in response.text
+    # The meta line must confirm the boost so the user can tell it ran.
+    assert "keyword search boosted retrieval (2 keyword hits" in response.text
+
+
+def test_chat_keyword_note_reports_zero_hits(monkeypatch):
+    """A boost that found nothing extra must say so instead of looking ignored."""
+    query._state.chat_pipeline = lambda _message: "Plain answer."
+    query._state.keyword_chat_pipeline = lambda _message: {
+        "response": "Keyword-augmented answer.",
+        "background": [],
+        "keyword_hits": 0,
+    }
+    query._state.search_pipeline = lambda _message: []
+    query._state.keyword_search_enabled = True
+    monkeypatch.setattr(query, "_refresh_pipelines", lambda: None)
+    monkeypatch.setattr(query, "_update_document_counts", lambda vault_path: None)
+    client = TestClient(query.app)
+
+    response = client.post(
+        "/chat", data={"message": "What matters?", "use_keyword_search": "on"}
+    )
+
+    assert response.status_code == 200
+    assert "no extra keyword hits" in response.text
+
+
+def test_chat_without_keyword_option_has_no_keyword_note(monkeypatch):
+    """A plain ask must not mention keyword search in the meta line."""
+    import re
+
+    query._state.chat_pipeline = lambda _message: "Plain answer."
+    query._state.search_pipeline = lambda _message: []
+    monkeypatch.setattr(query, "_refresh_pipelines", lambda: None)
+    monkeypatch.setattr(query, "_update_document_counts", lambda vault_path: None)
+    client = TestClient(query.app)
+
+    response = client.post("/chat", data={"message": "What matters?"})
+
+    assert response.status_code == 200
+    match = re.search(r'id="server-answered-by" data-content="([^"]*)"', response.text)
+    assert match is not None
+    assert "keyword" not in match.group(1)
 
 
 def test_chat_keyword_citations_show_the_merged_retrieval(monkeypatch):
@@ -891,7 +934,7 @@ def test_chat_keyword_citations_show_the_merged_retrieval(monkeypatch):
 
 
 def test_chat_falls_back_to_plain_pipeline_without_keyword_pipeline(monkeypatch):
-    """Requesting keyword search must degrade gracefully when unavailable."""
+    """Requesting keyword search must degrade gracefully — and say so."""
     query._state.chat_pipeline = lambda _message: "Plain answer."
     query._state.keyword_chat_pipeline = None
     query._state.search_pipeline = lambda _message: []
@@ -905,6 +948,8 @@ def test_chat_falls_back_to_plain_pipeline_without_keyword_pipeline(monkeypatch)
 
     assert response.status_code == 200
     assert "Plain answer." in response.text
+    # The degradation must be visible, not silent (issue #19).
+    assert "keyword search is unavailable right now" in response.text
 
 
 def test_chat_page_includes_full_chunk_modal():

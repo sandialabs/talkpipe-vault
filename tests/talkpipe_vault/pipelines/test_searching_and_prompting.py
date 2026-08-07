@@ -256,6 +256,8 @@ class TestVaultChat:
         assert len(result["response"]) > 0
         assert isinstance(result["background"], list)
         assert len(result["background"]) > 0
+        assert isinstance(result["keyword_hits"], int)
+        assert result["keyword_hits"] >= 0
 
 
 class TestVaultTextSearch:

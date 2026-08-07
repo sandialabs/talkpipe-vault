@@ -145,7 +145,10 @@ A compose service and instructions for deriving your own customized image
   Once a full-text index exists, a **Boost retrieval with keyword search**
   checkbox appears: the chat model distills your question into index
   keywords, the keyword matches are merged with the vector-search results,
-  and the combined context is used to answer.
+  and the combined context is used to answer. The "Answered by" line under
+  the answer confirms whether the boost ran and how many keyword hits were
+  merged (keyword hits that duplicate vector results are combined, so the
+  boost can be active even when the source list looks unchanged).
 
 Every search result and Ask citation has an **Open** link that fetches the
 original document from the server — PDFs, images, and plain text open right

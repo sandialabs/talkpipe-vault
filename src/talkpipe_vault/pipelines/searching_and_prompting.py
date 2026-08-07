@@ -443,9 +443,10 @@ class VaultChat(AbstractFieldSegment):
         ] = None,
         include_background: Annotated[
             bool,
-            "If True (requires keyword_search), emit a dict with 'response' and "
+            "If True (requires keyword_search), emit a dict with 'response', "
             "'background' (the merged search results the RAG prompt was built "
-            "from) instead of the answer string.",
+            "from), and 'keyword_hits' (how many chunks the keyword search "
+            "returned) instead of the answer string.",
         ] = False,
     ):
         super().__init__(field=field, set_as=set_as, multi_emit=multi_emit)
@@ -551,6 +552,7 @@ class VaultChat(AbstractFieldSegment):
             return {
                 "response": result.get("chat_response", ""),
                 "background": result.get("_background") or [],
+                "keyword_hits": len(result.get("_keyword_background") or []),
             }
         return result.get("chat_response", "")
 
