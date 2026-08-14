@@ -139,8 +139,13 @@ fed by the `keyword_hits` count `include_background` adds to the pipeline result
 ## Development Commands
 
 ```bash
-# Setup
-pip install -e .[dev]
+# Setup — local development resolves against the committed uv.lock.
+# CI installs with pip on purpose, so it resolves the way a plain
+# `pip install talkpipe-vault` does and breaks when users would break.
+# uv.lock is a development convenience, not a security control: fix a
+# vulnerable dependency by raising its floor in pyproject.toml, and re-run
+# `uv lock` after any dependency change so `uv lock --check` stays green.
+uv sync --extra dev
 
 # Tests (Ollama-dependent tests skip unless a server is reachable; point at a
 # remote server with TALKPIPE_OLLAMA_SERVER_URL — never commit a real URL/IP)

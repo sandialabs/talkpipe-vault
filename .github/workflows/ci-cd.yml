@@ -75,6 +75,23 @@ jobs:
         files: ./coverage.xml
         flags: unittests
 
+  lockfile-check:
+    # uv.lock is a development convenience only -- CI installs with pip on
+    # purpose (see README, "Development environment"). This job installs
+    # nothing from the lock; it only fails when uv.lock has drifted out of
+    # sync with pyproject.toml, so the committed lock cannot go stale
+    # unnoticed.
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v7
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v7
+
+    - name: Check uv.lock is in sync with pyproject.toml
+      run: uv lock --check
+
   security-scan:
     runs-on: ubuntu-latest
     needs: test
@@ -99,13 +116,30 @@ jobs:
 
     - name: Run Bandit security scan
       run: |
-        bandit -r src/ -f json -o bandit-report.json || true
+        bandit -r src/ -f json -o bandit-report.json
         bandit -r src/ -f txt
 
     - name: Run Safety dependency scan
       run: |
-        safety scan --save-as json safety-report.json || true
-        safety scan
+        if [ -n "${SAFETY_API_KEY:-}" ]; then
+          # Authenticated: the commercial database, gated by .safety-policy.yml.
+          safety scan --save-as json safety-report.json
+          safety scan
+        else
+          # Gitea withholds every secret from pull_request runs -- it flags AGit
+          # merge requests as fork pull requests even when head and base are the
+          # same repo. Rather than fail for lack of auth, fall back to the free
+          # database. This still fails the build on a known vulnerability; the
+          # data is just staler than the authenticated scan that gates pushes.
+          echo "SAFETY_API_KEY unavailable; falling back to 'safety check' (free database)."
+          # `check` is the legacy command and the only one that runs without an
+          # account. It rejects .safety-policy.yml because that file is v3.0 and
+          # only `scan` parses v3, so run it from a directory holding no policy
+          # file; it scans the installed environment either way.
+          report="$PWD/safety-report.json"
+          workdir="$(mktemp -d)"
+          (cd "$workdir" && safety check --save-json "$report")
+        fi
 
     - name: Upload security scan results
       uses: actions/upload-artifact@v7
