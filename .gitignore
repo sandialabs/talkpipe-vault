@@ -178,3 +178,5 @@ cython_debug/
 .aider*
 .secret
 __manifest/
+safety-report.json
+bandit-report.json

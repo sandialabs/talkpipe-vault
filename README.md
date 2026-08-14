@@ -205,6 +205,32 @@ Contributions are welcome. Before submitting: `pytest` passes,
 and no new `mypy src/` errors (CI runs it but allows failures). See
 [Development setup](docs/ADVANCED.md#development-setup).
 
+### Development environment
+
+Local development uses [uv](https://docs.astral.sh/uv/) against the committed
+`uv.lock`, so contributors share one reproducible set of versions:
+
+```bash
+uv sync --extra dev
+uv run pytest
+```
+
+**CI does not use the lockfile.** It installs with pip (`pip install -e
+'.[dev]'`) and resolves dependencies fresh, on purpose: that is what someone
+running `pip install talkpipe-vault` gets, so the build breaks when *they*
+would break. A dependency problem that only the lockfile hides is one we want
+CI to see.
+
+Two consequences worth remembering:
+
+- `uv.lock` is a development convenience. It pins nothing for users and is not
+  a security control — the version floors in `pyproject.toml` are what
+  actually protect an install. Fix a vulnerable dependency by raising its
+  floor, not by refreshing the lock.
+- The lock must still stay honest. CI runs `uv lock --check`, which installs
+  nothing and fails only when `uv.lock` and `pyproject.toml` have drifted
+  apart. If you change dependencies, run `uv lock` and commit the result.
+
 ## License
 
 Apache License 2.0 — see [LICENSE](LICENSE).
