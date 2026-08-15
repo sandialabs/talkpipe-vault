@@ -74,7 +74,7 @@ def reset_app_state(tmp_path, monkeypatch):
     query._state.result_filter_error = None
     query._state.filtered_search_pipeline = None
     query._state.filtered_keyword_search_pipeline = None
-    yield
+    return
 
 
 def test_keyword_search_page_is_disabled_without_whoosh():

@@ -27,7 +27,7 @@ class TestBuildVectorDbFromPaths:
 
     def test_segment_is_registered(self):
         """Test that the segment is properly registered with TalkPipe."""
-        script = compile("| buildVectorDBFromPaths[" "vault_path='/tmp/test_vault']")
+        script = compile("| buildVectorDBFromPaths[vault_path='/tmp/test_vault']")
         assert script is not None
 
     def test_segment_callable(self):
@@ -191,87 +191,89 @@ class TestWatchIntoVectorDb:
 
     def test_watch_and_process_file_creation(self):
         """Test that file creation triggers vector DB processing."""
-        with tempfile.TemporaryDirectory() as watch_dir:
-            with tempfile.TemporaryDirectory() as vault_path:
-                results = []
+        with (
+            tempfile.TemporaryDirectory() as watch_dir,
+            tempfile.TemporaryDirectory() as vault_path,
+        ):
+            results = []
 
-                def run_pipeline():
-                    source = watch_into_vector_db(
-                        source_path=watch_dir,
-                        vault_path=vault_path,
-                        patterns=["*.txt"],
-                        max_events=1,
-                        overwrite=True,
-                    )
-                    for item in source():
-                        results.append(item)
+            def run_pipeline():
+                source = watch_into_vector_db(
+                    source_path=watch_dir,
+                    vault_path=vault_path,
+                    patterns=["*.txt"],
+                    max_events=1,
+                    overwrite=True,
+                )
+                results.extend(source())
 
-                thread = Thread(target=run_pipeline, daemon=True)
-                thread.start()
+            thread = Thread(target=run_pipeline, daemon=True)
+            thread.start()
 
-                # Give watcher time to start
-                time.sleep(0.5)
+            # Give watcher time to start
+            time.sleep(0.5)
 
-                # Create a text file
-                test_file = Path(watch_dir) / "test.txt"
-                test_file.write_text("This is test content for the vector database.")
+            # Create a text file
+            test_file = Path(watch_dir) / "test.txt"
+            test_file.write_text("This is test content for the vector database.")
 
-                # Wait for thread to complete
-                thread.join(timeout=30.0)
+            # Wait for thread to complete
+            thread.join(timeout=30.0)
 
-                assert len(results) > 0
+            assert len(results) > 0
 
     def test_watch_with_pattern_filtering(self):
         """Test that pattern filtering works during watch."""
-        with tempfile.TemporaryDirectory() as watch_dir:
-            with tempfile.TemporaryDirectory() as vault_path:
-                results = []
+        with (
+            tempfile.TemporaryDirectory() as watch_dir,
+            tempfile.TemporaryDirectory() as vault_path,
+        ):
+            results = []
 
-                def run_pipeline():
-                    source = watch_into_vector_db(
-                        source_path=watch_dir,
-                        vault_path=vault_path,
-                        patterns=["*.txt"],
-                        max_events=4,
-                        overwrite=True,
-                    )
-                    for item in source():
-                        results.append(item)
+            def run_pipeline():
+                source = watch_into_vector_db(
+                    source_path=watch_dir,
+                    vault_path=vault_path,
+                    patterns=["*.txt"],
+                    max_events=4,
+                    overwrite=True,
+                )
+                results.extend(source())
 
-                thread = Thread(target=run_pipeline, daemon=True)
-                thread.start()
+            thread = Thread(target=run_pipeline, daemon=True)
+            thread.start()
 
-                # Give watcher time to start
-                time.sleep(0.5)
+            # Give watcher time to start
+            time.sleep(0.5)
 
-                # Create a .md file (should be ignored)
-                md_file = Path(watch_dir) / "ignored.md"
-                md_file.write_text("This should be ignored.")
-                time.sleep(0.5)
+            # Create a .md file (should be ignored)
+            md_file = Path(watch_dir) / "ignored.md"
+            md_file.write_text("This should be ignored.")
+            time.sleep(0.5)
 
-                # Create two .txt files (should be processed)
-                txt_file1 = Path(watch_dir) / "test1.txt"
-                txt_file1.write_text("First text file content.")
-                time.sleep(0.5)
+            # Create two .txt files (should be processed)
+            txt_file1 = Path(watch_dir) / "test1.txt"
+            txt_file1.write_text("First text file content.")
+            time.sleep(0.5)
 
-                txt_file2 = Path(watch_dir) / "test2.txt"
-                txt_file2.write_text("Second text file content.")
+            txt_file2 = Path(watch_dir) / "test2.txt"
+            txt_file2.write_text("Second text file content.")
 
-                # Wait for thread to complete
-                thread.join(timeout=30.0)
+            # Wait for thread to complete
+            thread.join(timeout=30.0)
 
-                # Debug: print what we got
-                print(f"\n=== DEBUG: Got {len(results)} results ===")
-                for i, r in enumerate(results):
-                    print(
-                        f"  [{i}] source={r.get('source', 'NO SOURCE')} keys={list(r.keys())}"
-                    )
+            # Debug: print what we got
+            print(f"\n=== DEBUG: Got {len(results)} results ===")
+            for i, r in enumerate(results):
+                print(
+                    f"  [{i}] source={r.get('source', 'NO SOURCE')} keys={list(r.keys())}"
+                )
 
-                # Verify .txt files were processed, .md was not
-                sources = [r.get("source", "") for r in results]
-                assert any("test1.txt" in p for p in sources)
-                assert any("test2.txt" in p for p in sources)
-                assert not any("ignored.md" in p for p in sources)
+            # Verify .txt files were processed, .md was not
+            sources = [r.get("source", "") for r in results]
+            assert any("test1.txt" in p for p in sources)
+            assert any("test2.txt" in p for p in sources)
+            assert not any("ignored.md" in p for p in sources)
 
 
 class TestListIntoVectorDb:
@@ -293,96 +295,96 @@ class TestListIntoVectorDb:
 
     def test_list_and_process_directory_files(self):
         """Test that all files in a directory are listed and processed."""
-        with tempfile.TemporaryDirectory() as source_dir:
-            with tempfile.TemporaryDirectory() as vault_path:
-                # Create test files
-                test_file1 = Path(source_dir) / "document1.txt"
-                test_file1.write_text(
-                    "This is the first test document for the vector database."
-                )
+        with (
+            tempfile.TemporaryDirectory() as source_dir,
+            tempfile.TemporaryDirectory() as vault_path,
+        ):
+            # Create test files
+            test_file1 = Path(source_dir) / "document1.txt"
+            test_file1.write_text(
+                "This is the first test document for the vector database."
+            )
 
-                test_file2 = Path(source_dir) / "document2.txt"
-                test_file2.write_text(
-                    "This is the second test document for the vector database."
-                )
+            test_file2 = Path(source_dir) / "document2.txt"
+            test_file2.write_text(
+                "This is the second test document for the vector database."
+            )
 
-                # Run the pipeline
-                source = list_into_vector_db(
-                    source_pattern=source_dir,
-                    vault_path=vault_path,
-                    overwrite=True,
-                )
-                results = list(source())
+            # Run the pipeline
+            source = list_into_vector_db(
+                source_pattern=source_dir,
+                vault_path=vault_path,
+                overwrite=True,
+            )
+            results = list(source())
 
-                # Verify we got results
-                assert len(results) > 0
+            # Verify we got results
+            assert len(results) > 0
 
-                # Verify both files were processed
-                sources = [r.get("source", "") for r in results]
-                assert any("document1.txt" in p for p in sources)
-                assert any("document2.txt" in p for p in sources)
+            # Verify both files were processed
+            sources = [r.get("source", "") for r in results]
+            assert any("document1.txt" in p for p in sources)
+            assert any("document2.txt" in p for p in sources)
 
     def test_list_creates_vector_db_tables(self):
         """Test that listing files creates both vector DB tables."""
         from talkpipe.search.lancedb import LanceDBDocumentStore
 
-        with tempfile.TemporaryDirectory() as source_dir:
-            with tempfile.TemporaryDirectory() as vault_path:
-                # Create a test file
-                test_file = Path(source_dir) / "test_doc.txt"
-                test_file.write_text(
-                    "This is test content for verifying table creation."
-                )
+        with (
+            tempfile.TemporaryDirectory() as source_dir,
+            tempfile.TemporaryDirectory() as vault_path,
+        ):
+            # Create a test file
+            test_file = Path(source_dir) / "test_doc.txt"
+            test_file.write_text("This is test content for verifying table creation.")
 
-                vectordb_path = vault_path
+            vectordb_path = vault_path
 
-                # Run the pipeline
-                source = list_into_vector_db(
-                    source_pattern=source_dir,
-                    vault_path=vault_path,
-                    overwrite=True,
-                )
-                list(source())
+            # Run the pipeline
+            source = list_into_vector_db(
+                source_pattern=source_dir,
+                vault_path=vault_path,
+                overwrite=True,
+            )
+            list(source())
 
-                # Verify full_documents table was created
-                db = LanceDBDocumentStore(
-                    path=vectordb_path, table_name="full_documents"
-                )
-                assert db.count() >= 1
+            # Verify full_documents table was created
+            db = LanceDBDocumentStore(path=vectordb_path, table_name="full_documents")
+            assert db.count() >= 1
 
-                # Verify shingled_chunks table was created
-                db = LanceDBDocumentStore(
-                    path=vectordb_path, table_name="shingled_chunks"
-                )
-                assert db.count() >= 1
+            # Verify shingled_chunks table was created
+            db = LanceDBDocumentStore(path=vectordb_path, table_name="shingled_chunks")
+            assert db.count() >= 1
 
     def test_list_with_subdirectories(self):
         """Test that files in subdirectories are processed with glob patterns."""
-        with tempfile.TemporaryDirectory() as source_dir:
-            with tempfile.TemporaryDirectory() as vault_path:
-                # Create files in root
-                root_file = Path(source_dir) / "root.txt"
-                root_file.write_text("Root level document.")
+        with (
+            tempfile.TemporaryDirectory() as source_dir,
+            tempfile.TemporaryDirectory() as vault_path,
+        ):
+            # Create files in root
+            root_file = Path(source_dir) / "root.txt"
+            root_file.write_text("Root level document.")
 
-                # Create subdirectory with file
-                subdir = Path(source_dir) / "subdir"
-                subdir.mkdir()
-                sub_file = subdir / "nested.txt"
-                sub_file.write_text("Nested document in subdirectory.")
+            # Create subdirectory with file
+            subdir = Path(source_dir) / "subdir"
+            subdir.mkdir()
+            sub_file = subdir / "nested.txt"
+            sub_file.write_text("Nested document in subdirectory.")
 
-                # Run the pipeline with glob pattern for recursive matching
-                source = list_into_vector_db(
-                    source_pattern=f"{source_dir}/**/*.txt",
-                    vault_path=vault_path,
-                    overwrite=True,
-                )
-                results = list(source())
+            # Run the pipeline with glob pattern for recursive matching
+            source = list_into_vector_db(
+                source_pattern=f"{source_dir}/**/*.txt",
+                vault_path=vault_path,
+                overwrite=True,
+            )
+            results = list(source())
 
-                # Verify both files were processed
-                assert len(results) > 0
-                sources = [r.get("source", "") for r in results]
-                assert any("root.txt" in p for p in sources)
-                assert any("nested.txt" in p for p in sources)
+            # Verify both files were processed
+            assert len(results) > 0
+            sources = [r.get("source", "") for r in results]
+            assert any("root.txt" in p for p in sources)
+            assert any("nested.txt" in p for p in sources)
 
     def test_list_with_sample_documents(self):
         """Test processing actual sample documents (PDF, DOCX, HTML)."""

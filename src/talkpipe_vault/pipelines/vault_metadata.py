@@ -106,7 +106,7 @@ def probe_embedding_dimension(source: str, model: str) -> int | None:
             "vault embedding dimension probe"
         )
         return len(vector) if vector else None
-    except Exception as exc:  # noqa: BLE001 - dimension is optional metadata
+    except Exception as exc:
         logger.debug(
             "Could not determine embedding dimension for %s/%s: %s",
             source,

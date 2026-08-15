@@ -24,7 +24,7 @@ def test_falls_back_to_talkpipe_config(monkeypatch):
 
 def test_falls_back_to_default_when_unset(monkeypatch):
     monkeypatch.delenv(user_settings.VAULT_HOME_ENV, raising=False)
-    monkeypatch.setattr(user_settings, "get_config", lambda: {})
+    monkeypatch.setattr(user_settings, "get_config", dict)
     expected = user_settings.Path(user_settings.DEFAULT_VAULT_HOME).expanduser()
     assert user_settings.get_vault_home() == expected
 

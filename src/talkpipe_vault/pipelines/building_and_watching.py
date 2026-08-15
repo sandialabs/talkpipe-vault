@@ -1,3 +1,4 @@
+from collections.abc import Iterator
 from typing import Annotated, Any
 
 from talkpipe import register_segment, register_source, segment, source
@@ -41,7 +42,7 @@ def _shingle_documents(
     overlap: Annotated[
         int, "Number of chunks that overlap between consecutive shingles"
     ] = 1,
-):
+) -> Iterator[Any]:
     """
     Segment that splits documents into chunks and emits overlapping shingles.
 
@@ -117,7 +118,7 @@ def build_vector_db_from_paths(
         str | None,
         "Source/provider for the embedding model (e.g., 'ollama', 'openai'). If None, uses TalkPipe config or default.",
     ] = None,
-):
+) -> Iterator[Any]:
     """
     Segment that builds a vector database and full-text search index from file paths.
 
@@ -243,7 +244,7 @@ def watch_into_vector_db(
         str | None,
         "Source/provider for the embedding model (e.g., 'ollama', 'openai'). If None, uses TalkPipe config or default.",
     ] = None,
-):
+) -> Iterator[Any]:
     """
     Source that watches a directory and processes file changes into a vector database and full-text index.
 
@@ -317,7 +318,7 @@ def list_into_vector_db(
         str | None,
         "Source/provider for the embedding model (e.g., 'ollama', 'openai'). If None, uses TalkPipe config or default.",
     ] = None,
-):
+) -> Iterator[Any]:
     """
     Source that batch processes files matching a glob pattern into a vector database and full-text index.
 

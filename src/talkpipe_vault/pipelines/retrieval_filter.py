@@ -33,8 +33,9 @@ and surfaces ChatterLang compile errors as user-readable messages.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from parsy import ParseError
 from talkpipe.chatterlang import compiler
@@ -142,4 +143,5 @@ def compile_script(text: str) -> Callable[[Any], Any]:
     error = validate_script(text)
     if error:
         raise ValueError(error)
-    return compiler.compile(text)
+    compiled: Callable[[Any], Any] = compiler.compile(text)
+    return compiled

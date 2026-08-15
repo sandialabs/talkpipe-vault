@@ -9,7 +9,7 @@ from talkpipe_vault.apps import query, user_settings, vault_server
 
 
 @pytest.mark.parametrize(
-    "host,expected",
+    ("host", "expected"),
     [
         ("0.0.0.0", "http://127.0.0.1:8002/"),
         ("", "http://127.0.0.1:8002/"),

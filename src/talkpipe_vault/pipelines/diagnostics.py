@@ -397,7 +397,9 @@ def _registered_provider_key(role: str, source: str) -> str | None:
     from talkpipe.llm.config import getEmbeddingSources, getPromptSources
 
     try:
-        names = getEmbeddingSources() if role == "embedding" else getPromptSources()
+        names: list[str] = (
+            getEmbeddingSources() if role == "embedding" else getPromptSources()
+        )
     except Exception:  # pragma: no cover - defensive; registry access is cheap
         return None
     target = (source or "").strip().lower()
@@ -464,7 +466,7 @@ def _run_bounded(func: Any, timeout: float) -> tuple[bool, Any]:
     def worker() -> None:
         try:
             outcome["value"] = func()
-        except BaseException as exc:  # noqa: BLE001 - surface any failure as text
+        except BaseException as exc:
             outcome["error"] = exc
 
     thread = threading.Thread(target=worker, daemon=True)
@@ -743,7 +745,7 @@ def _model2vec_cache_state(model: str) -> tuple[str, str | None]:
             local_files_only=True,
         )
         return "ready", path
-    except Exception:  # noqa: BLE001 - any offline failure means "not cached"
+    except Exception:
         return "absent", None
 
 
@@ -766,7 +768,7 @@ def _check_ollama(
         return base
 
     names, error = _ollama_tags(url, timeout)
-    if error is not None:
+    if names is None or error is not None:
         base["status"] = "error"
         base["summary"] = f"Can't reach Ollama at {url}."
         base["detail"] = f"{base['detail']} — {error}"
@@ -796,8 +798,7 @@ def _check_ollama(
 
     base["status"] = "error"
     base["summary"] = (
-        f"Ollama at {url} has model '{model}', but a test {_probe_word(role)} "
-        "failed."
+        f"Ollama at {url} has model '{model}', but a test {_probe_word(role)} failed."
     )
     base["detail"] = f"{base['detail']} — {_short_error(result)}"
     return base
@@ -947,10 +948,7 @@ def _model_present(model: str, names: list[str]) -> bool:
     if not model:
         return False
     wanted_base = model.split(":", 1)[0]
-    for name in names:
-        if name == model or name.split(":", 1)[0] == wanted_base:
-            return True
-    return False
+    return any(name == model or name.split(":", 1)[0] == wanted_base for name in names)
 
 
 def _mask(secret: str) -> str:

@@ -45,7 +45,7 @@ def isolated_app(tmp_path, monkeypatch):
     query._state.shingle_size = None
     query._state.shingle_overlap = None
     query._state.rag_result_limit = None
-    yield
+    return
 
 
 @pytest.fixture
@@ -897,7 +897,7 @@ class TestDocumentIndexing:
 
         pattern = query._resolve_source_pattern(str(subdir))
 
-        assert pattern.endswith("**/*") or pattern.endswith("**\\*")
+        assert pattern.endswith(("**/*", "**\\*"))
 
     def test_resolve_source_pattern_keeps_globs(self):
         assert query._resolve_source_pattern("/x/**/*.md") == "/x/**/*.md"

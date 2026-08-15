@@ -47,7 +47,7 @@ def populated_vector_db(tmp_path):
     )
 
     # Build vector database with TalkPipe's native makevectordatabase command
-    yield build_docs_vault(f"{source_dir}/*.txt", vectordb_path)
+    return build_docs_vault(f"{source_dir}/*.txt", vectordb_path)
 
 
 class TestVaultSearch:
@@ -368,7 +368,7 @@ class TestIntegrationWithSampleDocs:
         """Create a docs-table vector database from sample documents."""
         vectordb_path = tmp_path / "vectordb"
         vectordb_path.mkdir()
-        yield build_docs_vault(f"{SAMPLE_DOCS_DIR}/*", vectordb_path)
+        return build_docs_vault(f"{SAMPLE_DOCS_DIR}/*", vectordb_path)
 
     def test_search_sample_documents(self, sample_docs_vector_db):
         """Test searching the sample documents."""

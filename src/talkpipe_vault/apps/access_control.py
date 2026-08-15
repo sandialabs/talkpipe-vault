@@ -94,7 +94,9 @@ def startup_errors() -> list[str]:
     root = vault_root()
     if root is not None and not root.is_dir():
         errors.append(f"{VAULT_ROOT_ENV} points to {root}, which is not a directory.")
-    for doc_root in document_roots():
-        if not doc_root.is_dir():
-            errors.append(f"{DOCUMENT_ROOTS_ENV} entry {doc_root} is not a directory.")
+    errors.extend(
+        f"{DOCUMENT_ROOTS_ENV} entry {doc_root} is not a directory."
+        for doc_root in document_roots()
+        if not doc_root.is_dir()
+    )
     return errors

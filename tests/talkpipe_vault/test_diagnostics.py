@@ -23,7 +23,7 @@ def isolate_env(tmp_path, monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("TALKPIPE_OLLAMA_SERVER_URL", raising=False)
     monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
-    yield
+    return
 
 
 @pytest.fixture
@@ -566,7 +566,7 @@ def test_unrecognized_chat_provider_error_when_probe_fails(register_fake_adapter
 
 
 def test_unrecognized_embedding_provider_error_on_empty_vector(register_fake_adapters):
-    register_fake_adapters["embed"] = lambda: []
+    register_fake_adapters["embed"] = list
     report = diagnostics.collect_config_status(_models(embedding_source="customprov"))
     embeddings = _find(report, "Embeddings provider")
     assert embeddings["status"] == "error"

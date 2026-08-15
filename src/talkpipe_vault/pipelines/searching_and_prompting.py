@@ -1,6 +1,7 @@
 import json
 import logging
 import re
+from collections.abc import Iterable, Iterator
 from typing import Annotated, Any
 
 from talkpipe import segment
@@ -121,13 +122,16 @@ def _has_document_fts_index(table: Any, field_name: str) -> bool:
 
 def _run_fts_search(table: Any, query: str, limit: int) -> list[dict[str, Any]]:
     """Run an FTS search using an existing LanceDB FTS index."""
-    return table.search(query, query_type="fts").limit(limit).to_list()
+    rows: list[dict[str, Any]] = (
+        table.search(query, query_type="fts").limit(limit).to_list()
+    )
+    return rows
 
 
 @register_segment("searchLance")
 @segment(process_metadata=True)
 def searchLance(
-    queries: Annotated[object, "Iterator of query strings"],
+    queries: Annotated[Iterable[Any], "Iterator of query strings"],
     path: Annotated[
         str,
         "Path to LanceDB directory containing the target table",
@@ -143,7 +147,7 @@ def searchLance(
     ] = True,
     field: Annotated[str, "Field to extract query from"] = "_",
     set_as: Annotated[str | None, "Field name to set results on input items"] = None,
-):
+) -> Iterator[Any]:
     """
     Search LanceDB documents using an existing LanceDB full-text search index.
 
@@ -189,8 +193,7 @@ def searchLance(
                 else:
                     yield results
             else:
-                for result in results:
-                    yield result
+                yield from results
         except Exception:
             if not continue_on_error:
                 raise
@@ -247,8 +250,10 @@ class ExtractSearchKeywords(AbstractFieldSegment):
 
     def __init__(
         self,
-        field: Annotated[str, "The field to extract. If none, use full item."] = None,
-        set_as: Annotated[str, "The field to set/append the result as."] = None,
+        field: Annotated[
+            str | None, "The field to extract. If none, use full item."
+        ] = None,
+        set_as: Annotated[str | None, "The field to set/append the result as."] = None,
         multi_emit: Annotated[
             bool,
             "Whether this class potentially emits multiple results per item."
@@ -339,7 +344,7 @@ class MergeSearchResults(AbstractSegment):
     def _normalize(self, entry: Any) -> SearchResult | None:
         return normalize_search_result(entry, self.rename_fields)
 
-    def transform(self, input_iter):
+    def transform(self, input_iter: Iterable[Any]) -> Iterator[Any]:
         for item in input_iter:
             merged: list[SearchResult] = []
             seen: set[str] = set()
@@ -472,7 +477,7 @@ class SearchResultFilter(AbstractSegment):
             filtered = filtered[: self.limit]
         return filtered, error
 
-    def transform(self, input_iter):
+    def transform(self, input_iter: Iterable[Any]) -> Iterator[Any]:
         for item in input_iter:
             results = extract_property(item, self.field, fail_on_missing=False)
             filtered, error = self.apply(results or [])
@@ -497,8 +502,10 @@ class VaultSearch(AbstractFieldSegment):
     def __init__(
         self,
         vault_path: Annotated[str, "Path to LanceDB created by makevectordatabase"],
-        field: Annotated[str, "The field to extract. If none, use full item."] = None,
-        set_as: Annotated[str, "The field to set/append the result as."] = None,
+        field: Annotated[
+            str | None, "The field to extract. If none, use full item."
+        ] = None,
+        set_as: Annotated[str | None, "The field to set/append the result as."] = None,
         multi_emit: Annotated[
             bool,
             "Whether this class potentially emits multiple results per item."
@@ -567,8 +574,10 @@ class VaultChat(AbstractFieldSegment):
     def __init__(
         self,
         vault_path: Annotated[str, "Path to LanceDB created by makevectordatabase"],
-        field: Annotated[str, "The field to extract. If none, use full item."] = None,
-        set_as: Annotated[str, "The field to set/append the result as."] = None,
+        field: Annotated[
+            str | None, "The field to extract. If none, use full item."
+        ] = None,
+        set_as: Annotated[str | None, "The field to set/append the result as."] = None,
         multi_emit: Annotated[
             bool,
             "Whether this class potentially emits multiple results per item."
@@ -827,8 +836,10 @@ class VaultTextSearch(AbstractFieldSegment):
         self,
         vault_path: Annotated[str, "Path to LanceDB created by makevectordatabase"],
         limit: Annotated[int | None, "Maximum number of results to return"] = None,
-        field: Annotated[str, "The field to extract. If none, use full item."] = None,
-        set_as: Annotated[str, "The field to set/append the result as."] = None,
+        field: Annotated[
+            str | None, "The field to extract. If none, use full item."
+        ] = None,
+        set_as: Annotated[str | None, "The field to set/append the result as."] = None,
         multi_emit: Annotated[
             bool,
             "Whether this class potentially emits multiple results per item."

@@ -189,13 +189,15 @@ def clear_retrieval_filter_flags(vault_path: str) -> None:
 def get_model_overrides() -> dict:
     """Return saved settings overrides; absent/blank values are omitted."""
     settings = load_settings()
-    overrides = {}
+    overrides: dict[str, str | int] = {}
     for key in MODEL_SETTING_KEYS:
         value = settings.get(key)
         if isinstance(value, str) and value.strip():
             overrides[key] = value.strip()
     for key, minimum in INTEGER_SETTING_MINIMUMS.items():
         value = settings.get(key)
+        if value is None:
+            continue
         try:
             numeric_value = int(value)
         except (TypeError, ValueError):

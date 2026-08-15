@@ -24,10 +24,10 @@ import time
 import urllib.parse
 import uuid
 import webbrowser
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Annotated, Any, Callable
+from typing import Annotated, Any
 
 import uvicorn
 from fastapi import Depends, FastAPI, Form, Request
@@ -99,8 +99,11 @@ class AppState:
 
     vault_path: str = ""
     search_pipeline: Callable[[str], Any] | None = None
-    chat_pipeline: Callable[[str], str] | None = None
-    keyword_chat_pipeline: Callable[[str], str] | None = None
+    # Plain chat returns the answer string, or a result dict when it is built
+    # with include_background (filtered retrieval); keyword chat always
+    # returns the result dict.
+    chat_pipeline: Callable[[str], str | dict[str, Any]] | None = None
+    keyword_chat_pipeline: Callable[[str], dict[str, Any]] | None = None
     keyword_search_pipeline: Callable[[str], list[Any]] | None = None
     # Retrieval filter (issue #22): the open vault's script, whether it is
     # active (present + enabled + compiles), and the search-page pipelines
@@ -328,21 +331,22 @@ def _build_whoosh_index(
         shutil.rmtree(whoosh_index_path)
 
     total = len(documents)
-    with WhooshFullTextIndex(whoosh_index_path, fields=WHOOSH_INDEX_FIELDS) as ix:
-        # One writer committed once for the whole rebuild: add_document commits
-        # per call, which makes Whoosh re-merge its segments on every document
-        # and degrades quadratically with vault size.
-        with ix.ix.writer() as writer:
-            for done, document in enumerate(documents, start=1):
-                writer.update_document(
-                    doc_id=document.get("doc_id") or str(uuid.uuid4()),
-                    **{
-                        field: str(document.get(field, ""))
-                        for field in WHOOSH_INDEX_FIELDS
-                    },
-                )
-                if progress is not None:
-                    progress(done, total)
+    # One writer committed once for the whole rebuild: add_document commits
+    # per call, which makes Whoosh re-merge its segments on every document
+    # and degrades quadratically with vault size.
+    with (
+        WhooshFullTextIndex(whoosh_index_path, fields=WHOOSH_INDEX_FIELDS) as ix,
+        ix.ix.writer() as writer,
+    ):
+        for done, document in enumerate(documents, start=1):
+            writer.update_document(
+                doc_id=document.get("doc_id") or str(uuid.uuid4()),
+                **{
+                    field: str(document.get(field, "")) for field in WHOOSH_INDEX_FIELDS
+                },
+            )
+            if progress is not None:
+                progress(done, total)
 
 
 def init_pipelines(vault_path: str) -> None:
@@ -783,7 +787,8 @@ def _process_keyword_results(raw_results: list[Any]) -> list[dict[str, Any]]:
 
 def _extract_document_record(row: dict[str, Any]) -> dict[str, Any]:
     """Normalize a LanceDB docs-row into a dict-like document."""
-    return normalize_document_cell(row.get("document", {}))
+    record: dict[str, Any] = normalize_document_cell(row.get("document", {}))
+    return record
 
 
 def _load_docs_rows(vault_path: str) -> Iterator[dict[str, Any]]:
@@ -951,7 +956,7 @@ def _render_page(
     *,
     require_vault: bool = True,
     **context: Any,
-) -> Any:
+) -> Response:
     """Render a page template with the common context, gating on vault selection."""
     if require_vault:
         redirect = _require_vault(state)
@@ -1028,10 +1033,7 @@ async def list_directories(path: str = "") -> JSONResponse:
         parent = "" if len(roots) > 1 else None
     else:
         parent = str(base.parent) if base.parent != base else None
-    if roots:
-        home = str(roots[0]) if len(roots) == 1 else ""
-    else:
-        home = str(Path.home())
+    home = (str(roots[0]) if len(roots) == 1 else "") if roots else str(Path.home())
     return JSONResponse(
         content={
             "path": str(base),
@@ -1049,7 +1051,7 @@ async def home(
     message: str | None = None,
     error: str | None = None,
     state: AppState = Depends(get_state),
-) -> HTMLResponse:
+) -> Response:
     """Render the home page with navigation to search and chat."""
     redirect = _require_vault(state)
     if redirect:
@@ -1092,7 +1094,7 @@ async def vaults_page(
     message: str | None = None,
     error: str | None = None,
     confirm_path: str | None = None,
-) -> HTMLResponse:
+) -> RedirectResponse:
     """Redirect the former vault manager to the combined documents page.
 
     Choosing a vault and indexing documents now live on one page; this alias
@@ -1124,9 +1126,10 @@ def _resolve_vault_request(raw_vault_path: str) -> tuple[Path | None, str, str]:
     # against the server's working directory and be refused by the fence.
     # Place it under the vault root instead and tell the user below.
     root = access_control.vault_root()
-    placed_under_root = root is not None and not vault_path.is_absolute()
-    if placed_under_root:
+    placed_under_root = False
+    if root is not None and not vault_path.is_absolute():
         vault_path = root / vault_path
+        placed_under_root = True
     placement_note = (
         f" (You entered '{raw_path}'; vaults on this server live under "
         f"{root}, so it was placed there automatically.)"
@@ -1164,7 +1167,7 @@ async def open_vault(
     new_vault_path: Annotated[str, Form()] = "",
     confirm_non_vault: Annotated[str, Form()] = "",
     state: AppState = Depends(get_state),
-) -> HTMLResponse:
+) -> Response:
     """Open an existing vault, or create a new one when the path doesn't exist.
 
     Expects form data with:
@@ -1234,7 +1237,7 @@ async def delete_vault(
     vault_path: Annotated[str, Form()] = "",
     confirm: Annotated[str, Form()] = "",
     state: AppState = Depends(get_state),
-) -> HTMLResponse:
+) -> Response:
     """Forget a vault and delete its folder (index files) from disk.
 
     Destructive and irreversible. Only vaults already in the recent list can be
@@ -1304,8 +1307,7 @@ async def delete_vault(
         message = f"Deleted vault {resolved} and removed it from the list."
     else:
         message = (
-            f"Removed {resolved} from the list "
-            "(its folder was already gone from disk)."
+            f"Removed {resolved} from the list (its folder was already gone from disk)."
         )
     return _redirect_with_message("/documents", message=message)
 
@@ -1319,7 +1321,7 @@ async def documents_page(
     source_path: str | None = None,
     overwrite: bool = False,
     state: AppState = Depends(get_state),
-) -> HTMLResponse:
+) -> Response:
     """Render the combined page for choosing a vault and indexing documents.
 
     Works with or without an open vault: without one, the vault field carries a
@@ -1956,7 +1958,7 @@ def _vault_has_documents(vault_path: str) -> bool:
             path=get_vector_db_path(vault_path),
             table_name=DEFAULT_VECTOR_TABLE_NAME,
         )
-        return doc_store.count() > 0
+        return bool(doc_store.count() > 0)
     except Exception:
         return False
 
@@ -2044,7 +2046,7 @@ async def index_documents(
     confirm_non_vault: Annotated[str, Form()] = "",
     overwrite: Annotated[bool, Form()] = False,
     state: AppState = Depends(get_state),
-) -> HTMLResponse:
+) -> Response:
     """Index documents into a vault, creating or switching to it when asked.
 
     Expects form data with:
@@ -2088,8 +2090,7 @@ async def index_documents(
         return _redirect_with_message(
             "/documents",
             error=(
-                f"'{source}' matched no files. Check the folder "
-                "path or glob pattern."
+                f"'{source}' matched no files. Check the folder path or glob pattern."
             ),
         )
 
@@ -2145,7 +2146,7 @@ async def settings_page(
     message: str | None = None,
     error: str | None = None,
     state: AppState = Depends(get_state),
-) -> HTMLResponse:
+) -> Response:
     """Render the model configuration page."""
     return _render_page(
         request,
@@ -2171,7 +2172,7 @@ async def save_credentials(
     clear_anthropic_api_key: Annotated[bool, Form()] = False,
     ollama_server_url: Annotated[str, Form()] = "",
     state: AppState = Depends(get_state),
-) -> HTMLResponse:
+) -> Response:
     """Save vault-scoped provider credentials and connection settings.
 
     Non-secret fields (base/server URLs) are set from the form directly — a
@@ -2211,7 +2212,7 @@ async def save_settings(
     shingle_overlap: Annotated[str, Form()] = "",
     rag_result_limit: Annotated[str, Form()] = "",
     state: AppState = Depends(get_state),
-) -> HTMLResponse:
+) -> Response:
     """Save model configuration chosen in the web interface.
 
     Expects form data with:
@@ -2284,7 +2285,7 @@ async def refresh(
     request: Request,
     return_to: Annotated[str, Form()] = "/",
     state: AppState = Depends(get_state),
-) -> HTMLResponse:
+) -> RedirectResponse:
     """Refresh pipelines and document counts, then redirect to home."""
     _refresh_pipelines(force=True)
     _update_document_counts(state.vault_path)
@@ -2298,7 +2299,7 @@ async def refresh(
 @app.get("/search", response_class=HTMLResponse)
 async def search_page(
     request: Request, state: AppState = Depends(get_state)
-) -> HTMLResponse:
+) -> Response:
     """Render the semantic search interface page."""
     return _render_page(request, state, "search.html", query="", results=None)
 
@@ -2375,7 +2376,7 @@ async def keyword_search_page(
     created: str | None = None,
     error: str | None = None,
     state: AppState = Depends(get_state),
-) -> HTMLResponse:
+) -> Response:
     """Render the keyword search interface page."""
     return _render_page(
         request,
@@ -2451,7 +2452,7 @@ async def keyword_search_results(
 @app.post("/keyword-search/create-index", response_class=HTMLResponse)
 async def create_keyword_index(
     state: AppState = Depends(get_state),
-) -> HTMLResponse:
+) -> Response:
     """Start a background rebuild of the Whoosh full-text index.
 
     The build runs in a worker thread that publishes progress via
@@ -2591,9 +2592,7 @@ async def open_file(
 
 
 @app.get("/chat", response_class=HTMLResponse)
-async def chat_page(
-    request: Request, state: AppState = Depends(get_state)
-) -> HTMLResponse:
+async def chat_page(request: Request, state: AppState = Depends(get_state)) -> Response:
     """Render the Ask interface page."""
     return _render_page(request, state, "chat.html", messages=[], citations=[])
 
@@ -2636,6 +2635,7 @@ async def chat_response(
             _refresh_pipelines()
             # Update document counts to reflect latest state
             _update_document_counts(state.vault_path)
+            result: str | dict[str, Any]
             if use_keyword_search and state.keyword_chat_pipeline:
                 # The keyword-augmented pipeline reports the merged
                 # vector+keyword retrieval it actually prompted with, so the
@@ -2711,8 +2711,7 @@ async def chat_response(
     if state.result_filter_active:
         if filter_error:
             filter_note = (
-                "the vault's retrieval filter failed and was skipped "
-                f"({filter_error})"
+                f"the vault's retrieval filter failed and was skipped ({filter_error})"
             )
         else:
             filter_note = "the vault's retrieval filter was applied"
@@ -2793,7 +2792,7 @@ def run_app(
             init_pipelines(vault_path)
         except ValueError:
             raise
-        except Exception as exc:  # noqa: BLE001 - degrade to no-vault startup
+        except Exception as exc:
             print(
                 f"Warning: could not open vault at {vault_path}: {exc}\n"
                 "Starting without a vault - check Settings -> Configuration "
@@ -2852,7 +2851,7 @@ def _launch_browser_when_ready(host: str, port: int, timeout: float = 15.0) -> N
             return  # server never came up; nothing to open
         try:
             webbrowser.open(url)
-        except Exception as exc:  # noqa: BLE001 - headless / no browser available
+        except Exception as exc:
             logger.debug("Could not open a browser for %s: %s", url, exc)
 
     threading.Thread(target=_wait_and_open, daemon=True).start()

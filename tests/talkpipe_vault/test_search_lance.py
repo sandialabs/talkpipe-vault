@@ -1,7 +1,7 @@
 """Unit tests for searchLance keyword search segment."""
 
 import json
-from typing import Any
+from typing import Any, ClassVar
 
 from talkpipe_vault.pipelines import searching_and_prompting
 from talkpipe_vault.pipelines.searching_and_prompting import searchLance
@@ -22,7 +22,7 @@ class _FakeSearch:
 
 class _FakeIndex:
     index_type = "FTS"
-    columns = ["document"]
+    columns: ClassVar[list[str]] = ["document"]
 
 
 class _FakeTable:

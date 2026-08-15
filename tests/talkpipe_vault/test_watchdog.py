@@ -352,7 +352,7 @@ class TestFileWatcher:
             thread.join(timeout=3.0)
 
             # Verify only .txt files were captured (get unique paths)
-            unique_paths = set(event["path"] for event in results)
+            unique_paths = {event["path"] for event in results}
             assert str(txt_file) in unique_paths
             assert str(txt_file2) in unique_paths
             assert str(md_file) not in unique_paths
@@ -365,7 +365,7 @@ class TestFileWatcher:
             results = []
 
             def run_pipeline():
-                # Watch both .txt and .md files (2 files × 2 events each = 4 events)
+                # Watch both .txt and .md files (2 files x 2 events each = 4 events)
                 script = file_watcher(tmpdir, patterns=["*.txt", "*.md"], max_events=4)
                 ans = list(script())
                 results.extend(ans)
@@ -391,7 +391,7 @@ class TestFileWatcher:
             thread.join(timeout=3.0)
 
             # Verify both .txt and .md files were captured, but not .py
-            unique_paths = set(event["path"] for event in results)
+            unique_paths = {event["path"] for event in results}
             assert str(txt_file) in unique_paths
             assert str(md_file) in unique_paths
             assert str(py_file) not in unique_paths
@@ -432,7 +432,7 @@ class TestFileWatcher:
             thread.join(timeout=3.0)
 
             # Verify only normal file was captured
-            unique_paths = set(event["path"] for event in results)
+            unique_paths = {event["path"] for event in results}
             assert str(normal_file) in unique_paths
             assert str(tmp_file) not in unique_paths
             assert str(bak_file) not in unique_paths
@@ -469,7 +469,7 @@ class TestFileWatcher:
             thread.join(timeout=3.0)
 
             # Verify only lowercase .txt was captured (case-sensitive)
-            unique_paths = set(event["path"] for event in results)
+            unique_paths = {event["path"] for event in results}
             assert str(lower_file) in unique_paths
             assert str(upper_file) not in unique_paths
 
@@ -502,7 +502,7 @@ class TestFileWatcher:
             thread.join(timeout=3.0)
 
             # Verify both files were captured (case-insensitive)
-            unique_paths = set(event["path"] for event in results)
+            unique_paths = {event["path"] for event in results}
             assert str(upper_file) in unique_paths
             assert str(lower_file) in unique_paths
 
@@ -578,7 +578,7 @@ class TestFileWatcher:
             thread.join(timeout=3.0)
 
             # Verify both files were captured (common patterns not ignored)
-            unique_paths = set(event["path"] for event in results)
+            unique_paths = {event["path"] for event in results}
             assert str(swp_file) in unique_paths
             assert str(tmp_file) in unique_paths
 
@@ -614,7 +614,7 @@ class TestFileWatcher:
             thread.join(timeout=3.0)
 
             # Verify .tmp was captured but .log was ignored
-            unique_paths = set(event["path"] for event in results)
+            unique_paths = {event["path"] for event in results}
             assert str(tmp_file) in unique_paths
             assert str(log_file) not in unique_paths
 
@@ -657,10 +657,8 @@ class TestFileWatcher:
                     # Start file watcher with no max_events (runs indefinitely)
                     script = file_watcher(tmpdir)
                     # Process first event, then raise KeyboardInterrupt
-                    count = 0
-                    for event in script():
+                    for count, event in enumerate(script(), start=1):
                         results.append(event)
-                        count += 1
                         if count >= 1:
                             # Manually raise KeyboardInterrupt after first event
                             raise KeyboardInterrupt()

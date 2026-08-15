@@ -88,7 +88,7 @@ def _get_talkpipe_config_value(
     for check_key in keys_to_check:
         value = config.get("vault", {}).get(check_key) or config.get(check_key)
         if value is not None:
-            return value
+            return str(value)
 
     return default
 
