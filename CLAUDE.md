@@ -152,11 +152,12 @@ uv sync --extra dev
 pytest
 TALKPIPE_OLLAMA_SERVER_URL=http://<ollama-host>:11434 pytest
 
-# Quality (CI runs these)
-black --check src/ tests/
-isort --check-only src/ tests/
-flake8 src/ tests/ --count --select=E9,F63,F7,F82 --show-source --statistics
-mypy src/          # allowed to fail in CI
+# Quality (CI fails on any finding from these -- no advisory mode)
+ruff check .           # lint; fix most findings with: ruff check --fix .
+ruff format --check .  # formatting; apply with: ruff format .
+mypy                   # static types over src/ (config in pyproject.toml)
+# `pre-commit install` (opt-in, per clone) runs the same three on every
+# commit; `pre-commit run --all-files` reproduces the CI gate locally.
 
 # Security
 bandit -r src/
@@ -211,11 +212,12 @@ Podman notes:
 ## CI/CD
 
 GitHub Actions (`.github/workflows/ci-cd.yml`), analogous to TalkPipe's pipeline:
-1. Test (Python 3.11/3.12/3.13): flake8, black, isort, mypy (allowed to fail), pytest+coverage, Codecov
-2. Security scan: Bandit + Safety
-3. Container build: build/push to GHCR + Trivy scan
-4. CodeQL analysis
-5. Publish to PyPI on release
+1. Lint: ruff check, ruff format --check, mypy -- all gating
+2. Test (Python 3.11/3.12/3.13): pytest+coverage, Codecov
+3. Security scan: Bandit + Safety (depends on lint and test)
+4. Container build: build/push to GHCR + Trivy scan
+5. CodeQL analysis
+6. Publish to PyPI on release
 
 ## Key Configuration Files
 

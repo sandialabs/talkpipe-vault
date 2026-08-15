@@ -200,9 +200,10 @@ The [Advanced Guide](docs/ADVANCED.md) covers:
 
 ## Contributing
 
-Contributions are welcome. Before submitting: `pytest` passes,
-`black src/ tests/ && isort src/ tests/` applied, `flake8 src/ tests/` clean,
-and no new `mypy src/` errors (CI runs it but allows failures). See
+Contributions are welcome. Before submitting: `pytest` passes, and
+`ruff check .`, `ruff format --check .`, and `mypy` are clean -- CI fails on
+any finding from those three (`ruff check --fix . && ruff format .` fixes
+most; `pre-commit install` runs them on every commit). See
 [Development setup](docs/ADVANCED.md#development-setup).
 
 ### Development environment

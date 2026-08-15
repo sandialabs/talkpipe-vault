@@ -327,19 +327,20 @@ from talkpipe.data.extraction import ReadFile
 from talkpipe.pipe.basic import FilterExpression
 from talkpipe.pipelines.vector_databases import MakeVectorDatabaseSegment
 
-pipeline = \
-    file_watcher(path="/path/to/watch") | \
-    FilterExpression(expression="item['event'] != 'deleted'") | \
-    ReadFile(field="path", set_as="full_content") | \
-    FilterExpression(expression="len(item['full_content'].content.strip()) > 0") | \
-    MakeVectorDatabaseSegment(
+pipeline = (
+    file_watcher(path="/path/to/watch")
+    | FilterExpression(expression="item['event'] != 'deleted'")
+    | ReadFile(field="path", set_as="full_content")
+    | FilterExpression(expression="len(item['full_content'].content.strip()) > 0")
+    | MakeVectorDatabaseSegment(
         path="~/my-vault",
         embedding_model="mxbai-embed-large:latest",
         embedding_source="ollama",
         embedding_field="full_content",
         table_name="documents",
-        doc_id_field="path"
+        doc_id_field="path",
     )
+)
 
 for result in pipeline():
     print(f"Processed: {result['path']}")
@@ -366,13 +367,13 @@ import talkpipe
 talkpipe.load_plugins()
 
 pipeline = talkpipe.compile(
-    'INPUT FROM listIntoVectorDB['
+    "INPUT FROM listIntoVectorDB["
     '  source_pattern="/path/to/documents/**/*.txt",'
     '  vault_path="~/watched-vault",'
     '  embedding_source="model2vec",'
     '  embedding_model="minishlab/potion-retrieval-32M",'
-    '  overwrite=True'
-    ']'
+    "  overwrite=True"
+    "]"
 )
 
 # Run it. Each yielded item is an indexed chunk
@@ -454,11 +455,11 @@ pip install -e ".[dev]"
 pytest
 pytest --cov=src --cov-report=term-missing --cov-report=html
 
-# Quality (CI runs these)
-black src/ tests/
-isort src/ tests/
-flake8 src/ tests/
-mypy src/          # advisory: CI allows failures; avoid new errors
+# Quality (CI fails on any finding from these -- no advisory mode)
+ruff check .           # lint; fix most findings with: ruff check --fix .
+ruff format --check .  # formatting; apply with: ruff format .
+mypy                   # static types over src/ (config in pyproject.toml)
+pre-commit install     # optional: run the same checks on every commit
 
 # Security scanning
 bandit -r src/
