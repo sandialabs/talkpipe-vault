@@ -3601,7 +3601,7 @@ wheels = [
 
 [[package]]
 name = "talkpipe"
-version = "0.14.2"
+version = "1.0.0b2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "build" },
@@ -3630,9 +3630,9 @@ dependencies = [
     { name = "uvicorn" },
     { name = "whoosh" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/d6/8d/4badd01d0632cce2597c0702259d60908169a817293b10abc253f8e34789/talkpipe-0.14.2.tar.gz", hash = "sha256:0f7c282c7b416c0cc83a5f3c6bb2aaec65c958643e1f5e590d184e1688726661", size = 29116701, upload-time = "2026-07-28T08:18:44.611Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/b6/e0/9d937f9ff17a099b473a7d442f635634e005b7cc45da5e44b58a5febb1cd/talkpipe-1.0.0b2.tar.gz", hash = "sha256:c0857dae00c6eed7d2db3f4b092f48e4e41e28f347b523c3bb56f3fd1810a55b", size = 29158824, upload-time = "2026-08-17T00:59:24.351Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/c4/e4/0855b445c799e8680e781db1c98c09d8cb165e397aa09d160d57604db743/talkpipe-0.14.2-py3-none-any.whl", hash = "sha256:b212d7d488294e8d887d749d369b9374a6cceb546c9429fcff4b68d9d58ca3b3", size = 471662, upload-time = "2026-07-28T08:18:42.325Z" },
+    { url = "https://files.pythonhosted.org/packages/98/94/62b6f09d76dbbe35ea112ddcb224b1538affd5f1296e9555024b6cd8d476/talkpipe-1.0.0b2-py3-none-any.whl", hash = "sha256:c3fef42b7871514e5a3513ac93310c8cc4c9aa2724e10b235ed01e38b5d11ef9", size = 479309, upload-time = "2026-08-17T00:59:21.584Z" },
 ]
 
 [package.optional-dependencies]
@@ -3702,7 +3702,7 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.16.3,<0.17" },
     { name = "safety", marker = "extra == 'dev'", specifier = ">=2.3.0" },
     { name = "safety", marker = "extra == 'security'", specifier = ">=2.3.0" },
-    { name = "talkpipe", extras = ["all"], specifier = ">=0.14.1" },
+    { name = "talkpipe", extras = ["all"], specifier = ">=1.0.0b2" },
     { name = "uvicorn", specifier = ">=0.24.0" },
     { name = "watchdog", extras = ["watchmedo"] },
 ]

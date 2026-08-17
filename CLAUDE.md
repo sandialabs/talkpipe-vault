@@ -18,7 +18,7 @@ built on the TalkPipe framework and demonstrates real-world usage of its composa
 - **Package**: `talkpipe-vault`
 - **Module**: `talkpipe_vault`
 - **Python**: 3.11.4+ required
-- **TalkPipe**: >=0.14.1 (`talkpipe[all]`)
+- **TalkPipe**: >=1.0.0b2 (`talkpipe[all]`; ships `py.typed`, so mypy checks against its real signatures)
 - **Status**: Alpha (active development)
 - **License**: Apache 2.0
 

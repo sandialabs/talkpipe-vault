@@ -534,7 +534,7 @@ class VaultSearch(AbstractFieldSegment):
 
         self.vault_path = vault_path
         vectordb_path = get_vector_db_path(vault_path)
-        limit_kwargs = {} if limit is None else {"limit": limit}
+        limit_kwargs: dict[str, Any] = {} if limit is None else {"limit": limit}
         self.pipeline = (
             ToDict(field_list="_:query")
             | fillTemplate(template=retrieval_template, set_as="templated_query")
@@ -835,7 +835,9 @@ class VaultTextSearch(AbstractFieldSegment):
     def __init__(
         self,
         vault_path: Annotated[str, "Path to LanceDB created by makevectordatabase"],
-        limit: Annotated[int | None, "Maximum number of results to return"] = None,
+        limit: Annotated[
+            int | None, "Maximum number of results to return. If None, no cap."
+        ] = None,
         field: Annotated[
             str | None, "The field to extract. If none, use full item."
         ] = None,
@@ -852,7 +854,10 @@ class VaultTextSearch(AbstractFieldSegment):
         whoosh_index_path = get_whoosh_index_path(vault_path)
         self.pipeline = searchWhoosh(
             index_path=whoosh_index_path,
-            limit=limit,
+            # searchWhoosh declares limit as int, but it is passed straight to
+            # whoosh's searcher.search(), where None means "all results" -- the
+            # behavior this segment relies on to avoid a UI-facing result cap.
+            limit=limit,  # type: ignore[arg-type]  # None = uncapped at runtime
             all_results_at_once=False,
         ).as_function(single_in=True, single_out=False)
 

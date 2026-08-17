@@ -37,6 +37,16 @@
 - Changing the embedding model warns that existing vaults must be re-indexed so stored and query vectors match.
 - Added settings for chunk size, shingle size, shingle overlap, and Ask RAG result count; these persist across restarts and feed both document indexing and Ask retrieval.
 
+### TalkPipe 1.0.0b2 Requirement
+
+- Require `talkpipe[all]>=1.0.0b2`, the first release that ships a `py.typed`
+  marker and typed `@segment`/`@source` decorators. With TalkPipe typed, mypy
+  now runs with `disallow_untyped_decorators` on and no longer ignores
+  `talkpipe.*` imports, so pipeline definitions are checked against TalkPipe's
+  real signatures (which surfaced a few loose annotations, now fixed). The
+  specifier names a beta on purpose: 1.0.0 is not yet on PyPI, and the typing
+  work only exists in the 1.0 line.
+
 ### TalkPipe 0.14.1 Requirement
 
 - Require `talkpipe[all]>=0.14.1`. The previous floor, `>=0.13.0b3`, named a

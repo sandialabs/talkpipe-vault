@@ -11,6 +11,7 @@ from talkpipe.pipe.basic import (
     fillTemplate,
     setAs,
 )
+from talkpipe.pipe.core import AbstractSource, Pipeline
 from talkpipe.pipe.io import DeleteFile, FileExistsFilter
 from talkpipe.pipelines.vector_databases import MakeVectorDatabaseSegment
 from talkpipe.search.whoosh import indexWhoosh
@@ -107,7 +108,7 @@ def build_vector_db_from_paths(
         "LanceDB batch size for writes. Smaller values ensure immediate availability but may reduce performance for bulk operations.",
     ] = 1,
     commit_seconds: Annotated[
-        float,
+        int,
         "Whoosh index commit interval in seconds. 0 for immediate commits, higher values batch commits for performance.",
     ] = 0,
     embedding_model: Annotated[
@@ -277,7 +278,7 @@ def watch_into_vector_db(
         ignore_common=ignore_common,
     )
 
-    pipeline = watcher
+    pipeline: AbstractSource[Any] | Pipeline = watcher
     if debounce_seconds > 0:
         pipeline = pipeline | Debounce(
             key_field="path", debounce_seconds=debounce_seconds
