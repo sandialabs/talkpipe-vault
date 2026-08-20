@@ -85,8 +85,10 @@ Ollama server URL comes from `TALKPIPE_OLLAMA_SERVER_URL` (or `OLLAMA_SERVER_URL
 create/open/delete to one directory; `TALKPIPE_DOCUMENT_ROOTS` (os.pathsep-separated)
 confines the folder picker and indexing. Unset/empty = unrestricted (the desktop
 default); the container image sets `/app/data` and `/documents`. Enforced server-side
-in `/api/directories`, `/vaults/open`, `/vaults/delete`, and `/documents/index`
-(resolve-then-`is_relative_to`, so symlink escapes are caught); a configured root that
+in `/api/directories`, `/vaults/open`, `/vaults/delete`, and `/documents/index` via
+`access_control.confine` (realpath-then-prefix-check, so symlink escapes are caught;
+the confined result, never the raw request path, is what touches the filesystem — with
+no fence set the check runs against the filesystem root); a configured root that
 doesn't exist fails startup loudly, and `run_app` warns when binding non-loopback with
 no fences set. Deleting a remembered vault that lies outside the root only forgets it —
 files outside the fence are never touched.

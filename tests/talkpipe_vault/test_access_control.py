@@ -83,6 +83,26 @@ class TestHelpers:
         link.symlink_to(outside)
         assert not access_control.is_allowed(link, [root])
 
+    def test_confine_returns_resolved_path_inside_roots(self, tmp_path):
+        root = tmp_path / "root"
+        (root / "inner").mkdir(parents=True)
+        confined = access_control.confine(root / "x" / ".." / "inner", [root])
+        assert confined == (root / "inner").resolve()
+        assert access_control.confine(tmp_path / "outside", [root]) is None
+
+    def test_confine_unrestricted_still_resolves(self, tmp_path):
+        confined = access_control.confine(tmp_path / "a" / ".." / "b", [])
+        assert confined == (tmp_path / "b").resolve()
+
+    def test_confine_rejects_sibling_prefix_name(self, tmp_path):
+        # "/root-evil" must not pass a check against "/root": containment is
+        # a path-component check, not a raw string prefix.
+        root = tmp_path / "root"
+        root.mkdir()
+        evil = tmp_path / "root-evil"
+        evil.mkdir()
+        assert access_control.confine(evil, [root]) is None
+
     def test_startup_errors_for_missing_roots(self, tmp_path, monkeypatch):
         monkeypatch.setenv(access_control.VAULT_ROOT_ENV, str(tmp_path / "nope"))
         monkeypatch.setenv(

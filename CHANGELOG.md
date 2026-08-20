@@ -2,6 +2,32 @@
 
 ## In Development
 
+### Security Hardening
+- Every filesystem touch driven by a request path now goes through one
+  sanitizer (`access_control.confine`): the path is fully resolved (symlinks
+  followed, `..` collapsed) and prefix-checked against the configured fence
+  roots before any access, and the resolved result — never the raw request
+  value — is what gets used. Applies to the folder picker, vault open/create,
+  vault delete, indexing sources, and the vault-name suggestion. With no
+  fences configured, behavior is unchanged (the check runs against the
+  filesystem root).
+- `/source-file` now serves the matching path from the vault's own index
+  rather than the request value, after the same membership check as before.
+- `/refresh` honors `return_to` only for an allow-list of the app's own
+  pages, closing crafted-redirect variants (`//host`, backslash forms) that
+  a prefix check misses.
+- HTTP error responses no longer echo caught exception text (which can carry
+  file paths, URLs, and library internals): `/api/directories`,
+  `/chunk-content`, `/source-file`, and `/open-file` return fixed messages
+  and log the full exception, and the Settings configuration status maps
+  probe failures onto a fixed vocabulary (timed out, connection refused,
+  HTTP status, missing package, …) instead of quoting the exception.
+- The container image no longer ships pip: it is removed after installing
+  the application, along with the pip self-upgrade that would have left a
+  second copy behind. pip's vendored-code SBOM was being reported by image
+  scanners as installed setuptools and msgpack packages with known
+  vulnerabilities, though nothing outside pip uses that code.
+
 ### Features
 
 #### Per-Vault Retrieval Filter

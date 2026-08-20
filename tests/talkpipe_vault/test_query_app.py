@@ -414,6 +414,84 @@ def test_refresh_redirects_back_to_current_page(monkeypatch):
     assert called["force"] is True
 
 
+@pytest.mark.parametrize(
+    "evil",
+    [
+        "https://evil.example",
+        "//evil.example",
+        "/\\evil.example",
+        "/not-a-page",
+        "javascript:alert(1)",
+    ],
+)
+def test_refresh_rejects_offsite_and_unknown_return_targets(monkeypatch, evil):
+    """return_to is an allow-list of the app's own pages; anything else → home."""
+    monkeypatch.setattr(query, "_refresh_pipelines", lambda force=False: None)
+    monkeypatch.setattr(query, "_update_document_counts", lambda vault_path: None)
+    client = TestClient(query.app)
+
+    response = client.post("/refresh", data={"return_to": evil}, follow_redirects=False)
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/"
+
+
+def test_chunk_content_error_does_not_echo_exception(monkeypatch):
+    """A failure detail belongs in the server log, not the HTTP response."""
+    query._state.vault_path = "/tmp/test-vault"
+
+    def boom(vault_path, path, snippet):
+        raise RuntimeError("secret detail /home/user/.credentials")
+
+    monkeypatch.setattr(query, "_get_chunk_text_for_path_and_snippet", boom)
+    client = TestClient(query.app)
+
+    response = client.get("/chunk-content", params={"path": "x"})
+
+    assert response.status_code == 500
+    body = response.json()["error"]
+    assert "secret detail" not in body
+    assert ".credentials" not in body
+    assert "server log" in body
+
+
+def test_open_file_error_does_not_echo_exception(monkeypatch):
+    query._state.vault_path = "/tmp/test-vault"
+
+    def boom(vault_path, key):
+        raise RuntimeError("secret detail /home/user/.credentials")
+
+    monkeypatch.setattr(query, "_resolve_indexed_source_file", boom)
+    client = TestClient(query.app)
+
+    response = client.get("/open-file", params={"path": "x"})
+
+    assert response.status_code == 500
+    body = response.json()["error"]
+    assert "secret detail" not in body
+    assert "server log" in body
+
+
+def test_source_file_error_does_not_echo_exception(monkeypatch):
+    query._state.vault_path = "/tmp/test-vault"
+    query._state.show_source_paths = True
+
+    def boom(vault_path):
+        raise RuntimeError("secret detail /home/user/.credentials")
+
+    monkeypatch.setattr(query, "_indexed_source_paths", boom)
+    client = TestClient(query.app)
+    try:
+        response = client.get("/source-file", params={"path": "x"})
+    finally:
+        query._state.show_source_paths = False
+
+    assert response.status_code == 500
+    body = response.json()["error"]
+    assert "secret detail" not in body
+    assert "server log" in body
+
+
 def test_keyword_search_post_does_not_run_without_whoosh(monkeypatch):
     """Keyword search POST should not call the pipeline without a Whoosh index."""
     monkeypatch.setattr(query, "_refresh_pipelines", lambda: None)

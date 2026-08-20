@@ -19,6 +19,8 @@ import importlib.util
 import json
 import logging
 import os
+import re
+import socket
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -480,9 +482,52 @@ def _run_bounded(func: Any, timeout: float) -> tuple[bool, Any]:
 
 
 def _short_error(exc: Any) -> str:
-    """Render an exception as a short, single-line detail string."""
-    message = str(exc).strip() or exc.__class__.__name__
-    return message[:200]
+    """Classify an exception as a short, fixed detail string.
+
+    Deliberately not ``str(exc)``: these strings end up in the
+    /api/config-status response, and raw exception text can carry file
+    paths, URLs, and library internals (information exposure through an
+    exception). The full exception goes to the server log; the fixed
+    vocabulary below keeps the diagnosis actionable without echoing it.
+    """
+    logger.info(f"Probe failed ({exc.__class__.__name__}): {exc}")
+    if isinstance(exc, urllib.error.HTTPError):
+        return f"the server answered HTTP {exc.code}"
+    if isinstance(exc, TimeoutError):  # covers socket.timeout
+        return "timed out"
+    if isinstance(exc, ConnectionRefusedError):
+        return "connection refused — is the server running?"
+    if isinstance(exc, socket.gaierror):
+        return "the server name could not be resolved"
+    if isinstance(exc, ImportError):
+        return "the provider's Python package is not installed"
+    if isinstance(exc, FileNotFoundError):
+        return "a required file or model was not found"
+    if isinstance(exc, PermissionError):
+        return "permission denied"
+    # Provider SDK errors mostly arrive as generic exception classes; map
+    # the common failure phrasings onto the same fixed vocabulary. The
+    # status code, being purely numeric, is safe to carry over.
+    text = str(exc).lower()
+    code_match = re.search(r"\berror code: (\d{3})\b", text)
+    if code_match:
+        return f"the provider answered HTTP {int(code_match.group(1))}"
+    if "timed out" in text or "timeout" in text:
+        return "timed out"
+    if "connection refused" in text:
+        return "connection refused — is the server running?"
+    if "connection reset" in text:
+        return "the connection was reset"
+    if "name or service not known" in text or "nodename nor servname" in text:
+        return "the server name could not be resolved"
+    if "empty embedding vector" in text:
+        # Raised by _probe_embedding itself; restate its fixed wording.
+        return "the provider returned an empty embedding vector"
+    if isinstance(exc, ConnectionError):
+        return "connection failed"
+    if isinstance(exc, OSError):
+        return "the server or filesystem could not be reached"
+    return f"{exc.__class__.__name__} (see the server log)"
 
 
 def _probe_word(role: str) -> str:
@@ -931,9 +976,10 @@ def _ollama_tags(url: str, timeout: float) -> tuple[list[str] | None, str | None
         ) as response:
             payload = json.load(response)
     except urllib.error.URLError as exc:
-        return None, str(getattr(exc, "reason", exc))
+        reason = getattr(exc, "reason", None)
+        return None, _short_error(reason if isinstance(reason, BaseException) else exc)
     except (OSError, ValueError) as exc:
-        return None, str(exc)
+        return None, _short_error(exc)
     models = payload.get("models", []) if isinstance(payload, dict) else []
     return [str(entry.get("name", "")) for entry in models], None
 

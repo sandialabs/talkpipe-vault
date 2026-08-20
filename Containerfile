@@ -28,9 +28,16 @@ COPY .git/ ./.git/
 COPY src/ ./src/
 COPY --chmod=755 container/entrypoint.sh /usr/local/bin/vault-entrypoint
 
-# Install the package
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir .
+# Install the package, then remove pip from the image. pip is only needed
+# for this one install, and pip >= 25 ships an SBOM of its *vendored* code
+# (pip/_vendor/bom.cdx.json) that Trivy reports as installed setuptools and
+# msgpack packages with known vulnerabilities, though nothing outside pip
+# uses that code. Deliberately no `pip install --upgrade pip` first: that
+# would leave a second pip copy under /usr/local that `dnf remove` cannot
+# see.
+RUN pip install --no-cache-dir . && \
+    dnf remove -y python3-pip && \
+    dnf clean all
 
 # Switch to non-root user
 USER vault

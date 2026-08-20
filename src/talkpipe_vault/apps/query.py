@@ -982,8 +982,9 @@ async def list_directories(path: str = "") -> JSONResponse:
     error message the dialog can display.
     """
     roots = access_control.browse_roots()
+    requested: str | Path
     if path.strip():
-        base = Path(path).expanduser()
+        requested = path
     elif len(roots) > 1:
         return JSONResponse(
             content={
@@ -995,17 +996,19 @@ async def list_directories(path: str = "") -> JSONResponse:
             }
         )
     else:
-        base = roots[0] if roots else Path.home()
+        requested = roots[0] if roots else Path.home()
+    # All filesystem access below uses the confined (resolved and
+    # root-checked) path, never the request value.
+    base = access_control.confine_browse(requested)
+    if base is None:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": "Browsing on this server is limited to "
+                f"{access_control.describe(roots)}."
+            },
+        )
     try:
-        base = base.resolve()
-        if not access_control.is_allowed(base, roots):
-            return JSONResponse(
-                status_code=400,
-                content={
-                    "error": "Browsing on this server is limited to "
-                    f"{access_control.describe(roots)}."
-                },
-            )
         if not base.is_dir():
             return JSONResponse(
                 status_code=400,
@@ -1024,8 +1027,14 @@ async def list_directories(path: str = "") -> JSONResponse:
             status_code=400,
             content={"error": f"Permission denied reading {base}."},
         )
-    except OSError as exc:
-        return JSONResponse(status_code=400, content={"error": str(exc)})
+    except OSError:
+        # The exception text can carry filesystem internals; log it and
+        # report only the path the client itself asked about.
+        logger.exception(f"Failed to list directory {base}")
+        return JSONResponse(
+            status_code=400,
+            content={"error": f"Could not read {base}; details are in the server log."},
+        )
 
     if base in roots:
         # At an allowed root: "up" goes to the virtual root listing when
@@ -1137,15 +1146,18 @@ def _resolve_vault_request(raw_vault_path: str) -> tuple[Path | None, str, str]:
         else ""
     )
 
-    if not access_control.vault_path_allowed(vault_path):
+    # Every later filesystem touch (existence checks, mkdir, indexing) uses
+    # the confined (resolved and root-checked) path, never the raw request.
+    confined = access_control.confine_vault(vault_path)
+    if confined is None:
         return (
             None,
             "",
             f"Vaults on this server must live under {access_control.vault_root()}.",
         )
-    if vault_path.is_file():
-        return None, "", f"{vault_path} is a file. A vault must be a directory."
-    return vault_path, placement_note, ""
+    if confined.is_file():
+        return None, "", f"{confined} is a file. A vault must be a directory."
+    return confined, placement_note, ""
 
 
 def _activate_vault(vault_path: Path) -> str:
@@ -1273,17 +1285,12 @@ async def delete_vault(
             "Open a different vault first.",
         )
 
-    real_path = Path(os.path.realpath(resolved))
-    if _is_dangerous_delete_target(real_path):
-        return _redirect_with_message(
-            "/documents",
-            error=f"Refusing to delete {resolved}: path is too broad to be a vault.",
-        )
-
     # Vaults outside the configured root (e.g. remembered before the
     # restriction existed) can be forgotten, but their files are never
-    # touched.
-    if not access_control.vault_path_allowed(resolved):
+    # touched. The deletion below only ever sees the confined (resolved and
+    # root-checked) path.
+    real_path = access_control.confine_vault(resolved)
+    if real_path is None:
         user_settings.forget_vault(resolved)
         return _redirect_with_message(
             "/documents",
@@ -1293,10 +1300,16 @@ async def delete_vault(
             ),
         )
 
-    existed = os.path.isdir(resolved)
+    if _is_dangerous_delete_target(real_path):
+        return _redirect_with_message(
+            "/documents",
+            error=f"Refusing to delete {resolved}: path is too broad to be a vault.",
+        )
+
+    existed = real_path.is_dir()
     try:
         if existed:
-            shutil.rmtree(resolved)
+            shutil.rmtree(real_path)
     except OSError as exc:
         return _redirect_with_message(
             "/documents", error=f"Failed to delete {resolved}: {exc}"
@@ -1484,7 +1497,11 @@ def suggest_vault_path(source_path: str) -> str:
     prefix = _nonglob_prefix(os.path.expanduser(source_path.strip()))
     if not prefix or prefix == ".":
         return ""
-    base = Path(prefix)
+    # The chosen documents folder is fenced by the document roots (the same
+    # fence indexing itself applies), not the picker's browse union.
+    base = access_control.confine(prefix, access_control.document_roots())
+    if base is None:
+        return ""
     if base.is_file():
         base = base.parent
     stem = re.sub(r"[^A-Za-z0-9._-]+", "-", base.name).strip("-._")
@@ -1494,7 +1511,9 @@ def suggest_vault_path(source_path: str) -> str:
     parent = access_control.vault_root() or Path.home()
     for attempt in range(1, 51):
         name = f"{stem}-vault" if attempt == 1 else f"{stem}-vault-{attempt}"
-        candidate = parent / name
+        candidate = access_control.confine_vault(parent / name)
+        if candidate is None:
+            return ""
         if not candidate.exists():
             return str(candidate)
         # Reusable: an empty folder, or one that already holds this vault.
@@ -1510,9 +1529,16 @@ async def suggest_vault(source: str = "") -> JSONResponse:
 
 
 def _resolve_source_pattern(raw_source: str) -> str:
-    """Turn a folder path into a recursive glob; leave explicit globs alone."""
+    """Turn a folder path into a recursive glob; leave explicit globs alone.
+
+    The directory check runs on the confined (resolved and root-checked)
+    path so nothing outside the document roots is ever touched; a source
+    outside the fence keeps its raw form and is rejected by the indexing
+    endpoint's own containment check.
+    """
     source = os.path.expanduser(raw_source.strip())
-    if os.path.isdir(source):
+    confined = access_control.confine(source, access_control.document_roots())
+    if confined is not None and confined.is_dir():
         return os.path.join(source, "**", "*")
     return source
 
@@ -2074,9 +2100,12 @@ async def index_documents(
     pattern = _resolve_source_pattern(source)
 
     # Validate the documents before touching the vault, so a mistyped source
-    # never leaves a freshly created, empty vault behind.
+    # never leaves a freshly created, empty vault behind. The existence check
+    # runs on the confined (resolved and root-checked) prefix, never the raw
+    # request value.
     doc_roots = access_control.document_roots()
-    if doc_roots and not access_control.is_allowed(_nonglob_prefix(pattern), doc_roots):
+    confined_prefix = access_control.confine(_nonglob_prefix(pattern), doc_roots)
+    if confined_prefix is None:
         return _redirect_with_message(
             "/documents",
             error="Indexing on this server is limited to documents under "
@@ -2086,7 +2115,7 @@ async def index_documents(
     # walk (file count + no-match check) runs in the background job, since
     # walking a large tree in this handler would block the event loop and
     # leave the browser hanging on the form submit with no feedback.
-    if not os.path.exists(_nonglob_prefix(pattern)):
+    if not confined_prefix.exists():
         return _redirect_with_message(
             "/documents",
             error=(
@@ -2286,11 +2315,26 @@ async def refresh(
     return_to: Annotated[str, Form()] = "/",
     state: AppState = Depends(get_state),
 ) -> RedirectResponse:
-    """Refresh pipelines and document counts, then redirect to home."""
+    """Refresh pipelines and document counts, then redirect back.
+
+    ``return_to`` comes from the client, so it is only honored when it names
+    one of the app's own pages — anything else (an external URL, a
+    protocol-relative ``//host``, a backslash variant a browser would treat
+    as one) falls back to home. An allow-list, not a prefix check, so no
+    crafted value can redirect off-site.
+    """
     _refresh_pipelines(force=True)
     _update_document_counts(state.vault_path)
 
-    if not return_to.startswith("/") or return_to.startswith("//"):
+    allowed_returns = {
+        "/",
+        "/documents",
+        "/search",
+        "/keyword-search",
+        "/chat",
+        "/settings",
+    }
+    if return_to not in allowed_returns:
         return_to = "/"
 
     return RedirectResponse(url=return_to, status_code=303)
@@ -2491,10 +2535,15 @@ async def chunk_content(
         full_text = _get_chunk_text_for_path_and_snippet(
             state.vault_path, path, snippet
         )
-    except Exception as exc:
+    except Exception:
+        # The exception text can carry paths and library internals; it goes
+        # to the server log, not the response.
+        logger.exception("Failed to load chunk content")
         return JSONResponse(
             status_code=500,
-            content={"error": f"Failed to load chunk content: {exc}"},
+            content={
+                "error": "Failed to load chunk content; details are in the server log."
+            },
         )
 
     if not full_text:
@@ -2518,21 +2567,29 @@ async def source_file(
             content={"error": "Source file links are disabled."},
         )
 
-    source_path = Path(path)
     try:
         allowed_paths = _indexed_source_paths(state.vault_path)
-    except Exception as exc:
+    except Exception:
+        logger.exception("Failed to load the vault's indexed source paths")
         return JSONResponse(
             status_code=500,
-            content={"error": f"Failed to verify source file path: {exc}"},
+            content={
+                "error": "Failed to verify the source file path; "
+                "details are in the server log."
+            },
         )
 
-    if str(source_path) not in allowed_paths:
+    # The request value only *selects* among the vault's own indexed paths;
+    # the path actually served is the matching entry from the index, so no
+    # request-controlled path ever reaches the filesystem.
+    known_path = next((known for known in allowed_paths if known == path), None)
+    if known_path is None:
         return JSONResponse(
             status_code=404,
             content={"error": "Source file is not referenced by this vault."},
         )
 
+    source_path = Path(known_path)
     if not source_path.is_file():
         return JSONResponse(
             status_code=404,
@@ -2562,10 +2619,14 @@ async def open_file(
 
     try:
         source_path = _resolve_indexed_source_file(state.vault_path, path)
-    except Exception as exc:
+    except Exception:
+        logger.exception("Failed to look up the source file")
         return JSONResponse(
             status_code=500,
-            content={"error": f"Failed to look up the source file: {exc}"},
+            content={
+                "error": "Failed to look up the source file; "
+                "details are in the server log."
+            },
         )
 
     if source_path is None:

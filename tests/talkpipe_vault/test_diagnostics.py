@@ -84,7 +84,10 @@ def test_model2vec_ready_but_embedding_fails_is_error(monkeypatch):
     embeddings = _find(report, "Embeddings provider")
     assert embeddings["status"] == "error"
     assert "failed to produce a test embedding" in embeddings["summary"]
-    assert "corrupt weights" in embeddings["detail"]
+    # The raw exception text stays out of the response (information exposure
+    # through an exception); the class name and a log pointer remain.
+    assert "corrupt weights" not in embeddings["detail"]
+    assert "ValueError" in embeddings["detail"]
 
 
 def test_model2vec_absent_online_is_warn_not_error(monkeypatch):
@@ -136,7 +139,8 @@ def test_model2vec_absent_download_failure_is_error(monkeypatch):
     embeddings = _find(report, "Embeddings provider")
     assert embeddings["status"] == "error"
     assert "could not be downloaded" in embeddings["summary"]
-    assert "no route to huggingface.co" in embeddings["detail"]
+    assert "no route to huggingface.co" not in embeddings["detail"]
+    assert "connection failed" in embeddings["detail"]
 
 
 def test_model2vec_absent_offline_never_attempts_download(monkeypatch):
@@ -270,7 +274,7 @@ def test_ollama_present_but_chat_probe_fails_is_error(monkeypatch):
     assert chat["status"] == "error"
     assert "a test chat exchange" in chat["summary"]
     assert "failed" in chat["summary"]
-    assert "connection reset" in chat["detail"]
+    assert "the connection was reset" in chat["detail"]
 
 
 def test_openai_selected_without_key_is_error():
@@ -334,7 +338,7 @@ def test_openai_probe_network_error_is_warn(monkeypatch):
     chat = _find(report, "Chat (Ask) provider")
     assert chat["status"] == "warn"
     assert "could not be completed" in chat["summary"]
-    assert "Connection timed out" in chat["detail"]
+    assert "timed out" in chat["detail"]
 
 
 def test_key_present_not_validated_when_probe_disabled(monkeypatch):
@@ -562,7 +566,8 @@ def test_unrecognized_chat_provider_error_when_probe_fails(register_fake_adapter
     chat = _find(report, "Chat (Ask) provider")
     assert chat["status"] == "error"
     assert "test chat exchange failed" in chat["summary"]
-    assert "model not loaded" in chat["detail"]
+    assert "model not loaded" not in chat["detail"]
+    assert "RuntimeError" in chat["detail"]
 
 
 def test_unrecognized_embedding_provider_error_on_empty_vector(register_fake_adapters):

@@ -62,10 +62,46 @@ def browse_roots() -> list[Path]:
     return roots
 
 
+# The whole filesystem, used as the containment root when no fence is
+# configured so that every path still flows through the same check.
+_UNRESTRICTED_ROOT = Path(os.path.abspath(os.sep))
+
+
+def confine(path: str | Path, roots: list[Path]) -> Path | None:
+    """Resolve ``path`` and require it to lie inside one of ``roots``.
+
+    The realpath-then-prefix-check sanitizer: the path is fully resolved
+    (symlinks followed, ``..`` collapsed) before the containment check, so
+    an allowed-looking path cannot escape through a symlink or traversal.
+    An empty ``roots`` list means unrestricted — the check still runs,
+    against the filesystem root, so every caller takes the same guarded
+    route. Returns the fully-resolved path to use for all filesystem
+    access, or None when the path lies outside every root.
+    """
+    resolved = os.path.realpath(os.path.expanduser(os.fspath(path)))
+    for root in roots or [_UNRESTRICTED_ROOT]:
+        root_str = os.path.realpath(os.fspath(root))
+        if resolved == root_str or resolved.startswith(
+            root_str.rstrip(os.sep) + os.sep
+        ):
+            return Path(resolved)
+    return None
+
+
+def confine_browse(path: str | Path) -> Path | None:
+    """``confine`` against the browse roots (folder picker, indexing source)."""
+    return confine(path, browse_roots())
+
+
+def confine_vault(path: str | Path) -> Path | None:
+    """``confine`` against the vault root (vault create/open/delete)."""
+    root = vault_root()
+    return confine(path, [root] if root is not None else [])
+
+
 def vault_path_allowed(path: str | Path) -> bool:
     """True when the path lies inside the vault root (unset root = anywhere)."""
-    root = vault_root()
-    return is_allowed(path, [root] if root is not None else [])
+    return confine_vault(path) is not None
 
 
 def is_allowed(path: str | Path, roots: list[Path]) -> bool:
@@ -73,10 +109,7 @@ def is_allowed(path: str | Path, roots: list[Path]) -> bool:
 
     An empty roots list means unrestricted, so everything is allowed.
     """
-    if not roots:
-        return True
-    resolved = Path(path).expanduser().resolve()
-    return any(resolved.is_relative_to(root) for root in roots)
+    return confine(path, roots) is not None
 
 
 def describe(roots: list[Path]) -> str:
