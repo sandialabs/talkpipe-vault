@@ -3,6 +3,15 @@
 ## In Development
 
 ### Security Hardening
+- Tightened the shapes of the guards themselves: the containment check in
+  `access_control.confine` is a single normalized-path prefix check (the
+  root-itself case returns the configuration's own value), user-supplied
+  vault paths are expanded with string functions rather than
+  `pathlib.Path.expanduser` so no filesystem-facing call sees the raw
+  request value, the `/refresh` redirect target is selected from the
+  constant page list rather than compared against it, and the configuration
+  status reports a broken retrieval filter with a fixed message pointing at
+  the filter editor's Validate button instead of quoting the compiler.
 - Every filesystem touch driven by a request path now goes through one
   sanitizer (`access_control.confine`): the path is fully resolved (symlinks
   followed, `..` collapsed) and prefix-checked against the configured fence

@@ -201,6 +201,36 @@ def test_config_status_endpoint_returns_report(monkeypatch):
     assert {"Embeddings provider", "Chat (Ask) provider"} <= names
 
 
+def test_config_status_does_not_echo_filter_compile_error(monkeypatch):
+    """The compiler's message (exception text) stays out of the JSON response;
+    the status points at the filter editor's Validate button instead."""
+    from talkpipe_vault.pipelines import diagnostics
+
+    monkeypatch.setattr(
+        diagnostics, "_ollama_tags", lambda url, timeout: (["m:latest"], None)
+    )
+    monkeypatch.setattr(
+        diagnostics, "_functional_probe", lambda role, key, model, timeout: (True, 384)
+    )
+    monkeypatch.setattr(
+        query.retrieval_filter, "load_script", lambda vault_path: "| bogusSegmentXYZ"
+    )
+    monkeypatch.setattr(
+        query.retrieval_filter,
+        "validate_script",
+        lambda script: "Segment 'bogusSegmentXYZ' not found at /secret/site-packages",
+    )
+    client = TestClient(query.app)
+
+    response = client.get("/api/config-status")
+
+    assert response.status_code == 200
+    body = response.text
+    assert "bogusSegmentXYZ" not in body
+    assert "/secret/site-packages" not in body
+    assert "Validate" in body
+
+
 def test_config_status_endpoint_skips_probe(monkeypatch):
     """?probe=0 should avoid live provider calls and report unknown for Ollama."""
 

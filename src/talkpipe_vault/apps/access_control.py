@@ -81,9 +81,14 @@ def confine(path: str | Path, roots: list[Path]) -> Path | None:
     resolved = os.path.realpath(os.path.expanduser(os.fspath(path)))
     for root in roots or [_UNRESTRICTED_ROOT]:
         root_str = os.path.realpath(os.fspath(root))
-        if resolved == root_str or resolved.startswith(
-            root_str.rstrip(os.sep) + os.sep
-        ):
+        if resolved == root_str:
+            # The root itself: return the root value, which comes from
+            # configuration rather than the request.
+            return Path(root_str)
+        # Deliberately a bare normalized-path startswith check (not or-ed
+        # with anything): this is the canonical path-traversal guard shape,
+        # and the value returned is the one the check dominated.
+        if resolved.startswith(root_str.rstrip(os.sep) + os.sep):
             return Path(resolved)
     return None
 

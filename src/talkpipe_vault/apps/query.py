@@ -1128,7 +1128,9 @@ def _resolve_vault_request(raw_vault_path: str) -> tuple[Path | None, str, str]:
     if not raw_path:
         return None, "", "Enter a vault path."
 
-    vault_path = Path(raw_path).expanduser()
+    # Pure string expansion; the filesystem is only ever touched through the
+    # confined path below.
+    expanded = os.path.expanduser(raw_path)
 
     # Failsafe for fenced deployments (e.g. the container, where vaults live
     # under /app/data): a bare name like "my-vault" would otherwise resolve
@@ -1136,8 +1138,8 @@ def _resolve_vault_request(raw_vault_path: str) -> tuple[Path | None, str, str]:
     # Place it under the vault root instead and tell the user below.
     root = access_control.vault_root()
     placed_under_root = False
-    if root is not None and not vault_path.is_absolute():
-        vault_path = root / vault_path
+    if root is not None and not os.path.isabs(expanded):
+        expanded = os.path.join(os.fspath(root), expanded)
         placed_under_root = True
     placement_note = (
         f" (You entered '{raw_path}'; vaults on this server live under "
@@ -1148,7 +1150,7 @@ def _resolve_vault_request(raw_vault_path: str) -> tuple[Path | None, str, str]:
 
     # Every later filesystem touch (existence checks, mkdir, indexing) uses
     # the confined (resolved and root-checked) path, never the raw request.
-    confined = access_control.confine_vault(vault_path)
+    confined = access_control.confine_vault(expanded)
     if confined is None:
         return (
             None,
@@ -1266,7 +1268,9 @@ async def delete_vault(
     if confirm != "delete":
         return _redirect_with_message("/documents", error="Deletion was not confirmed.")
 
-    resolved = str(Path(raw_path).expanduser())
+    # Pure string expansion; the recent-list membership check below compares
+    # strings, and deletion itself only sees the confined path.
+    resolved = os.path.expanduser(raw_path)
 
     # Only vaults the user already knows about are deletable — never an
     # arbitrary path supplied to this endpoint.
@@ -1956,10 +1960,21 @@ def _collect_config_status(
         script = retrieval_filter.load_script(state.vault_path)
         if script:
             flags = user_settings.get_retrieval_filter_flags(state.vault_path)
+            # The compiler's message can quote exception text, which does not
+            # belong in this API response (information exposure through an
+            # exception); the status only says *that* the script is broken.
+            # The full message is where scripts get fixed: the vault's
+            # retrieval-filter editor (Validate).
             filter_info = {
                 "enabled": flags["enabled"],
                 "strict": flags["strict"],
-                "error": retrieval_filter.validate_script(script),
+                "error": (
+                    "The filter script does not compile. Open the vault's "
+                    "retrieval filter editor and press Validate to see the "
+                    "compiler message."
+                    if retrieval_filter.validate_script(script)
+                    else None
+                ),
             }
     return diagnostics.collect_config_status(
         _effective_models(state),
@@ -2014,7 +2029,7 @@ def _open_vault_for_indexing(
 
     # The vault stores the index, not the documents; indexing a folder into
     # itself would sweep the index files back in on the next run.
-    if vault_path.resolve() == Path(_nonglob_prefix(pattern)).resolve():
+    if os.path.realpath(vault_path) == os.path.realpath(_nonglob_prefix(pattern)):
         return (
             _redirect_with_message(
                 "/documents",
@@ -2326,18 +2341,19 @@ async def refresh(
     _refresh_pipelines(force=True)
     _update_document_counts(state.vault_path)
 
-    allowed_returns = {
+    allowed_returns = (
         "/",
         "/documents",
         "/search",
         "/keyword-search",
         "/chat",
         "/settings",
-    }
-    if return_to not in allowed_returns:
-        return_to = "/"
+    )
+    # The redirect target is selected *from the constant tuple*, so the
+    # request value itself never reaches the redirect.
+    target = next((page for page in allowed_returns if page == return_to), "/")
 
-    return RedirectResponse(url=return_to, status_code=303)
+    return RedirectResponse(url=target, status_code=303)
 
 
 @app.get("/search", response_class=HTMLResponse)
