@@ -2,9 +2,9 @@ name: CI/CD Pipeline
 
 on:
   push:
-    branches: [ main, develop, master, 'bugfix/**', 'feature/**', 'chore/**' ]
+    branches: [ master, 'bugfix/**', 'feature/**', 'chore/**' ]
   pull_request:
-    branches: [ main, develop, master, 'bugfix/**', 'feature/**', 'chore/**' ]
+    branches: [ master, 'bugfix/**', 'feature/**', 'chore/**' ]
   release:
     types: [ published ]
 
@@ -125,7 +125,12 @@ jobs:
         # see the note on the test job's install step
         python -m venv .venv
         echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
-        .venv/bin/python -m pip install --upgrade pip
+        # Safety scans the whole installed environment, including the
+        # setuptools that `python -m venv` seeds on Python 3.11, which is not a
+        # project dependency and is not touched by upgrading pip. Upgrade it
+        # past CVE-2026-59890 (fixed in 83.0.0) so the scan reports only
+        # findings the project can act on.
+        .venv/bin/python -m pip install --upgrade pip "setuptools>=83"
         .venv/bin/pip install -e .[dev,security]
 
     - name: Run Bandit security scan
