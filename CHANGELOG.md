@@ -3,6 +3,9 @@
 ## In Development
 
 ### Security Hardening
+- The documents page's confirmation panel re-count now runs on the confined
+  vault path as well: a `confirm_path` outside the vault fence is neither
+  counted nor echoed, since such a folder could never be opened as a vault.
 - Tightened the shapes of the guards themselves: the containment check in
   `access_control.confine` is a single normalized-path prefix check (the
   root-itself case returns the configuration's own value), user-supplied

@@ -239,6 +239,26 @@ class TestVaultSelection:
         assert response.status_code == 200
         assert "confirm_non_vault" not in response.text
 
+    def test_confirmation_panel_never_shows_out_of_fence_paths(
+        self, client, tmp_path, monkeypatch
+    ):
+        """confirm_path is request data: outside the vault fence it must not
+        be counted or echoed (such a folder could never be opened anyway)."""
+        from talkpipe_vault.apps import access_control
+
+        root = tmp_path / "data"
+        root.mkdir()
+        monkeypatch.setenv(access_control.VAULT_ROOT_ENV, str(root))
+        outside = tmp_path / "elsewhere"
+        outside.mkdir()
+        (outside / "notes.txt").write_text("Plain user document.")
+
+        response = client.get(f"/documents?confirm_path={outside}")
+
+        assert response.status_code == 200
+        assert "confirm_non_vault" not in response.text
+        assert str(outside) not in response.text
+
     def test_confirmed_open_creates_vault_and_warns(self, client, tmp_path):
         docs_folder = tmp_path / "my-documents"
         docs_folder.mkdir()

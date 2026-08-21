@@ -1352,15 +1352,15 @@ async def documents_page(
     vault_example = str(root / "my-vault") if root else "~/my-vault"
     # Re-count instead of trusting a count in the URL; if the folder no longer
     # needs confirmation (emptied, deleted, or now a vault), drop the panel.
-    validated_confirm_path: Path | None = None
-    if confirm_path:
-        try:
-            validated_confirm_path = access_control.validate_vault_path(confirm_path)
-        except ValueError:
-            validated_confirm_path = None
+    # confirm_path is request data, so the count runs on the confined
+    # (resolved and root-checked) path; a path outside the vault fence could
+    # never be opened anyway, so it gets no confirmation panel.
+    confirmed_vault = (
+        access_control.confine_vault(confirm_path) if confirm_path else None
+    )
     confirm_entry_count = (
-        _existing_non_vault_entries(validated_confirm_path)
-        if validated_confirm_path is not None
+        _existing_non_vault_entries(confirmed_vault)
+        if confirmed_vault is not None
         else 0
     )
     return _render_page(
@@ -1371,7 +1371,7 @@ async def documents_page(
         models=_effective_models(state),
         recent_vaults=user_settings.get_recent_vaults(),
         vault_example=vault_example,
-        confirm_vault_path=str(validated_confirm_path) if confirm_entry_count else None,
+        confirm_vault_path=str(confirmed_vault) if confirm_entry_count else None,
         confirm_entry_count=confirm_entry_count,
         pending_source_path=source_path or "",
         pending_overwrite=overwrite,

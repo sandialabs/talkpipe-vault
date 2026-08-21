@@ -112,7 +112,10 @@ def get_recent_vaults() -> list[str]:
 
 def remember_vault(vault_path: str) -> None:
     """Record a vault path at the head of the recent-vault list."""
-    resolved = str(Path(vault_path).expanduser())
+    # Pure string bookkeeping: the path is a dictionary key here, so expand
+    # it with the string function — pathlib's expanduser is a
+    # filesystem-facing call and vault_path is request-derived.
+    resolved = os.path.expanduser(vault_path)
     settings = load_settings()
     recents = [p for p in settings["recent_vaults"] if p != resolved]
     recents.insert(0, resolved)
@@ -126,7 +129,7 @@ def forget_vault(vault_path: str) -> bool:
     Returns True if the path was present and removed. Does not touch any files
     on disk.
     """
-    resolved = str(Path(vault_path).expanduser())
+    resolved = os.path.expanduser(vault_path)
     settings = load_settings()
     recents = settings["recent_vaults"]
     remaining = [p for p in recents if p != resolved]
@@ -139,7 +142,7 @@ def forget_vault(vault_path: str) -> bool:
 
 def _resolve_vault_key(vault_path: str) -> str:
     """Normalize a vault path the same way the recent-vault list does."""
-    return str(Path(vault_path).expanduser())
+    return os.path.expanduser(vault_path)
 
 
 def get_retrieval_filter_flags(vault_path: str) -> dict:
