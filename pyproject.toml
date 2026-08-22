@@ -34,7 +34,7 @@ classifiers = [
 # not change what actually installs -- raise a floor when a new advisory
 # lands, do not lower one.
 dependencies = [
-    "talkpipe[all]>=1.0.0b2",  # floor: first release shipping py.typed and typed decorators
+    "talkpipe[all]>=1.0.0b5",  # floor: first release shipping py.typed and typed decorators
     "fastapi[standard]>=0.109.1",  # security floor
     "uvicorn>=0.24.0",
     "jinja2>=3.1.6",  # security floor
