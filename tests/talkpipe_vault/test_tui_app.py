@@ -451,3 +451,203 @@ def test_main_runs_app(monkeypatch, tmp_path):
     assert captured["resume"] is True
     assert captured["vault_path"] == str(tmp_path / "v")
     assert captured["service"].state.show_source_paths is True
+
+
+# --------------------------------------------------------------------------
+# Second first-use review
+# --------------------------------------------------------------------------
+
+
+async def _index_and_wait(app, pilot) -> None:
+    app.query_one("#index", Button).press()
+    await _settle(pilot)
+    for _ in range(600):
+        await pilot.pause(0.1)
+        if app._index_timer is None and not any(
+            w.is_running and w.group != "modal" for w in app.workers
+        ):
+            break
+    await _wait_workers(app, pilot)
+
+
+async def test_confirm_dialog_focuses_cancel_so_enter_is_safe(tmp_path):
+    victim = tmp_path / "victim"
+    service = VaultService()
+    service.startup("")
+    service.open_vault(str(victim))
+    app = VaultApp(service, vault_path=str(victim))
+    async with app.run_test(size=SIZE) as pilot:
+        await _wait_workers(app, pilot)
+        await pilot.press("f2")
+        await _settle(pilot)
+        app.query_one("#recent-vaults", OptionList).highlighted = 0
+        app.query_one("#delete-recent", Button).press()
+        await _settle(pilot)
+        assert isinstance(app.screen, ConfirmScreen)
+        assert app.screen.focused is not None
+        assert app.screen.focused.id == "cancel"
+        await pilot.press("enter")
+        await _settle(pilot)
+        assert not isinstance(app.screen, ConfirmScreen)
+        assert victim.is_dir()
+
+
+async def test_overwrite_unticks_and_summary_explains_duplicates(tmp_path):
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "note.txt").write_text("Terminal interfaces are useful over ssh. " * 8)
+    app = VaultApp(VaultService())
+    async with app.run_test(size=SIZE) as pilot:
+        await _wait_workers(app, pilot)
+        app.query_one("#source-path", Input).value = str(docs)
+        app.query_one("#vault-path", Input).value = str(tmp_path / "vault")
+        await _index_and_wait(app, pilot)
+        first = _text(app.query_one("#index-progress", Static))
+        assert "Overwrite was off" not in first
+        # Same folder again without Overwrite: the summary says the old chunks stayed.
+        await _index_and_wait(app, pilot)
+        second = _text(app.query_one("#index-progress", Static))
+        assert "Overwrite was off" in second
+        assert "twice" in second
+        # A replace run unticks the box afterwards.
+        app.query_one("#overwrite", Checkbox).value = True
+        await _index_and_wait(app, pilot)
+        assert "Overwrite was off" not in _text(
+            app.query_one("#index-progress", Static)
+        )
+        assert app.query_one("#overwrite", Checkbox).value is False
+
+
+async def test_resume_without_recent_vault_says_so():
+    app = VaultApp(VaultService(), resume=True)
+    async with app.run_test(size=SIZE) as pilot:
+        await _wait_workers(app, pilot)
+        assert app.query_one("#tabs").active == "tab-vault"
+        assert "No recently used vault" in _text(
+            app.query_one("#index-progress", Static)
+        )
+
+
+async def test_refused_open_stays_on_screen(tmp_path, monkeypatch):
+    inside = tmp_path / "inside"
+    inside.mkdir()
+    monkeypatch.setenv("TALKPIPE_VAULT_ROOT", str(inside))
+    app = VaultApp(VaultService())
+    async with app.run_test(size=SIZE) as pilot:
+        await _wait_workers(app, pilot)
+        app.query_one("#vault-path", Input).value = str(tmp_path / "outside")
+        app.query_one("#open-vault", Button).press()
+        await _wait_workers(app, pilot)
+        assert app.service.vault_path == ""
+        assert str(inside) in _text(app.query_one("#index-progress", Static))
+
+
+async def test_results_are_numbered(sample_vault):
+    app = VaultApp(VaultService(), vault_path=sample_vault)
+    async with app.run_test(size=SIZE) as pilot:
+        await _wait_workers(app, pilot)
+        query = app.query_one("#search-query", Input)
+        query.value = "sample document"
+        query.focus()
+        await pilot.press("enter")
+        await _wait_workers(app, pilot)
+        options = app.query_one("#search-results", ResultsPane).option_list
+        assert str(options.get_option_at_index(0).prompt).startswith("1. ")
+        assert str(options.get_option_at_index(2).prompt).startswith("3. ")
+        assert "Tab: scroll" in _text(
+            app.query_one("#search-results-detail-body", Static)
+        )
+
+
+async def test_ask_error_clears_previous_citations(sample_vault, monkeypatch):
+    app = VaultApp(VaultService(), vault_path=sample_vault)
+    async with app.run_test(size=SIZE) as pilot:
+        await _wait_workers(app, pilot)
+        monkeypatch.setattr(app.service.state, "chat_pipeline", lambda q: "fine")
+        app.query_one("#question", TextArea).load_text("first")
+        app.query_one("#ask-go", Button).press()
+        await _wait_workers(app, pilot)
+        assert app.query_one("#citations", ResultsPane).results
+
+        def boom(_q):
+            raise RuntimeError("ollama connection refused")
+
+        monkeypatch.setattr(app.service.state, "chat_pipeline", boom)
+        app.query_one("#question", TextArea).load_text("second")
+        app.query_one("#ask-go", Button).press()
+        await _wait_workers(app, pilot)
+        assert "Error" in _text(app.query_one("#answer-meta", Static))
+        assert app.query_one("#citations", ResultsPane).results == []
+
+
+async def test_ask_tab_hints_at_keyword_boost_until_index_exists(tmp_path):
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "note.txt").write_text("Keyword boost needs a full-text index. " * 4)
+    app = VaultApp(VaultService())
+    async with app.run_test(size=SIZE) as pilot:
+        await _wait_workers(app, pilot)
+        # No vault: neither the checkbox nor the hint.
+        assert app.query_one("#ask-keyword-hint", Static).has_class("hidden")
+        app.query_one("#source-path", Input).value = str(docs)
+        app.query_one("#vault-path", Input).value = str(tmp_path / "vault")
+        await _index_and_wait(app, pilot)
+        assert not app.query_one("#ask-keyword-hint", Static).has_class("hidden")
+        assert app.query_one("#ask-keyword", Checkbox).has_class("hidden")
+        assert "F4" in _text(app.query_one("#ask-keyword-hint", Static))
+
+
+async def test_help_dialog_scrolls_and_enter_closes(sample_vault):
+    app = VaultApp(VaultService(), vault_path=sample_vault)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await _wait_workers(app, pilot)
+        await pilot.press("f1")
+        await _settle(pilot)
+        assert isinstance(app.screen, MessageScreen)
+        body = app.screen.query_one("#message-body")
+        assert app.screen.focused is body
+        await pilot.press("pagedown")
+        await _settle(pilot)
+        assert body.scroll_y > 0
+        await pilot.press("enter")
+        await _settle(pilot)
+        assert not isinstance(app.screen, MessageScreen)
+
+
+async def test_filter_dialog_shows_an_example(sample_vault):
+    app = VaultApp(VaultService(), vault_path=sample_vault)
+    async with app.run_test(size=SIZE) as pilot:
+        await _wait_workers(app, pilot)
+        await pilot.press("f2")
+        await _settle(pilot)
+        app.query_one("#filter", Button).press()
+        await _settle(pilot)
+        statics = " ".join(_text(w) for w in app.screen.query(Static))
+        assert "lambdaFilter" in statics
+        assert "doc_id" in statics
+        assert "lambdaFilter" in app.screen.query_one("#filter-script").placeholder
+        await pilot.press("escape")
+        await _settle(pilot)
+
+
+async def test_settings_empty_number_fields_are_valid(sample_vault):
+    app = VaultApp(VaultService(), vault_path=sample_vault)
+    async with app.run_test(size=SIZE) as pilot:
+        await _wait_workers(app, pilot)
+        await pilot.press("f6")
+        await _settle(pilot)
+        for widget_id in ("#chunk-size", "#shingle-size", "#rag-result-limit"):
+            field = app.query_one(widget_id, Input)
+            assert field.value == ""
+            assert field.is_valid
+
+
+def test_config_status_wording_names_tabs():
+    from talkpipe_vault.tui.app import _tui_wording
+
+    assert _tui_wording("re-index (Vaults & Documents → Overwrite).") == (
+        "re-index (Vault tab (F2) → Overwrite existing index)."
+    )
+    assert "Vault tab (F2) → Retrieval filter" in _tui_wording(
+        "under Vaults & Documents → Retrieval filter for this vault."
+    )

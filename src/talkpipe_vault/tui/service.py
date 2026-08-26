@@ -609,9 +609,10 @@ class VaultService:
             models["embedding_model"],
         ):
             message += (
-                " The embedding model changed: existing vaults were indexed with "
-                "the previous model, so re-index their documents (with Overwrite) "
-                "before searching them."
+                " The embedding model changed. A vault keeps the embedder it was "
+                "indexed with when it is reopened (Ctrl+R restores it for the "
+                "open vault); to move a vault to the new model, re-index its "
+                "documents with Overwrite."
             )
         return _ok(message)
 
