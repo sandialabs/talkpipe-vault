@@ -18,6 +18,23 @@
   (configuration status with Re-test, model settings, connections &
   credentials). F1 help, F2–F6 tabs, Ctrl+R refresh; fits 80x24 and shrinks
   its button rows under 26 lines. New dependency: `textual`.
+- Terminal-interface refinements from a first-use review: the Settings
+  provider dropdowns show the provider that will actually be used instead of
+  a blank "Select" when nothing is overridden, and the configuration status
+  re-probes after Save (it no longer drops to "not probed"); a vault path
+  given on the command line that cannot be opened stays in the Vault form
+  with the error on screen instead of only a passing toast; the indexing
+  summary reports the vault's total chunk count, so re-indexing a folder
+  with Overwrite unticked visibly doubles it rather than looking unchanged;
+  Ask's connection errors lead with the in-app fix (Settings tab, Connections
+  & credentials); the filter checkboxes say "Apply retrieval filter"; the
+  folder picker explains that Enter opens a folder; the command palette is
+  off and the Retrieval filter button sits with the recent-vault buttons so
+  the footer and button rows fit 80 columns; the text areas no longer shadow
+  F6/F7, which kept reordering the footer on the Ask tab. README and F1 help
+  now say what Ctrl+R reloads, that Overwrite avoids duplicate chunks, where
+  the Ollama URL goes, and that `vault-tui` needs a source install until the
+  next PyPI release.
 
 ### Security Hardening
 - The documents page's confirmation panel re-count now runs on the confined

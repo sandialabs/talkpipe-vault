@@ -8,14 +8,24 @@ import time
 from pathlib import Path
 
 import pytest
-from textual.widgets import Button, Checkbox, Input, OptionList, Static, TextArea
+from textual.widgets import (
+    Button,
+    Checkbox,
+    Input,
+    OptionList,
+    Select,
+    Static,
+    TextArea,
+)
 
 from talkpipe_vault.apps import user_settings
 from talkpipe_vault.tui.app import (
     ConfirmScreen,
     DirectoryPickerScreen,
     MessageScreen,
+    QuestionArea,
     ResultsPane,
+    ScriptArea,
     VaultApp,
     _shorten_path,
     main,
@@ -264,6 +274,8 @@ async def test_index_documents_with_progress(tmp_path):
         progress = _text(app.query_one("#index-progress", Static))
         assert "chunk" in progress.lower() or "index" in progress.lower()
         assert app.service.status()["chunks"] >= 1
+        # The summary reports the vault total, not just this run's chunks.
+        assert f"now holds {app.service.status()['chunks']} chunk" in progress
 
 
 async def test_directory_picker_lists_folders(tmp_path):
@@ -364,6 +376,58 @@ async def test_help_and_compact_mode(sample_vault):
             region = app.query_one(widget_id).region
             assert region.y >= 0, (widget_id, region)
             assert region.bottom <= 20, (widget_id, region)
+
+
+async def test_settings_form_shows_effective_sources(sample_vault):
+    """Nothing overridden: the Selects still show the provider that will be used."""
+    app = VaultApp(VaultService(), vault_path=sample_vault)
+    async with app.run_test(size=SIZE) as pilot:
+        await _wait_workers(app, pilot)
+        assert app.service.settings_view()["overrides"]["chat_source"] == ""
+        models = app.service.settings_view()["models"]
+        assert app.query_one("#chat-source", Select).value == models["chat_source"]
+        assert (
+            app.query_one("#embedding-source", Select).value
+            == models["embedding_source"]
+        )
+
+
+async def test_settings_save_reprobes_configuration_status(sample_vault):
+    app = VaultApp(VaultService(), vault_path=sample_vault)
+    async with app.run_test(size=SIZE) as pilot:
+        await _wait_workers(app, pilot)
+        await pilot.press("f6")
+        app.query_one("#rag-result-limit", Input).value = "3"
+        app.query_one("#settings-save", Button).press()
+        await _wait_workers(app, pilot)
+        status = _text(app.query_one("#config-status", Static))
+        assert "(not probed)" not in status
+        assert "Embeddings" in status
+        app.query_one("#credentials-save", Button).press()
+        await _wait_workers(app, pilot)
+        assert "(not probed)" not in _text(app.query_one("#config-status", Static))
+
+
+async def test_unopenable_vault_path_stays_on_screen(tmp_path):
+    blocker = tmp_path / "a-file"
+    blocker.write_text("not a folder")
+    bad = str(blocker / "vault")
+    app = VaultApp(VaultService(), vault_path=bad)
+    async with app.run_test(size=SIZE) as pilot:
+        await _wait_workers(app, pilot)
+        assert app.service.vault_path == ""
+        assert app.query_one("#tabs").active == "tab-vault"
+        assert app.query_one("#vault-path", Input).value == bad
+        assert "Error opening vault" in _text(app.query_one("#index-progress", Static))
+
+
+def test_text_areas_do_not_shadow_tab_keys():
+    for cls in (QuestionArea, ScriptArea):
+        # The merged map is what Textual consults (BINDINGS alone would miss
+        # bindings inherited from TextArea).
+        keys = set(cls._merged_bindings.key_to_bindings)
+        assert not keys & {"f6", "f7"}, cls
+        assert "ctrl+shift+left" in keys  # the rest of TextArea's keys survive
 
 
 def test_shorten_path():

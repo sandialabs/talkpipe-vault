@@ -153,7 +153,9 @@ def test_ask_error_adds_connection_tip(sample_vault, monkeypatch):
     monkeypatch.setattr(service.state, "chat_pipeline", boom)
     outcome = service.ask("hi")
     assert not outcome["ok"]
-    assert "Settings" in outcome["error"]
+    # The in-app fix comes first; the library's environment-variable advice after.
+    assert outcome["error"].startswith("Set the Ollama server URL on the Settings tab")
+    assert "connection refused" in outcome["error"]
 
 
 def test_open_vault_creates_and_confirms_non_vault_folders(tmp_path):

@@ -54,6 +54,8 @@ HELP_TEXT = """\
 
 [b]Tabs[/b]
   F2  Vault (open/create, index documents, recent vaults, retrieval filter)
+      Index documents adds to the open vault; tick "Overwrite existing index"
+      to replace it (re-indexing the same folder without it duplicates chunks).
   F3  Search (semantic)        F4  Keywords (full-text)
   F5  Ask (question answering with citations)
   F6  Settings (models, connections & credentials, configuration status)
@@ -65,9 +67,12 @@ HELP_TEXT = """\
   o         show where the source document is on disk (and view it if it is text)
   c         copy the highlighted chunk to the clipboard
   Copy All  copies every result (button)
+  When the vault's retrieval filter is enabled, an "Apply retrieval filter"
+  checkbox appears on Search and Keywords; Ask always applies it.
 
 [b]Everywhere[/b]
-  Ctrl+R  refresh pipelines and document counts (after indexing elsewhere)
+  Ctrl+R  reload the vault and settings (after indexing or changing
+          ~/.talkpipe.toml or TALKPIPE_* variables outside this app)
   F1      this help        Ctrl+Q  quit        Esc  close a dialog
 
 [b]Where things live[/b]
@@ -167,6 +172,11 @@ class DirectoryPickerScreen(ModalScreen[str | None]):
             yield Input(value=self._start, placeholder="Path", id="picker-path")
             yield Static("", id="picker-message", classes="status-line")
             yield OptionList(id="picker-list")
+            yield Static(
+                "Enter opens the highlighted folder · Use this folder chooses "
+                "the path shown above",
+                classes="muted",
+            )
             with Horizontal(classes="dialog-buttons"):
                 yield Button("Use this folder", variant="primary", id="choose")
                 yield Button("Up", id="up")
@@ -244,7 +254,7 @@ class RetrievalFilterScreen(ModalScreen[dict[str, Any] | None]):
                 "enable/strict flags are stored on this machine.",
                 classes="muted",
             )
-            yield TextArea(
+            yield ScriptArea(
                 v.get("script") or "", id="filter-script", classes="dialog-textarea"
             )
             with Horizontal(classes="form-row"):
@@ -303,7 +313,20 @@ class RetrievalFilterScreen(ModalScreen[dict[str, Any] | None]):
         self.dismiss(None)
 
 
-class QuestionArea(TextArea):
+class ScriptArea(TextArea, inherit_bindings=False):
+    """TextArea without its F6/F7 bindings (select line/all).
+
+    Those keys shadow the app's tab bindings, so the footer reorders whenever
+    a text area has focus. ``inherit_bindings=False`` because Textual merges
+    a subclass's BINDINGS with its parents' otherwise.
+    """
+
+    BINDINGS: ClassVar[list[BindingType]] = [
+        b for b in TextArea.BINDINGS if getattr(b, "key", "") not in ("f6", "f7")
+    ]
+
+
+class QuestionArea(ScriptArea):
     """The Ask box: Enter submits the question instead of inserting a newline.
 
     TextArea inserts the newline in its own key handler, before any binding
@@ -497,6 +520,9 @@ def _set_select(select: Select[str], value: str) -> None:
 class VaultApp(App[None]):
     TITLE = "TalkPipe Vault"
     CSS_PATH = "app.tcss"
+    # Nothing is registered with the palette that the tabs do not offer, and its
+    # footer entry is what overflows an 80-column terminal.
+    ENABLE_COMMAND_PALETTE = False
     # priority=True so the tab keys and Ctrl+Q win over focused widgets
     # (TextArea claims several keys itself).
     BINDINGS: ClassVar[list[BindingType]] = [
@@ -506,7 +532,8 @@ class VaultApp(App[None]):
         Binding("f4", "switch_tab('tab-keywords')", "Keywords", priority=True),
         Binding("f5", "switch_tab('tab-ask')", "Ask", priority=True),
         Binding("f6", "switch_tab('tab-settings')", "Settings", priority=True),
-        Binding("ctrl+r", "refresh", "Refresh", priority=True),
+        # Not in the footer: with it, the footer overflows 80 columns. F1 lists it.
+        Binding("ctrl+r", "refresh", "Refresh", priority=True, show=False),
         Binding("ctrl+q", "quit", "Quit", priority=True),
     ]
 
@@ -522,6 +549,7 @@ class VaultApp(App[None]):
         self._initial_vault = vault_path
         self._resume = resume
         self._index_timer: Any = None
+        self._index_message = ""
         self._fulltext_timer: Any = None
         self._pending_confirm: dict[str, Any] | None = None
 
@@ -543,7 +571,7 @@ class VaultApp(App[None]):
                 yield from self._compose_ask_tab()
             with TabPane("Settings", id="tab-settings"):
                 yield from self._compose_settings_tab()
-        yield Footer()
+        yield Footer(show_command_palette=False)
 
     def _compose_vault_tab(self) -> ComposeResult:
         yield Label(
@@ -560,7 +588,6 @@ class VaultApp(App[None]):
             yield Button("Index documents", variant="primary", id="index")
             yield Button("Open vault", id="open-vault")
             yield Checkbox("Overwrite existing index", False, id="overwrite")
-            yield Button("Retrieval filter", id="filter", classes="narrow-hide")
         yield Static("", id="index-progress", markup=False)
         yield Label(
             "Recent vaults (Enter: open · Delete button removes files)",
@@ -570,6 +597,7 @@ class VaultApp(App[None]):
         with Horizontal(classes="button-row"):
             yield Button("Open selected", id="open-recent")
             yield Button("Delete selected", variant="error", id="delete-recent")
+            yield Button("Retrieval filter", id="filter")
 
     def _compose_search_tab(self) -> ComposeResult:
         with Horizontal(classes="form-row"):
@@ -580,7 +608,7 @@ class VaultApp(App[None]):
             yield Button("Search", variant="primary", id="search-go")
         with Horizontal(classes="button-row"):
             yield Checkbox(
-                "Apply custom transform", False, id="search-filter", classes="hidden"
+                "Apply retrieval filter", False, id="search-filter", classes="hidden"
             )
             yield Button("Copy All", id="search-copy-all")
             yield Static("", id="search-note", classes="status-line")
@@ -597,7 +625,7 @@ class VaultApp(App[None]):
             yield Button("Search", variant="primary", id="kw-go")
         with Horizontal(classes="button-row"):
             yield Checkbox(
-                "Apply custom transform", False, id="kw-filter", classes="hidden"
+                "Apply retrieval filter", False, id="kw-filter", classes="hidden"
             )
             yield Button("Copy All", id="kw-copy-all")
             yield Button("Build full-text index", id="kw-build")
@@ -720,6 +748,12 @@ class VaultApp(App[None]):
         if self.service.vault_path:
             self.query_one("#tabs", TabbedContent).active = "tab-search"
             self.query_one("#search-query", Input).focus()
+        elif not outcome["ok"] and self._initial_vault:
+            # The vault named on the command line could not be opened: keep the
+            # path in the form and the reason on screen (toasts expire).
+            self.query_one("#vault-path", Input).value = self._initial_vault
+            self.query_one("#index-progress", Static).update(outcome["error"])
+            self.query_one("#vault-path", Input).focus()
         else:
             self.query_one("#source-path", Input).focus()
 
@@ -760,10 +794,24 @@ class VaultApp(App[None]):
         self._refresh_worker()
 
     @work(thread=True, exclusive=True, group="refresh")
-    def _refresh_worker(self) -> None:
+    def _refresh_worker(self, *, report_total: bool = False) -> None:
         outcome = self.service.refresh()
         self.call_from_thread(self._notify_outcome, outcome)
         self.call_from_thread(self.refresh_status)
+        if report_total:
+            self.call_from_thread(self._report_vault_total)
+
+    def _report_vault_total(self) -> None:
+        """Append the vault's chunk count to the indexing summary.
+
+        The summary counts only the chunks this run added; without the total,
+        indexing a folder twice (Overwrite unticked) looks like nothing changed
+        while every search returns duplicates.
+        """
+        chunks = self.service.status()["chunks"]
+        self.query_one("#index-progress", Static).update(
+            f"{self._index_message} The vault now holds {chunks} chunk(s)."
+        )
 
     def _notify_outcome(self, outcome: dict[str, Any]) -> None:
         if outcome["ok"]:
@@ -926,9 +974,11 @@ class VaultApp(App[None]):
             progress.update(f"Indexing failed: {snap['error']}")
             self.notify(snap["error"], severity="error", timeout=15)
         else:
-            progress.update(snap["message"] or "Indexing finished.")
-            self.notify(snap["message"] or "Indexing finished.")
-        self._refresh_worker()
+            message = snap["message"] or "Indexing finished."
+            progress.update(message)
+            self.notify(message)
+            self._index_message = message
+        self._refresh_worker(report_total=snap["error"] is None)
 
     @on(Button.Pressed, "#open-vault")
     def _open_vault_pressed(self) -> None:
@@ -1176,10 +1226,12 @@ class VaultApp(App[None]):
         models = view["models"]
         embedding = self.query_one("#embedding-source", Select)
         embedding.set_options([(s, s) for s in view["embedding_sources"]])
-        _set_select(embedding, overrides["embedding_source"])
+        _set_select(
+            embedding, overrides["embedding_source"] or models["embedding_source"]
+        )
         chat = self.query_one("#chat-source", Select)
         chat.set_options([(s, s) for s in view["chat_sources"]])
-        _set_select(chat, overrides["chat_source"])
+        _set_select(chat, overrides["chat_source"] or models["chat_source"])
         self.query_one("#embedding-model", Input).value = overrides["embedding_model"]
         self.query_one(
             "#embedding-model", Input
@@ -1236,7 +1288,8 @@ class VaultApp(App[None]):
         if outcome["ok"]:
             self._load_settings_form()
             self.refresh_status()
-            self._load_config_status(probe=False, download=False)
+            self.query_one("#config-status", Static).update("Checking (live probes)…")
+            self._load_config_status(probe=True, download=False)
 
     @on(Button.Pressed, "#credentials-save")
     def _save_credentials(self) -> None:
@@ -1256,7 +1309,8 @@ class VaultApp(App[None]):
         self._notify_outcome(outcome)
         if outcome["ok"]:
             self._load_settings_form()
-            self._load_config_status(probe=False, download=False)
+            self.query_one("#config-status", Static).update("Checking (live probes)…")
+            self._load_config_status(probe=True, download=False)
 
     @on(Button.Pressed, "#config-retest")
     def _retest(self) -> None:

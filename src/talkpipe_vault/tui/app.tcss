@@ -121,10 +121,6 @@ Screen.compact .button-row Static {
     width: auto;
 }
 
-Button.narrow-hide {
-    display: block;
-}
-
 Checkbox {
     height: auto;
     margin: 0;
