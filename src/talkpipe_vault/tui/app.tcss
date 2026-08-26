@@ -50,6 +50,7 @@ Screen {
 
 #vault-name {
     width: 1fr;
+    margin: 0 1;
     text-align: center;
     text-style: italic;
 }
@@ -130,6 +131,10 @@ Checkbox {
 }
 
 /* ---- Vault tab -------------------------------------------------------------- */
+
+#vault-scroll {
+    height: 1fr;
+}
 
 #recent-vaults {
     height: 1fr;
@@ -237,6 +242,37 @@ ModalScreen.compact .dialog-buttons Button {
 
 ModalScreen.compact .dialog-textarea {
     min-height: 2;
+}
+
+/* Short terminals (16 rows): drop the dialogs' explanatory prose and the
+   vertical spacing so the editor/list and every button stay on screen. */
+ModalScreen.compact .dialog {
+    padding: 0 1;
+    max-height: 100%;
+}
+
+ModalScreen.compact .dialog-tall {
+    height: 100%;
+}
+
+ModalScreen.compact .dialog-title {
+    margin-bottom: 0;
+}
+
+ModalScreen.compact .dialog-buttons {
+    margin-top: 0;
+}
+
+ModalScreen.compact .dialog-help {
+    display: none;
+}
+
+ModalScreen.compact #picker-list {
+    min-height: 3;
+}
+
+.checkbox-column {
+    height: auto;
 }
 
 /* ---- Dialogs --------------------------------------------------------------------- */

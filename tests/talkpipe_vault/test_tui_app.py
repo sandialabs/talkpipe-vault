@@ -4,6 +4,7 @@ Pipelines that are cheap run for real (model2vec embeddings, Whoosh); the
 chat LLM is stubbed on the app state, as the web-app tests do.
 """
 
+import os
 import time
 from pathlib import Path
 
@@ -155,6 +156,7 @@ async def test_ask_shows_answer_and_citations(sample_vault, monkeypatch):
         monkeypatch.setattr(
             app.service.state, "chat_pipeline", lambda q: f"The answer to '{q}'."
         )
+        monkeypatch.setattr(app.service.state, "last_refresh_time", float("inf"))
         await pilot.press("f5")
         await _settle(pilot)
         app.query_one("#question", TextArea).load_text("What is this?")
@@ -179,6 +181,7 @@ async def test_ask_error_is_shown(sample_vault, monkeypatch):
             raise RuntimeError("ollama connection refused")
 
         monkeypatch.setattr(app.service.state, "chat_pipeline", boom)
+        monkeypatch.setattr(app.service.state, "last_refresh_time", float("inf"))
         app.query_one("#question", TextArea).load_text("hello")
         app.query_one("#ask-go", Button).press()
         await _wait_workers(app, pilot)
@@ -472,15 +475,19 @@ async def _index_and_wait(app, pilot) -> None:
 
 async def test_confirm_dialog_focuses_cancel_so_enter_is_safe(tmp_path):
     victim = tmp_path / "victim"
+    other = tmp_path / "other"
     service = VaultService()
     service.startup("")
     service.open_vault(str(victim))
-    app = VaultApp(service, vault_path=str(victim))
+    service.open_vault(str(other))  # the open vault is refused before any dialog
+    app = VaultApp(service, vault_path=str(other))
     async with app.run_test(size=SIZE) as pilot:
         await _wait_workers(app, pilot)
         await pilot.press("f2")
         await _settle(pilot)
-        app.query_one("#recent-vaults", OptionList).highlighted = 0
+        recents = app.query_one("#recent-vaults", OptionList)
+        assert recents.get_option_at_index(1).id == str(victim)
+        recents.highlighted = 1
         app.query_one("#delete-recent", Button).press()
         await _settle(pilot)
         assert isinstance(app.screen, ConfirmScreen)
@@ -564,6 +571,7 @@ async def test_ask_error_clears_previous_citations(sample_vault, monkeypatch):
     async with app.run_test(size=SIZE) as pilot:
         await _wait_workers(app, pilot)
         monkeypatch.setattr(app.service.state, "chat_pipeline", lambda q: "fine")
+        monkeypatch.setattr(app.service.state, "last_refresh_time", float("inf"))
         app.query_one("#question", TextArea).load_text("first")
         app.query_one("#ask-go", Button).press()
         await _wait_workers(app, pilot)
@@ -573,6 +581,7 @@ async def test_ask_error_clears_previous_citations(sample_vault, monkeypatch):
             raise RuntimeError("ollama connection refused")
 
         monkeypatch.setattr(app.service.state, "chat_pipeline", boom)
+        monkeypatch.setattr(app.service.state, "last_refresh_time", float("inf"))
         app.query_one("#question", TextArea).load_text("second")
         app.query_one("#ask-go", Button).press()
         await _wait_workers(app, pilot)
@@ -651,3 +660,127 @@ def test_config_status_wording_names_tabs():
     assert "Vault tab (F2) → Retrieval filter" in _tui_wording(
         "under Vaults & Documents → Retrieval filter for this vault."
     )
+
+
+def test_help_text_fits_the_dialog_and_lists_ctrl_c():
+    from talkpipe_vault.tui.app import HELP_TEXT
+
+    # The help dialog is 80 columns at most, minus border, padding and the
+    # scrollbar: pre-wrapped lines longer than that re-wrap with orphans.
+    assert all(len(line) <= 70 for line in HELP_TEXT.splitlines()), [
+        line for line in HELP_TEXT.splitlines() if len(line) > 70
+    ]
+    assert "Ctrl+C" in HELP_TEXT
+    assert "scroll" in HELP_TEXT.lower()
+
+
+def _inside(app, widget) -> bool:
+    region = widget.region
+    return (
+        region.x >= 0
+        and region.y >= 0
+        and region.right <= app.size.width
+        and region.bottom <= app.size.height
+        and region.height > 0
+    )
+
+
+async def test_small_terminal_keeps_every_button_on_screen(tmp_path):
+    vault = tmp_path / "small-vault"
+    app = VaultApp(VaultService(), vault_path=str(vault))
+    async with app.run_test(size=(60, 16)) as pilot:
+        await _wait_workers(app, pilot)
+        await pilot.press("f2")
+        await _settle(pilot)
+        for widget_id in ("#open-recent", "#delete-recent", "#filter"):
+            button = app.query_one(widget_id, Button)
+            button.scroll_visible(animate=False)
+            await _settle(pilot)
+            assert _inside(app, button), widget_id
+
+        app.query_one("#source-browse", Button).press()
+        await _settle(pilot)
+        assert isinstance(app.screen, DirectoryPickerScreen)
+        for widget_id in ("#choose", "#up", "#cancel", "#picker-list"):
+            assert _inside(app, app.screen.query_one(widget_id)), widget_id
+        await pilot.press("escape")
+        await _settle(pilot)
+
+        app.query_one("#filter", Button).press()
+        await _settle(pilot)
+        for widget_id in (
+            "#filter-script",
+            "#filter-enabled",
+            "#filter-strict",
+            "#save",
+            "#validate",
+            "#remove",
+            "#cancel",
+        ):
+            assert _inside(app, app.screen.query_one(widget_id)), widget_id
+        await pilot.press("escape")
+        await _settle(pilot)
+
+
+async def test_deleting_the_open_vault_refuses_before_confirming(tmp_path):
+    vault = tmp_path / "open-vault"
+    app = VaultApp(VaultService(), vault_path=str(vault))
+    async with app.run_test(size=SIZE) as pilot:
+        await _wait_workers(app, pilot)
+        await pilot.press("f2")
+        await _settle(pilot)
+        recents = app.query_one("#recent-vaults", OptionList)
+        recents.highlighted = 0
+        assert "(open)" in str(recents.get_option_at_index(0).prompt)
+        app.query_one("#delete-recent", Button).press()
+        await _settle(pilot)
+        assert not isinstance(app.screen, ConfirmScreen)
+        assert vault.exists()
+        assert any("currently open" in n.message for n in app._notifications)
+
+
+async def test_empty_query_gives_feedback(sample_vault):
+    app = VaultApp(VaultService(), vault_path=sample_vault)
+    async with app.run_test(size=SIZE) as pilot:
+        await _wait_workers(app, pilot)
+        await pilot.press("f3")
+        await _settle(pilot)
+        await pilot.press("enter")
+        await _settle(pilot)
+        assert "Enter a query" in _text(app.query_one("#search-note", Static))
+        await pilot.press("f4")
+        await _settle(pilot)
+        await pilot.press("enter")
+        await _settle(pilot)
+        assert "Enter a query" in _text(app.query_one("#kw-note", Static))
+
+
+async def test_stale_full_text_index_is_called_out(tmp_path):
+    vault = tmp_path / "stale-vault"
+    build_docs_vault(SAMPLE_DOCS / "*", vault)
+    service = VaultService()
+    service.startup(str(vault))
+    assert service.start_fulltext_index()["ok"]
+    deadline = time.monotonic() + 60
+    while service.fulltext_status()["running"] and time.monotonic() < deadline:
+        time.sleep(0.1)
+    newest = time.time() + 60
+    for entry in (vault / "docs.lance").rglob("*"):
+        if entry.is_file():
+            os.utime(entry, (newest, newest))
+    app = VaultApp(service, vault_path=str(vault))
+    async with app.run_test(size=SIZE) as pilot:
+        await _wait_workers(app, pilot)
+        assert "keywords out of date" in _text(app.query_one("#vault-facts", Static))
+        await pilot.press("f4")
+        await _settle(pilot)
+        query = app.query_one("#kw-query", Input)
+        query.value = "nothing-matches-this"
+        query.focus()
+        await pilot.press("enter")
+        await _wait_workers(app, pilot)
+        note = _text(app.query_one("#kw-note", Static))
+        assert "0 results" in note
+        assert "out of date" in note
+        body = _text(app.query_one("#kw-results-detail-body", Static))
+        assert "Rebuild full-text index" in body

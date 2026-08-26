@@ -150,9 +150,12 @@ between the two freely. Tabs mirror the web pages:
 | `F4` | Keywords | Full-text search (Whoosh syntax), and building/rebuilding the full-text index |
 | `F5` | Ask | Question answering with the answer, its "Answered by" line and the source chunks it used; optional keyword boost |
 | `F6` | Settings | Configuration status (Re-test), embedding/chat model settings, connections & credentials |
-| `F1` / `Ctrl+R` / `Ctrl+Q` | | Help / reload the vault and settings (after indexing or editing `~/.talkpipe.toml` outside the app) / quit |
+| `F1` / `Ctrl+R` / `Ctrl+Q` | | Help / reload the vault and settings (after indexing or editing `~/.talkpipe.toml` outside the app) / quit (`Ctrl+C` only reminds you of `Ctrl+Q`) |
 
 `--show-source-paths` shows file paths in results, as for `vault-server`.
+On a shared machine, `TALKPIPE_VAULT_ROOT` and `TALKPIPE_DOCUMENT_ROOTS`
+confine where vaults and documents may live for both interfaces — see
+[Confining paths on a shared machine](docs/ADVANCED.md#confining-paths-on-a-shared-machine).
 Long operations (embedding, Ask, indexing) run in the background and report
 progress in the tab that started them. As in the browser, Ask needs a chat
 provider: enter the Ollama URL or an API key under **Connections &
@@ -160,7 +163,9 @@ credentials** on the Settings tab (`F6`) and press **Re-test**. "Index
 documents" adds to the open vault — tick **Overwrite existing index** to
 replace it; re-indexing the same folder without it duplicates every chunk
 (the summary line says so when it happens, and the box unticks itself after
-a replace run). Long chunk text and long answers scroll once you `Tab` into
+a replace run). Indexing never updates the full-text index: the header
+shows "keywords out of date" until you rebuild it on the Keywords tab, and
+a keyword search that finds nothing says so. Long chunk text and long answers scroll once you `Tab` into
 their pane. The **Retrieval filter** button on the Vault tab edits the same
 per-vault ChatterLang script as the web page, with an example in the
 dialog; the script syntax is in the Advanced Guide under

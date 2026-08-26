@@ -25,8 +25,24 @@ from typing import Any
 from talkpipe.llm.config import getEmbeddingSources, getPromptSources
 
 from talkpipe_vault.apps import access_control, credentials, query, user_settings
-from talkpipe_vault.pipelines import retrieval_filter, vault_metadata
+from talkpipe_vault.pipelines import config, retrieval_filter, vault_metadata
 from talkpipe_vault.pipelines.config import ensure_supported_vault_layout
+
+
+def _newest_mtime(folder: Path) -> float | None:
+    """Newest modification time of any file under ``folder`` (None if empty)."""
+    if not folder.is_dir():
+        return None
+    newest: float | None = None
+    for root, _dirs, files in os.walk(folder):
+        for name in files:
+            try:
+                mtime = os.stat(os.path.join(root, name)).st_mtime
+            except OSError:
+                continue
+            if newest is None or mtime > newest:
+                newest = mtime
+    return newest
 
 
 def _ok(message: str = "", **extra: Any) -> dict[str, Any]:
@@ -60,9 +76,12 @@ class VaultService:
         query.load_saved_model_overrides()
         chosen = ""
         resumed = False
+        skipped: list[str] = []
         if resume:
             chosen = self.most_recent_usable_vault()
             resumed = bool(chosen)
+            if chosen:
+                skipped = self._missing_recent_vaults_before(chosen)
         if not chosen and vault_path:
             chosen = str(Path(vault_path).expanduser())
         if not chosen:
@@ -86,7 +105,27 @@ class VaultService:
             )
         user_settings.remember_vault(chosen)
         note = " (most recently used)" if resumed else ""
+        if skipped:
+            # --resume fell through to an older vault: say which one is gone
+            # rather than calling the fallback "most recently used".
+            note = (
+                f" — the most recent vault {skipped[0]} no longer exists, so the "
+                "one used before it was opened instead"
+            )
         return _ok(f"Opened vault {chosen}{note}.", vault_path=chosen)
+
+    @staticmethod
+    def _missing_recent_vaults_before(chosen: str) -> list[str]:
+        """Recent-list entries newer than ``chosen`` that are gone from disk."""
+        missing: list[str] = []
+        target = os.path.realpath(os.path.expanduser(chosen))
+        for candidate in user_settings.get_recent_vaults():
+            path = Path(candidate).expanduser()
+            if os.path.realpath(path) == target:
+                break
+            if not path.is_dir():
+                missing.append(candidate)
+        return missing
 
     @staticmethod
     def most_recent_usable_vault() -> str:
@@ -127,11 +166,28 @@ class VaultService:
             "vault_path": state.vault_path,
             "chunks": state.shingled_chunks_count,
             "keyword_search_enabled": state.keyword_search_enabled,
+            "keyword_index_stale": self.keyword_index_stale(),
             "filter_active": state.result_filter_active,
             "filter_error": state.result_filter_error,
             "show_source_paths": state.show_source_paths,
             "models": query._effective_models(state),
         }
+
+    def keyword_index_stale(self) -> bool:
+        """True when documents were indexed after the full-text index was built.
+
+        Indexing (here or in vault-server) writes the LanceDB ``docs`` table
+        but never touches the Whoosh index, so keyword search silently misses
+        the new documents until it is rebuilt. Compared by newest file
+        modification time under each folder.
+        """
+        state = self.state
+        if not state.vault_path or not state.keyword_search_enabled:
+            return False
+        vault = Path(state.vault_path)
+        fulltext = _newest_mtime(vault / config.FULLTEXT_VAULT_SUBDIR)
+        docs = _newest_mtime(vault / "docs.lance")
+        return fulltext is not None and docs is not None and docs > fulltext
 
     def refresh(self) -> dict[str, Any]:
         """Force-rebuild pipelines and recount documents (the web Refresh)."""
@@ -414,6 +470,18 @@ class VaultService:
                 )
         except Exception as exc:
             return _fail(str(exc))
+        if not results and self.keyword_index_stale():
+            # The note shares a one-line row with the buttons, so keep it short
+            # and put the explanation where the results would have been.
+            return _ok(
+                results=results,
+                note="full-text index out of date",
+                empty_text=(
+                    "Documents were indexed after the full-text index was built, "
+                    "so keyword search cannot see them yet. Press Rebuild "
+                    "full-text index to include them."
+                ),
+            )
         return _ok(results=results, note=note)
 
     def chunk_text(self, lookup_path: str, snippet: str = "") -> dict[str, Any]:
