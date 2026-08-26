@@ -129,7 +129,9 @@ A compose service and instructions for deriving your own customized image
 
 Everything above is also available without a browser — in an SSH session, a
 tmux window, or on a headless machine — through `vault-tui`, installed
-alongside `vault-server`:
+alongside `vault-server`. It is new and not yet in a PyPI release: install
+from source ([Development setup](docs/ADVANCED.md#development-setup)) to
+get it.
 
 ```bash
 vault-tui ~/my-vault      # open (or create) a vault
@@ -148,11 +150,15 @@ between the two freely. Tabs mirror the web pages:
 | `F4` | Keywords | Full-text search (Whoosh syntax), and building/rebuilding the full-text index |
 | `F5` | Ask | Question answering with the answer, its "Answered by" line and the source chunks it used; optional keyword boost |
 | `F6` | Settings | Configuration status (Re-test), embedding/chat model settings, connections & credentials |
-| `F1` / `Ctrl+R` / `Ctrl+Q` | | Help / refresh pipelines / quit |
+| `F1` / `Ctrl+R` / `Ctrl+Q` | | Help / reload the vault and settings (after indexing or editing `~/.talkpipe.toml` outside the app) / quit |
 
 `--show-source-paths` shows file paths in results, as for `vault-server`.
 Long operations (embedding, Ask, indexing) run in the background and report
-progress in the tab that started them.
+progress in the tab that started them. As in the browser, Ask needs a chat
+provider: enter the Ollama URL or an API key under **Connections &
+credentials** on the Settings tab (`F6`) and press **Re-test**. "Index
+documents" adds to the open vault — tick **Overwrite existing index** to
+replace it; re-indexing the same folder without it duplicates every chunk.
 
 ## The web interface
 

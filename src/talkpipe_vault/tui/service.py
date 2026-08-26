@@ -499,11 +499,17 @@ class VaultService:
             error = str(exc)
             lowered = error.lower()
             if "ollama" in lowered and ("connect" in lowered or "refused" in lowered):
-                error += " Tip: set the Ollama server URL under Settings → Connections."
+                error = (
+                    "Set the Ollama server URL on the Settings tab (F6), "
+                    "Connections & credentials. " + error
+                )
             elif ("openai" in lowered or "anthropic" in lowered) and (
                 "api key" in lowered or "api_key" in lowered or "credential" in lowered
             ):
-                error += " Tip: enter the API key under Settings → Connections."
+                error = (
+                    "Enter the API key on the Settings tab (F6), Connections & "
+                    "credentials. " + error
+                )
             return _fail(error)
         if not state.show_source_paths:
             citations = [{k: v for k, v in c.items() if k != "path"} for c in citations]
