@@ -51,40 +51,48 @@ COMPACT_ROWS = 26
 
 HELP_TEXT = """\
 [b]TalkPipe Vault — keyboard reference[/b]
+(This text scrolls: PageDown / arrow keys, or Tab into it.)
 
 [b]Tabs[/b]
-  F2  Vault (open/create, index documents, recent vaults, retrieval filter)
-      Index documents adds to the open vault; tick "Overwrite existing index"
-      to replace it (re-indexing the same folder without it duplicates chunks).
+  F2  Vault: open/create a vault, index documents, recent vaults,
+      retrieval filter. Index documents adds to the open vault; tick
+      "Overwrite existing index" to replace it (re-indexing the same
+      folder without it duplicates chunks). Adding documents does not
+      update the full-text index — rebuild it on the Keywords tab.
   F3  Search (semantic)        F4  Keywords (full-text)
-  F5  Ask (question answering with citations; Enter in the question box asks,
-      the box wraps long questions)
-  F6  Settings (models, connections & credentials, configuration status)
+  F5  Ask: question answering with citations. Enter in the question
+      box asks; the box wraps long questions.
+  F6  Settings: models, connections & credentials, configuration
+      status.
   Tab / Shift+Tab move between fields and buttons inside a tab.
 
 [b]Results (Search, Keywords, Ask citations)[/b]
   Up/Down   move through results; the detail pane follows
   Enter     load the full chunk text into the detail pane
-  o         show where the source document is on disk (view it if text)
+  o         show where the source document is on disk (view it if
+            text)
   c         copy the highlighted chunk to the clipboard
   Copy All  copies every result (button)
-  Tab       into the detail pane (or Ask's answer pane), then Up/Down or
-            PageUp/PageDown scroll long text
-  Exact words: semantic Search ranks by meaning, so a rare word can land
-  below unrelated notes — the Keywords tab finds it exactly (build its index
-  there first).
-  When the vault's retrieval filter is enabled, an "Apply retrieval filter"
-  checkbox appears on Search and Keywords; Ask always applies it.
+  Tab       into the detail pane (or Ask's answer pane), then
+            Up/Down or PageUp/PageDown scroll long text
+  Exact words: semantic Search ranks by meaning, so a rare word can
+  land below unrelated notes — the Keywords tab finds it exactly
+  (build its index there first).
+  When the vault's retrieval filter is enabled, an "Apply retrieval
+  filter" checkbox appears on Search and Keywords; Ask always applies
+  it.
 
 [b]Everywhere[/b]
   Ctrl+R  reload the vault and settings (after indexing or changing
           ~/.talkpipe.toml or TALKPIPE_* variables outside this app)
   F1      this help        Ctrl+Q  quit        Esc  close a dialog
+  Ctrl+C  does not quit (it only reminds you of Ctrl+Q), so a stray
+          Ctrl+C never loses a long answer.
 
 [b]Where things live[/b]
-  Recent vaults, model settings and credentials: the same files the web
-  interface uses (TALKPIPE_VAULT_HOME, default ~/.talkpipe-vault), so both
-  interfaces share every vault and setting.
+  Recent vaults, model settings and credentials: the same files the
+  web interface uses (TALKPIPE_VAULT_HOME, default ~/.talkpipe-vault),
+  so both interfaces share every vault and setting.
 """
 
 
@@ -210,7 +218,7 @@ class DirectoryPickerScreen(_Dialog[str | None]):
             yield Static(
                 "Enter opens the highlighted folder · Use this folder chooses "
                 "the path shown above",
-                classes="muted",
+                classes="muted dialog-help",
             )
             with Horizontal(classes="dialog-buttons"):
                 yield Button("Use this folder", variant="primary", id="choose")
@@ -296,12 +304,12 @@ class RetrievalFilterScreen(_Dialog[dict[str, Any] | None]):
                 "A ChatterLang script applied to retrieved chunks before they "
                 "reach Ask and the search pages. Stored inside the vault; the "
                 "enable/strict flags are stored on this machine.",
-                classes="muted",
+                classes="muted dialog-help",
             )
             yield Static(
                 "Each result is {doc_id, score, document} — `item` in lambda/"
                 f"lambdaFilter expressions — e.g. {FILTER_EXAMPLE}",
-                classes="muted",
+                classes="muted dialog-help",
                 markup=False,
             )
             yield ScriptArea(
@@ -310,7 +318,7 @@ class RetrievalFilterScreen(_Dialog[dict[str, Any] | None]):
                 classes="dialog-textarea",
                 placeholder=FILTER_EXAMPLE,
             )
-            with Horizontal(classes="form-row"):
+            with Vertical(classes="checkbox-column"):
                 yield Checkbox(
                     "Enabled on this machine",
                     bool(v.get("enabled")),
@@ -653,6 +661,13 @@ class VaultApp(App[None]):
         yield Footer(show_command_palette=False)
 
     def _compose_vault_tab(self) -> ComposeResult:
+        # A scroll container: on a 16-row terminal the recent-vaults list and
+        # its buttons would otherwise sit below the last row, focusable but
+        # invisible.
+        with VerticalScroll(id="vault-scroll"):
+            yield from self._compose_vault_form()
+
+    def _compose_vault_form(self) -> ComposeResult:
         yield Label(
             "Documents to index (folder or glob pattern)", classes="field-label"
         )
@@ -861,9 +876,14 @@ class VaultApp(App[None]):
         facts = []
         if status["vault_path"]:
             facts.append(f"{status['chunks']} chunks")
-            facts.append(
-                "keywords on" if status["keyword_search_enabled"] else "keywords off"
-            )
+            if status["keyword_index_stale"]:
+                facts.append("keywords out of date")
+            else:
+                facts.append(
+                    "keywords on"
+                    if status["keyword_search_enabled"]
+                    else "keywords off"
+                )
             if status["filter_active"]:
                 facts.append("filter on")
         self.query_one("#vault-facts", Static).update(" · ".join(facts))
@@ -903,8 +923,14 @@ class VaultApp(App[None]):
         indexing a folder twice (Overwrite unticked) looks like nothing changed
         while every search returns duplicates.
         """
-        chunks = self.service.status()["chunks"]
+        status = self.service.status()
+        chunks = status["chunks"]
         message = f"{self._index_message} The vault now holds {chunks} chunk(s)."
+        if status["keyword_index_stale"]:
+            message += (
+                " The full-text index does not include this run — rebuild it on "
+                "the Keywords tab (F4) for keyword search and the Ask boost."
+            )
         if not self._index_overwrite and self._index_previous_chunks:
             message += (
                 f" Overwrite was off, so the {self._index_previous_chunks} chunk(s) "
@@ -1147,6 +1173,16 @@ class VaultApp(App[None]):
         if not path:
             self.notify("Select a recent vault first.", severity="warning")
             return
+        if any(
+            row["open"] for row in self.service.recent_vaults() if row["path"] == path
+        ):
+            # Refuse up front rather than after the "cannot be undone" dialog.
+            self.notify(
+                "Cannot delete the vault that is currently open. Open a different "
+                "vault first.",
+                severity="error",
+            )
+            return
         confirmed = await self.push_screen_wait(
             ConfirmScreen(
                 "Delete vault",
@@ -1184,6 +1220,7 @@ class VaultApp(App[None]):
     def _search_pressed(self) -> None:
         text = self.query_one("#search-query", Input).value.strip()
         if not text:
+            self.query_one("#search-note", Static).update("Enter a query first.")
             return
         self.query_one("#search-note", Static).update("Searching…")
         self._search_worker(text, self.query_one("#search-filter", Checkbox).value)
@@ -1198,6 +1235,7 @@ class VaultApp(App[None]):
     def _kw_pressed(self) -> None:
         text = self.query_one("#kw-query", Input).value.strip()
         if not text:
+            self.query_one("#kw-note", Static).update("Enter a query first.")
             return
         self.query_one("#kw-note", Static).update("Searching…")
         self._kw_worker(text, self.query_one("#kw-filter", Checkbox).value)
@@ -1222,7 +1260,10 @@ class VaultApp(App[None]):
         if outcome.get("note"):
             summary += f" · {outcome['note']}"
         note.update(summary)
-        pane.show_results(results, empty_text=f'No results found for "{text}".')
+        empty_text = f'No results found for "{text}".'
+        if outcome.get("empty_text"):
+            empty_text += f" {outcome['empty_text']}"
+        pane.show_results(results, empty_text=empty_text)
         if results:
             pane.option_list.focus()
 

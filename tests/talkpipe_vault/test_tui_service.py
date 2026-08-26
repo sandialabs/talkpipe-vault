@@ -5,6 +5,7 @@ are in-process) and stub the LLM for Ask, mirroring the web-app tests.
 """
 
 import json
+import os
 import time
 from pathlib import Path
 
@@ -133,6 +134,7 @@ def test_ask_uses_chat_pipeline_and_citations(sample_vault, monkeypatch):
         "chat_pipeline",
         lambda q: f"Answer to {q}\n\nSources:\n- /x/y.txt",
     )
+    monkeypatch.setattr(service.state, "last_refresh_time", float("inf"))
     outcome = service.ask("What is it?")
     assert outcome["ok"], outcome
     assert outcome["answer"].startswith("Answer to What is it?")
@@ -151,6 +153,7 @@ def test_ask_error_adds_connection_tip(sample_vault, monkeypatch):
         raise RuntimeError("ollama: connection refused")
 
     monkeypatch.setattr(service.state, "chat_pipeline", boom)
+    monkeypatch.setattr(service.state, "last_refresh_time", float("inf"))
     outcome = service.ask("hi")
     assert not outcome["ok"]
     # The in-app fix comes first; the library's environment-variable advice after.
@@ -313,3 +316,39 @@ def test_service_never_touches_the_web_app_module_state_shape():
     ):
         assert hasattr(query._state, attr)
     assert service.state is query._state
+
+
+def test_startup_resume_names_the_missing_vault_it_skipped(sample_vault, tmp_path):
+    gone = tmp_path / "gone-vault"
+    user_settings.remember_vault(sample_vault)
+    user_settings.remember_vault(str(gone))  # most recent, but not on disk
+    service = VaultService()
+    outcome = service.startup("", resume=True)
+    assert outcome["ok"]
+    assert service.vault_path == sample_vault
+    assert str(gone) in outcome["message"]
+    assert "no longer exists" in outcome["message"]
+
+
+def test_status_reports_full_text_index_older_than_the_vault(sample_vault):
+    service = VaultService()
+    assert service.startup(sample_vault)["ok"]
+    assert service.status()["keyword_index_stale"] is False  # no index at all
+    assert service.start_fulltext_index()["ok"]
+    assert _wait(service.fulltext_status)["error"] is None
+    assert service.status()["keyword_index_stale"] is False
+    # Documents indexed after the full-text index was built (e.g. by
+    # vault-server) make it stale until it is rebuilt.
+    newest = time.time() + 1
+    for entry in Path(sample_vault, "docs.lance").rglob("*"):
+        if entry.is_file():
+            os.utime(entry, (newest, newest))
+    assert service.status()["keyword_index_stale"] is True
+    outcome = service.keyword_search("nothing-matches-this")
+    assert outcome["ok"]
+    assert "out of date" in outcome["note"]
+    assert "Rebuild full-text index" in outcome["empty_text"]
+    time.sleep(1.1)  # so the rebuilt index is newer than the touched table
+    assert service.start_fulltext_index()["ok"]
+    assert _wait(service.fulltext_status)["error"] is None
+    assert service.status()["keyword_index_stale"] is False

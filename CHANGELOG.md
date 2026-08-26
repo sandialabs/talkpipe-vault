@@ -59,6 +59,25 @@
   reopens with the embedder it was built with). F1 help and README mention
   Tab-to-scroll, that Enter asks, where the retrieval-filter syntax is
   documented, and that the Keywords tab is the tool for exact words.
+- Terminal-interface refinements from a third first-use review, this time
+  over SSH, in small tmux panes and alongside `vault-server`: the Vault tab
+  scrolls and the folder picker and retrieval-filter dialogs drop their
+  explanatory prose on 16-row terminals, so their lists, editor and every
+  button stay on screen instead of being focusable but invisible; the
+  full-text index is now known to be out of date once documents are indexed
+  after it was built (by either interface) — the header says "keywords out
+  of date", the indexing summary says to rebuild, and a keyword search that
+  finds nothing explains why instead of a bare "0 results"; deleting the
+  open vault is refused before the "cannot be undone" dialog rather than
+  after it; `--resume` names the most recent vault that no longer exists
+  when it falls back to an older one; an empty Search or Keywords query says
+  so instead of leaving the previous results in place unexplained; the
+  header keeps a gap between a truncated vault path and the chunk count; and
+  the F1 help fits its dialog without re-wrapping, says it scrolls, and
+  lists Ctrl+C (which only reminds you of Ctrl+Q). The Advanced Guide now
+  documents `vault-tui` and the `TALKPIPE_VAULT_ROOT` /
+  `TALKPIPE_DOCUMENT_ROOTS` path fences for shared machines (previously
+  mentioned only in this changelog), and the README links to them.
 
 ### Security Hardening
 - The documents page's confirmation panel re-count now runs on the confined

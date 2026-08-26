@@ -6,7 +6,8 @@ reference, architecture, reusable pipeline components, and development setup.
 
 ## Command-line tools
 
-The package installs one console script, `vault-server`. Indexing from the
+The package installs two console scripts, `vault-server` (the web
+application) and `vault-tui` (the terminal interface). Indexing from the
 command line uses TalkPipe's `makevectordatabase`, installed with the
 TalkPipe dependency.
 
@@ -52,6 +53,43 @@ The app module can also be run directly with the same options:
 
 ```bash
 python -m talkpipe_vault.apps.query ~/my-vault --host 0.0.0.0 --port 8002
+```
+
+### `vault-tui`
+
+```bash
+vault-tui [~/my-vault] [--resume] [--show-source-paths]
+```
+
+The terminal interface described in the [README](../README.md#the-terminal-interface-vault-tui).
+The vault path, `--resume` and `--show-source-paths` mean the same as for
+`vault-server`; there is no host/port because it runs in-process. It reads
+and writes the same files as the web interface (recent vaults, settings and
+credentials under `TALKPIPE_VAULT_HOME`, default `~/.talkpipe-vault`) and
+honours the path fences below. Press `F1` inside the app for the keyboard
+reference. The module form is `python -m talkpipe_vault.tui`.
+
+### Confining paths on a shared machine
+
+Two environment variables restrict where either interface may look. Both
+are unset by default (no restriction), apply to `vault-server` and
+`vault-tui` alike, and are checked against fully resolved paths, so a
+symlink pointing outside an allowed root is rejected. If either names a
+folder that does not exist, the app refuses to start and says which one.
+
+- `TALKPIPE_VAULT_ROOT` — a single directory. Vaults can only be created,
+  opened, deleted, or resumed inside it, and the vault name suggested for a
+  new documents folder is placed under it instead of next to the folder
+  (`~/notes` → `$TALKPIPE_VAULT_ROOT/notes-vault`).
+- `TALKPIPE_DOCUMENT_ROOTS` — one or more directories separated by the
+  platform path separator (`:` on Linux/macOS, `;` on Windows). The folder
+  picker and document indexing are confined to them.
+
+```bash
+export TALKPIPE_VAULT_HOME=/srv/vault/home          # settings, credentials, recent list
+export TALKPIPE_VAULT_ROOT=/srv/vault/vaults
+export TALKPIPE_DOCUMENT_ROOTS=/srv/documents:/srv/archive
+vault-tui --resume
 ```
 
 ## Containers
