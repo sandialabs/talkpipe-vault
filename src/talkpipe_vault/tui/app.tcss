@@ -229,6 +229,16 @@ Screen.compact #citations {
     min-height: 3;
 }
 
+ModalScreen.compact .dialog-buttons Button {
+    min-width: 8;
+    border: none;
+    height: 1;
+}
+
+ModalScreen.compact .dialog-textarea {
+    min-height: 2;
+}
+
 /* ---- Dialogs --------------------------------------------------------------------- */
 
 ModalScreen {

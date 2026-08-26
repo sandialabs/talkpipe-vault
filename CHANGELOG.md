@@ -35,6 +35,30 @@
   now say what Ctrl+R reloads, that Overwrite avoids duplicate chunks, where
   the Ollama URL goes, and that `vault-tui` needs a source install until the
   next PyPI release.
+- Further terminal-interface refinements from a second first-use review:
+  confirmation dialogs (delete a vault, create a vault among documents) open
+  with Cancel focused, so Enter straight after the button press no longer
+  performs the irreversible action; "Overwrite existing index" unticks itself
+  after a replace run, as the web form does, instead of silently wiping the
+  vault on the next add; the indexing summary explains when kept chunks mean
+  duplicates; a refused Open or Index (path fence, unreadable folder) stays
+  on screen in the form instead of only in a passing toast, and
+  `--resume` with nothing to resume says so; result rows are numbered so
+  several chunks of one file are distinguishable; the Ask tab says how to
+  enable keyword boost while no full-text index exists and drops the previous
+  question's source chunks when an Ask fails; the retrieval-filter dialog
+  shows the result shape and an example script; help, chunk and document
+  dialogs open with their text focused so the arrow and page keys scroll them
+  (Enter closes) and dialog buttons shrink to one row on short terminals like
+  the main screen's; the folder picker highlights the first entry after each
+  descent; the empty number fields on Settings are no longer drawn as
+  invalid, saving reports a non-OK configuration status in a toast (the panel
+  is usually scrolled off the top), the shared diagnostics name the terminal's
+  tabs rather than the web pages, and the embedding-model-changed message no
+  longer claims existing vaults must be re-indexed before searching (a vault
+  reopens with the embedder it was built with). F1 help and README mention
+  Tab-to-scroll, that Enter asks, where the retrieval-filter syntax is
+  documented, and that the Keywords tab is the tool for exact words.
 
 ### Security Hardening
 - The documents page's confirmation panel re-count now runs on the confined

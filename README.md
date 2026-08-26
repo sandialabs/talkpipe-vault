@@ -158,7 +158,13 @@ progress in the tab that started them. As in the browser, Ask needs a chat
 provider: enter the Ollama URL or an API key under **Connections &
 credentials** on the Settings tab (`F6`) and press **Re-test**. "Index
 documents" adds to the open vault — tick **Overwrite existing index** to
-replace it; re-indexing the same folder without it duplicates every chunk.
+replace it; re-indexing the same folder without it duplicates every chunk
+(the summary line says so when it happens, and the box unticks itself after
+a replace run). Long chunk text and long answers scroll once you `Tab` into
+their pane. The **Retrieval filter** button on the Vault tab edits the same
+per-vault ChatterLang script as the web page, with an example in the
+dialog; the script syntax is in the Advanced Guide under
+[Writing a retrieval filter](docs/ADVANCED.md#writing-a-retrieval-filter).
 
 ## The web interface
 

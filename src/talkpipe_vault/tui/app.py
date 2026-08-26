@@ -19,7 +19,7 @@ from textual import events, on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, Vertical, VerticalScroll
-from textual.screen import ModalScreen
+from textual.screen import ModalScreen, ScreenResultType
 from textual.widgets import (
     Button,
     Checkbox,
@@ -57,16 +57,22 @@ HELP_TEXT = """\
       Index documents adds to the open vault; tick "Overwrite existing index"
       to replace it (re-indexing the same folder without it duplicates chunks).
   F3  Search (semantic)        F4  Keywords (full-text)
-  F5  Ask (question answering with citations)
+  F5  Ask (question answering with citations; Enter in the question box asks,
+      the box wraps long questions)
   F6  Settings (models, connections & credentials, configuration status)
   Tab / Shift+Tab move between fields and buttons inside a tab.
 
 [b]Results (Search, Keywords, Ask citations)[/b]
   Up/Down   move through results; the detail pane follows
   Enter     load the full chunk text into the detail pane
-  o         show where the source document is on disk (and view it if it is text)
+  o         show where the source document is on disk (view it if text)
   c         copy the highlighted chunk to the clipboard
   Copy All  copies every result (button)
+  Tab       into the detail pane (or Ask's answer pane), then Up/Down or
+            PageUp/PageDown scroll long text
+  Exact words: semantic Search ranks by meaning, so a rare word can land
+  below unrelated notes — the Keywords tab finds it exactly (build its index
+  there first).
   When the vault's retrieval filter is enabled, an "Apply retrieval filter"
   checkbox appears on Search and Keywords; Ask always applies it.
 
@@ -87,10 +93,26 @@ HELP_TEXT = """\
 # --------------------------------------------------------------------------
 
 
-class MessageScreen(ModalScreen[None]):
+class _Dialog(ModalScreen[ScreenResultType]):
+    """Modal base: mirrors the main screen's `compact` class.
+
+    The class is set on the app's default screen only, so without this a
+    dialog on a 24-row terminal keeps three-row buttons that get clipped to
+    unlabelled bars.
+    """
+
+    def on_mount(self) -> None:
+        self.set_class(self.app.size.height < COMPACT_ROWS, "compact")
+
+
+class MessageScreen(_Dialog[None]):
     """Scrollable text with an OK button (help, chunk text, documents)."""
 
-    BINDINGS: ClassVar[list[BindingType]] = [Binding("escape", "dismiss", "Close")]
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding("escape", "dismiss", "Close"),
+        # Enter closes too, unless a button has focus (Button consumes it).
+        Binding("enter", "dismiss", "Close", show=False),
+    ]
 
     def __init__(
         self,
@@ -109,12 +131,19 @@ class MessageScreen(ModalScreen[None]):
     def compose(self) -> ComposeResult:
         with Vertical(classes="dialog dialog-wide dialog-tall"):
             yield Label(self._title, classes="dialog-title")
-            with VerticalScroll(classes="dialog-body"):
+            with VerticalScroll(classes="dialog-body", id="message-body"):
                 yield Static(self._body, markup=self._markup)
             with Horizontal(classes="dialog-buttons"):
                 if self._copy_text is not None:
                     yield Button("Copy", id="copy")
                 yield Button("OK", variant="primary", id="ok")
+
+    def on_mount(self) -> None:
+        super().on_mount()
+        # Long text (help, a whole document) is cut off on small terminals;
+        # with the scroll area focused the arrow and page keys scroll it at
+        # once instead of doing nothing on the OK button.
+        self.query_one("#message-body", VerticalScroll).focus()
 
     @on(Button.Pressed, "#ok")
     def _ok(self) -> None:
@@ -126,7 +155,7 @@ class MessageScreen(ModalScreen[None]):
         self.notify("Copied to the clipboard.")
 
 
-class ConfirmScreen(ModalScreen[bool]):
+class ConfirmScreen(_Dialog[bool]):
     BINDINGS: ClassVar[list[BindingType]] = [Binding("escape", "cancel", "Cancel")]
 
     def __init__(
@@ -145,6 +174,12 @@ class ConfirmScreen(ModalScreen[bool]):
                 yield Button(self._confirm_label, variant="error", id="confirm")
                 yield Button("Cancel", id="cancel")
 
+    def on_mount(self) -> None:
+        super().on_mount()
+        # These confirm irreversible actions (delete a vault, create one among
+        # documents); Enter straight after the button press must not do them.
+        self.query_one("#cancel", Button).focus()
+
     @on(Button.Pressed, "#confirm")
     def _confirm(self) -> None:
         self.dismiss(True)
@@ -154,7 +189,7 @@ class ConfirmScreen(ModalScreen[bool]):
         self.dismiss(False)
 
 
-class DirectoryPickerScreen(ModalScreen[str | None]):
+class DirectoryPickerScreen(_Dialog[str | None]):
     """Folder picker with the same rules as the web dialog (path fences)."""
 
     BINDINGS: ClassVar[list[BindingType]] = [Binding("escape", "cancel", "Cancel")]
@@ -183,6 +218,7 @@ class DirectoryPickerScreen(ModalScreen[str | None]):
                 yield Button("Cancel", id="cancel")
 
     def on_mount(self) -> None:
+        super().on_mount()
         self._load(self._start)
 
     @work(thread=True, exclusive=True, group="picker")
@@ -209,6 +245,8 @@ class DirectoryPickerScreen(ModalScreen[str | None]):
                 name if not self._current else f"{self._current.rstrip(sep)}{sep}{name}"
             )
             options.add_option(Option(name, id=full))
+        if options.option_count:
+            options.highlighted = 0
         options.focus()
 
     @on(Input.Submitted, "#picker-path")
@@ -235,7 +273,13 @@ class DirectoryPickerScreen(ModalScreen[str | None]):
         self.dismiss(None)
 
 
-class RetrievalFilterScreen(ModalScreen[dict[str, Any] | None]):
+FILTER_EXAMPLE = (
+    "| lambdaFilter[expression=\"'draft' not in "
+    "item['document'].get('content', '').lower()\"]"
+)
+
+
+class RetrievalFilterScreen(_Dialog[dict[str, Any] | None]):
     """Edit the open vault's retrieval filter script (web: Vaults & Documents)."""
 
     BINDINGS: ClassVar[list[BindingType]] = [Binding("escape", "cancel", "Cancel")]
@@ -254,8 +298,17 @@ class RetrievalFilterScreen(ModalScreen[dict[str, Any] | None]):
                 "enable/strict flags are stored on this machine.",
                 classes="muted",
             )
+            yield Static(
+                "Each result is {doc_id, score, document} — `item` in lambda/"
+                f"lambdaFilter expressions — e.g. {FILTER_EXAMPLE}",
+                classes="muted",
+                markup=False,
+            )
             yield ScriptArea(
-                v.get("script") or "", id="filter-script", classes="dialog-textarea"
+                v.get("script") or "",
+                id="filter-script",
+                classes="dialog-textarea",
+                placeholder=FILTER_EXAMPLE,
             )
             with Horizontal(classes="form-row"):
                 yield Checkbox(
@@ -380,7 +433,10 @@ class ResultsPane(Horizontal):
         options.clear_options()
         for index, result in enumerate(results):
             score = f"  [{result['score']}]" if result.get("score") else ""
-            options.add_option(Option(f"{result['filename']}{score}", id=str(index)))
+            # Numbered: several chunks of one file otherwise read as identical rows.
+            options.add_option(
+                Option(f"{index + 1}. {result['filename']}{score}", id=str(index))
+            )
         if results:
             options.highlighted = 0
             self._show_detail(0)
@@ -405,7 +461,10 @@ class ResultsPane(Horizontal):
         if path and cast("VaultApp", self.app).service.status()["show_source_paths"]:
             body = f"{path}\n\n{body}"
         if index not in self._chunks:
-            body += "\n\n(Enter: full chunk · o: source document · c: copy)"
+            body += (
+                "\n\n(Enter: full chunk · o: source document · c: copy · "
+                "Tab: scroll this pane)"
+            )
         self._set_detail(title, body)
 
     @on(OptionList.OptionHighlighted)
@@ -504,6 +563,24 @@ def _shorten_path(path: str, width: int) -> str:
     return "…" + path[-(width - 1) :]
 
 
+# The diagnostics are shared with the web app and name its pages; the
+# terminal has tabs instead.
+_PAGE_NAMES = {
+    "Vaults & Documents → Retrieval filter for this vault": "Vault tab (F2) → Retrieval filter",
+    "Vaults & Documents → Overwrite": "Vault tab (F2) → Overwrite existing index",
+    "Vaults & Documents page": "Vault tab (F2)",
+    "Vaults & Documents": "Vault tab (F2)",
+    "Settings page": "Settings tab (F6)",
+}
+
+
+def _tui_wording(text: str) -> str:
+    """Replace web-page names in shared status text with the tab names."""
+    for web, tui in _PAGE_NAMES.items():
+        text = text.replace(web, tui)
+    return text
+
+
 def _set_select(select: Select[str], value: str) -> None:
     """Select ``value`` if it is one of the options, else leave it blank."""
     if value and any(option_value == value for _, option_value in select._options):
@@ -550,6 +627,8 @@ class VaultApp(App[None]):
         self._resume = resume
         self._index_timer: Any = None
         self._index_message = ""
+        self._index_previous_chunks = 0
+        self._index_overwrite = False
         self._fulltext_timer: Any = None
         self._pending_confirm: dict[str, Any] | None = None
 
@@ -613,7 +692,11 @@ class VaultApp(App[None]):
             yield Button("Copy All", id="search-copy-all")
             yield Static("", id="search-note", classes="status-line")
         yield ResultsPane(
-            id="search-results", empty_text="Enter a query above (F3 focuses this tab)."
+            id="search-results",
+            empty_text=(
+                "Enter a query above (F3 focuses this tab). Semantic search ranks "
+                "by meaning; for an exact word use Keywords (F4)."
+            ),
         )
 
     def _compose_keywords_tab(self) -> ComposeResult:
@@ -641,6 +724,11 @@ class VaultApp(App[None]):
             yield Button("Ask", variant="primary", id="ask-go")
             yield Checkbox(
                 "Boost with keyword search", False, id="ask-keyword", classes="hidden"
+            )
+            yield Static(
+                "Keyword boost: build a full-text index on Keywords (F4)",
+                id="ask-keyword-hint",
+                classes="muted",
             )
             yield Button("Copy answer", id="ask-copy")
         with VerticalScroll(id="answer-pane"):
@@ -682,16 +770,16 @@ class VaultApp(App[None]):
             with Horizontal(classes="form-row"):
                 with Vertical(classes="form-col"):
                     yield Label("Chunk size", classes="field-label")
-                    yield Input(id="chunk-size", type="integer")
+                    yield Input(id="chunk-size", type="integer", valid_empty=True)
                 with Vertical(classes="form-col"):
                     yield Label("Shingle size", classes="field-label")
-                    yield Input(id="shingle-size", type="integer")
+                    yield Input(id="shingle-size", type="integer", valid_empty=True)
                 with Vertical(classes="form-col"):
                     yield Label("Shingle overlap", classes="field-label")
-                    yield Input(id="shingle-overlap", type="integer")
+                    yield Input(id="shingle-overlap", type="integer", valid_empty=True)
                 with Vertical(classes="form-col"):
                     yield Label("Ask result count", classes="field-label")
-                    yield Input(id="rag-result-limit", type="integer")
+                    yield Input(id="rag-result-limit", type="integer", valid_empty=True)
             with Horizontal(classes="button-row"):
                 yield Button("Save settings", variant="primary", id="settings-save")
             yield Label("Connections & credentials", classes="section-heading")
@@ -738,6 +826,10 @@ class VaultApp(App[None]):
                 self.notify(outcome["message"])
             else:
                 self.query_one("#tabs", TabbedContent).active = "tab-vault"
+                if self._resume:
+                    self.query_one("#index-progress", Static).update(
+                        "No recently used vault to resume — open or create one below."
+                    )
         else:
             self.notify(outcome["error"], severity="error", timeout=15)
             self.query_one("#tabs", TabbedContent).active = "tab-vault"
@@ -765,6 +857,7 @@ class VaultApp(App[None]):
         self.query_one("#vault-name", Static).update(
             _shorten_path(name, self.size.width // 2)
         )
+        has_vault = bool(status["vault_path"])
         facts = []
         if status["vault_path"]:
             facts.append(f"{status['chunks']} chunks")
@@ -780,7 +873,9 @@ class VaultApp(App[None]):
         self.query_one("#ask-keyword", Checkbox).set_class(
             not status["keyword_search_enabled"], "hidden"
         )
-        has_vault = bool(status["vault_path"])
+        self.query_one("#ask-keyword-hint", Static).set_class(
+            status["keyword_search_enabled"] or not has_vault, "hidden"
+        )
         self.query_one("#filter", Button).disabled = not has_vault
         self.query_one("#kw-build", Button).disabled = not has_vault
         self.query_one("#kw-build", Button).label = (
@@ -809,9 +904,14 @@ class VaultApp(App[None]):
         while every search returns duplicates.
         """
         chunks = self.service.status()["chunks"]
-        self.query_one("#index-progress", Static).update(
-            f"{self._index_message} The vault now holds {chunks} chunk(s)."
-        )
+        message = f"{self._index_message} The vault now holds {chunks} chunk(s)."
+        if not self._index_overwrite and self._index_previous_chunks:
+            message += (
+                f" Overwrite was off, so the {self._index_previous_chunks} chunk(s) "
+                "already in the vault were kept — any file indexed before is now "
+                "in it twice; tick Overwrite existing index to replace the index."
+            )
+        self.query_one("#index-progress", Static).update(message)
 
     def _notify_outcome(self, outcome: dict[str, Any]) -> None:
         if outcome["ok"]:
@@ -905,6 +1005,10 @@ class VaultApp(App[None]):
                     "Enter a folder or glob pattern to index.", severity="warning"
                 )
             return
+        status = self.service.status()
+        self._index_previous_chunks = (
+            status["chunks"] if status["vault_path"] == vault else 0
+        )
         self._start_indexing(source, vault, overwrite, confirm=False)
 
     @work(thread=True, exclusive=True, group="index-start")
@@ -930,9 +1034,15 @@ class VaultApp(App[None]):
         self._notify_outcome(outcome)
         self.refresh_status()
         self._load_recent_vaults()
+        progress = self.query_one("#index-progress", Static)
         if outcome["ok"]:
-            self.query_one("#index-progress", Static).update("Indexing started…")
+            self._index_overwrite = overwrite
+            progress.update("Indexing started…")
             self._index_timer = self.set_interval(1.0, self._poll_index)
+        else:
+            # Toasts expire; a refusal (path fence, unreadable folder) stays
+            # readable in the form.
+            progress.update(outcome["error"])
 
     @work(group="modal")
     async def _confirm_non_vault(
@@ -978,6 +1088,10 @@ class VaultApp(App[None]):
             progress.update(message)
             self.notify(message)
             self._index_message = message
+            # A replace run is a one-off: left ticked, the next "add these
+            # documents" run would silently wipe the vault (the web form
+            # comes back unticked as well).
+            self.query_one("#overwrite", Checkbox).value = False
         self._refresh_worker(report_total=snap["error"] is None)
 
     @on(Button.Pressed, "#open-vault")
@@ -1020,6 +1134,8 @@ class VaultApp(App[None]):
         self.refresh_status()
         self._load_recent_vaults()
         self._load_config_status(probe=False, download=False)
+        if not outcome["ok"]:
+            self.query_one("#index-progress", Static).update(outcome["error"])
         if outcome["ok"] and not outcome.get("created"):
             self.query_one("#tabs", TabbedContent).active = "tab-search"
             self.query_one("#search-query", Input).focus()
@@ -1201,6 +1317,8 @@ class VaultApp(App[None]):
         if not outcome["ok"]:
             meta.update("Error")
             answer.update(outcome["error"])
+            # The previous question's chunks are not this error's sources.
+            citations.show_results([], empty_text="No answer — see the message above.")
             self.notify(outcome["error"], severity="error", timeout=12)
             return
         meta.update(f"Answered by {outcome['answered_by']}")
@@ -1289,7 +1407,7 @@ class VaultApp(App[None]):
             self._load_settings_form()
             self.refresh_status()
             self.query_one("#config-status", Static).update("Checking (live probes)…")
-            self._load_config_status(probe=True, download=False)
+            self._load_config_status(probe=True, download=False, announce=True)
 
     @on(Button.Pressed, "#credentials-save")
     def _save_credentials(self) -> None:
@@ -1310,7 +1428,7 @@ class VaultApp(App[None]):
         if outcome["ok"]:
             self._load_settings_form()
             self.query_one("#config-status", Static).update("Checking (live probes)…")
-            self._load_config_status(probe=True, download=False)
+            self._load_config_status(probe=True, download=False, announce=True)
 
     @on(Button.Pressed, "#config-retest")
     def _retest(self) -> None:
@@ -1318,25 +1436,36 @@ class VaultApp(App[None]):
         self._load_config_status(probe=True, download=True)
 
     @work(thread=True, exclusive=True, group="config-status")
-    def _load_config_status(self, *, probe: bool, download: bool) -> None:
+    def _load_config_status(
+        self, *, probe: bool, download: bool, announce: bool = False
+    ) -> None:
         report = self.service.config_status(probe=probe, download=download)
-        self.call_from_thread(self._show_config_status, report, probe)
+        self.call_from_thread(self._show_config_status, report, probe, announce)
 
-    def _show_config_status(self, report: dict[str, Any], probed: bool) -> None:
+    def _show_config_status(
+        self, report: dict[str, Any], probed: bool, announce: bool = False
+    ) -> None:
         marks = {"ok": "OK ", "warn": "WARN", "error": "FAIL"}
-        lines = [
-            f"Overall: {str(report.get('overall', '')).upper()}"
-            + ("" if probed else " (not probed)")
-        ]
+        overall = str(report.get("overall", "")).upper()
+        lines = [f"Overall: {overall}" + ("" if probed else " (not probed)")]
         for check in report.get("checks", []):
             status = marks.get(str(check.get("status")), str(check.get("status")))
             value = f" — {check['value']}" if check.get("value") else ""
             lines.append(f"[{status}] {check.get('name', '')}{value}")
             if check.get("summary"):
-                lines.append(f"       {check['summary']}")
+                lines.append(f"       {_tui_wording(str(check['summary']))}")
             if check.get("fix"):
-                lines.append(f"       Fix: {check['fix']}")
+                lines.append(f"       Fix: {_tui_wording(str(check['fix']))}")
         self.query_one("#config-status", Static).update("\n".join(lines))
+        if announce and overall and overall != "OK":
+            # After Save the status panel is usually scrolled off the top of
+            # the tab; say where the problem is described.
+            self.notify(
+                f"Configuration status: {overall} — see the top of the Settings "
+                "tab (Shift+Tab to scroll up).",
+                severity="warning",
+                timeout=8,
+            )
 
 
 # --------------------------------------------------------------------------
