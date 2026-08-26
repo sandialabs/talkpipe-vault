@@ -2,6 +2,23 @@
 
 ## In Development
 
+### Terminal interface
+- New `vault-tui` (also `python -m talkpipe_vault.tui`): a Textual terminal
+  application with the web interface's functionality, for tmux/SSH sessions
+  and machines without a browser. It runs in-process — no `vault-server`
+  needed — driving the same state, pipelines, recent-vault list, settings and
+  credentials as the web app through a `VaultService` facade
+  (`talkpipe_vault/tui/service.py`); nothing in the web application changed.
+  Tabs: Vault (open/create, folder picker with the same path fences, indexing
+  with live progress, recent vaults with confirmed delete, retrieval-filter
+  editor with Validate), Search and Keywords (result list + detail pane: full
+  chunk on Enter, source document on `o`, copy on `c`, Copy All, custom
+  transform when a filter is active, full-text index build with progress), Ask
+  (answer, "Answered by" line, source chunks, keyword boost), Settings
+  (configuration status with Re-test, model settings, connections &
+  credentials). F1 help, F2–F6 tabs, Ctrl+R refresh; fits 80x24 and shrinks
+  its button rows under 26 lines. New dependency: `textual`.
+
 ### Security Hardening
 - The documents page's confirmation panel re-count now runs on the confined
   vault path as well: a `confirm_path` outside the vault fence is neither

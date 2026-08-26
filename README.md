@@ -125,6 +125,35 @@ A compose service and instructions for deriving your own customized image
 (different default models, extra packages) are in the
 [Advanced Guide](docs/ADVANCED.md#containers).
 
+## The terminal interface (`vault-tui`)
+
+Everything above is also available without a browser — in an SSH session, a
+tmux window, or on a headless machine — through `vault-tui`, installed
+alongside `vault-server`:
+
+```bash
+vault-tui ~/my-vault      # open (or create) a vault
+vault-tui --resume        # reopen the most recently used vault
+vault-tui                 # start on the Vault tab and choose one there
+```
+
+It runs in-process (no server needed) and uses the same vault files, recent
+list, model settings and credentials as the web interface, so you can switch
+between the two freely. Tabs mirror the web pages:
+
+| Key | Tab | What you can do |
+|-----|-----|-----------------|
+| `F2` | Vault | Open/create a vault, browse to a documents folder, index it (with progress), open or delete recent vaults, edit the retrieval filter |
+| `F3` | Search | Semantic search; the detail pane follows the highlighted result — `Enter` loads the full chunk, `o` shows/opens the source document, `c` copies the chunk, Copy All copies every result |
+| `F4` | Keywords | Full-text search (Whoosh syntax), and building/rebuilding the full-text index |
+| `F5` | Ask | Question answering with the answer, its "Answered by" line and the source chunks it used; optional keyword boost |
+| `F6` | Settings | Configuration status (Re-test), embedding/chat model settings, connections & credentials |
+| `F1` / `Ctrl+R` / `Ctrl+Q` | | Help / refresh pipelines / quit |
+
+`--show-source-paths` shows file paths in results, as for `vault-server`.
+Long operations (embedding, Ask, indexing) run in the background and report
+progress in the tab that started them.
+
 ## The web interface
 
 - **Vaults & Documents** — choose the documents to index and the vault to

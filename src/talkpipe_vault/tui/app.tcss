@@ -1,0 +1,318 @@
+/* TalkPipe Vault TUI — visual theme.
+   Deep-teal primary echoing the web app, soft panels, and a layout that
+   fits in 80x24: no vertical margins in the workspace, flexible panes. */
+
+Screen {
+    background: $surface;
+}
+
+.hidden {
+    display: none;
+}
+
+.muted {
+    color: $text-muted;
+}
+
+.status-line {
+    height: auto;
+    min-height: 1;
+    color: $text-muted;
+}
+
+.status-line.error {
+    color: $error;
+}
+
+.status-line.success {
+    color: $success;
+}
+
+.section-heading {
+    text-style: bold;
+    color: $primary;
+    margin-top: 1;
+}
+
+/* ---- Frame -------------------------------------------------------------- */
+
+#topbar {
+    height: 1;
+    background: $primary;
+    color: $text;
+    padding: 0 1;
+}
+
+#brand {
+    width: auto;
+    text-style: bold;
+}
+
+#vault-name {
+    width: 1fr;
+    text-align: center;
+    text-style: italic;
+}
+
+#vault-facts {
+    width: auto;
+}
+
+#tabs {
+    height: 1fr;
+}
+
+TabPane {
+    padding: 0 1;
+}
+
+/* ---- Forms ---------------------------------------------------------------- */
+
+.form-row {
+    height: auto;
+}
+
+.form-col {
+    width: 1fr;
+    height: auto;
+    margin-right: 1;
+}
+
+.field-label {
+    color: $text-muted;
+}
+
+Input, Select {
+    margin: 0;
+}
+
+.form-row Input {
+    width: 1fr;
+}
+
+.form-row Button {
+    width: auto;
+    min-width: 12;
+}
+
+.button-row {
+    height: 3;
+    align: left middle;
+}
+
+.button-row Button {
+    margin-right: 1;
+    min-width: 10;
+    width: auto;
+}
+
+.button-row Static {
+    width: auto;
+    height: 3;
+    content-align: left middle;
+    margin-left: 1;
+}
+
+Screen.compact .button-row Static {
+    height: 1;
+}
+
+.button-row Checkbox {
+    width: auto;
+}
+
+Button.narrow-hide {
+    display: block;
+}
+
+Checkbox {
+    height: auto;
+    margin: 0;
+    padding: 0 1;
+    border: none;
+    background: transparent;
+}
+
+/* ---- Vault tab -------------------------------------------------------------- */
+
+#recent-vaults {
+    height: 1fr;
+    min-height: 3;
+    border: round $primary-darken-2;
+    background: $panel;
+}
+
+#index-progress {
+    height: auto;
+    color: $warning;
+}
+
+/* ---- Search / Keywords -------------------------------------------------------- */
+
+.results-pane {
+    height: 1fr;
+}
+
+.results-list {
+    width: 2fr;
+    height: 1fr;
+    max-height: 100%;
+    border: round $primary-darken-2;
+    background: $panel;
+}
+
+.result-detail {
+    width: 3fr;
+    height: 1fr;
+    border: round $secondary;
+    background: $panel;
+    padding: 0 1;
+}
+
+.result-detail-title {
+    text-style: bold;
+    color: $secondary;
+}
+
+/* ---- Ask ------------------------------------------------------------------------ */
+
+#question {
+    height: 3;
+    min-height: 3;
+    max-height: 5;
+    border: round $primary-darken-1;
+    background: $panel;
+}
+
+#question:focus {
+    border: round $primary;
+}
+
+#answer-pane {
+    height: 3fr;
+    border: round $secondary;
+    background: $panel;
+    padding: 0 1;
+}
+
+#answer-meta {
+    color: $text-muted;
+}
+
+#citations {
+    height: 2fr;
+    min-height: 4;
+}
+
+/* ---- Settings ------------------------------------------------------------------ */
+
+#settings-scroll {
+    height: 1fr;
+}
+
+#config-status {
+    height: auto;
+    border: round $primary-darken-2;
+    background: $panel;
+    padding: 0 1;
+}
+
+/* ---- Compact terminals ---------------------------------------------------------- */
+
+Screen.compact .button-row {
+    height: 1;
+}
+
+Screen.compact .button-row Button {
+    min-width: 8;
+    border: none;
+    height: 1;
+}
+
+Screen.compact #citations {
+    min-height: 3;
+}
+
+/* ---- Dialogs --------------------------------------------------------------------- */
+
+ModalScreen {
+    align: center middle;
+    background: $background 60%;
+}
+
+.dialog {
+    width: 70;
+    max-width: 100%;
+    height: auto;
+    max-height: 95%;
+    padding: 1 2;
+    border: round $primary;
+    background: $panel;
+}
+
+.dialog-wide {
+    width: 96;
+}
+
+.dialog-tall {
+    height: 90%;
+}
+
+.dialog-tall .dialog-body {
+    height: 1fr;
+    max-height: 100%;
+}
+
+.dialog-title {
+    text-style: bold;
+    color: $primary;
+    margin-bottom: 1;
+}
+
+.dialog-body {
+    height: auto;
+    max-height: 30;
+    margin-bottom: 1;
+}
+
+.dialog Label {
+    color: $text-muted;
+}
+
+.dialog-buttons {
+    height: auto;
+    margin-top: 1;
+    align: left middle;
+}
+
+.dialog-buttons Button {
+    margin-right: 1;
+}
+
+.dialog-textarea {
+    height: 1fr;
+    min-height: 3;
+    max-height: 12;
+}
+
+.dialog OptionList {
+    height: auto;
+    max-height: 20;
+    border: round $primary-darken-2;
+    background: $surface;
+}
+
+OptionList > .option-list--option-highlighted {
+    background: $primary;
+    color: $text;
+}
+
+#picker-list {
+    height: 1fr;
+    min-height: 5;
+    max-height: 100%;
+}
+
+#recent-vaults {
+    max-height: 100%;
+}
