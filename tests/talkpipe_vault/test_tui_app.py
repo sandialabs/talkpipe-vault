@@ -26,6 +26,7 @@ from talkpipe_vault.tui.app import (
     MessageScreen,
     QuestionArea,
     ResultsPane,
+    RetrievalFilterScreen,
     ScriptArea,
     VaultApp,
     _shorten_path,
@@ -639,6 +640,36 @@ async def test_filter_dialog_shows_an_example(sample_vault):
         await _settle(pilot)
 
 
+async def test_filter_dialog_help_carries_the_web_directions(sample_vault):
+    app = VaultApp(VaultService(), vault_path=sample_vault)
+    async with app.run_test(size=SIZE) as pilot:
+        await _wait_workers(app, pilot)
+        await pilot.press("f2")
+        await _settle(pilot)
+        app.query_one("#filter", Button).press()
+        await _settle(pilot)
+        app.screen.query_one("#filter-help", Button).press()
+        await _settle(pilot)
+        assert isinstance(app.screen, MessageScreen)
+        body = " ".join(_text(w) for w in app.screen.query(Static))
+        # Everything the web interface's "How to write a filter" section says.
+        for phrase in (
+            '"doc_id"',
+            "item['score'] > 0.2",
+            'isNotIn[field="document.content"',
+            'isIn[field="document.source"',
+            "case-sensitive",
+            "INPUT FROM",
+            "Strict",
+        ):
+            assert phrase in body
+        await pilot.press("escape")
+        await _settle(pilot)
+        assert isinstance(app.screen, RetrievalFilterScreen)
+        await pilot.press("escape")
+        await _settle(pilot)
+
+
 async def test_settings_empty_number_fields_are_valid(sample_vault):
     app = VaultApp(VaultService(), vault_path=sample_vault)
     async with app.run_test(size=SIZE) as pilot:
@@ -715,6 +746,7 @@ async def test_small_terminal_keeps_every_button_on_screen(tmp_path):
             "#save",
             "#validate",
             "#remove",
+            "#filter-help",
             "#cancel",
         ):
             assert _inside(app, app.screen.query_one(widget_id)), widget_id

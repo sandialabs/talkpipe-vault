@@ -287,6 +287,80 @@ FILTER_EXAMPLE = (
     "item['document'].get('content', '').lower()\"]"
 )
 
+# The web interface's "How to write a filter" section, as plain text (the
+# recipes contain square brackets, so this is shown with markup off).
+FILTER_HELP_TEXT = """\
+(This text scrolls: PageDown / arrow keys.)
+
+WHAT A FILTER IS
+  A ChatterLang script that filters or transforms the results retrieved
+  from the open vault before they reach the Ask answer. It applies to
+  this vault only; your other vaults are unaffected. The script is
+  stored in the vault's folder and travels with it; whether it runs is
+  decided here, on this machine:
+    Enabled  a filter never runs until enabled here — review scripts
+             that arrived with a copied vault.
+    Strict   if the filter fails while answering, fail the question
+             instead of answering from unfiltered results (tick this
+             if your filter removes sensitive content).
+
+HOW RESULTS FLOW THROUGH IT
+  Each retrieved result flows through your script one at a time; emit
+  it to keep it, drop it to filter it, modify it to transform it. Every
+  result is a dictionary shaped like:
+
+    {"doc_id": "…", "score": 0.87,
+     "document": {"content": "…", "source": "…", "title": "…"}}
+
+  In lambdaFilter/lambda expressions the result is `item`, as
+  everywhere in TalkPipe — item['document'], item['score'],
+  item['doc_id']. (Because the result is a dictionary, TalkPipe also
+  exposes its top-level keys as bare names, so `document` and `score`
+  work too.)
+
+STARTER RECIPES
+  Drop results whose content mentions a term:
+    | lambdaFilter[expression="'some term' not in item['document'].get('content', '').lower()"]
+
+  Drop results from a folder, by source path:
+    | lambdaFilter[expression="'/archive/' not in item['document'].get('source', '')"]
+
+  Drop low-scoring results (only useful when your embedding backend
+  reports similarity scores):
+    | lambdaFilter[expression="item['score'] > 0.2"]
+
+  For the common case — is this text inside that field? — isIn and
+  isNotIn say the same thing without an expression. Name the field
+  with a dotted path (document.content, document.source) and the text
+  to look for:
+
+  Drop results whose content mentions a term (the first recipe above,
+  without the expression):
+    | isNotIn[field="document.content", value="some term"]
+
+  Keep only results whose source path contains a folder:
+    | isIn[field="document.source", value="/notes/"]
+
+  isIn/isNotIn match exactly, so they are case-sensitive, and the
+  named field has to exist on every result — a result missing it makes
+  the script fail, which means unfiltered results (or, with Strict
+  ticked, a failed question). Reach for lambdaFilter when the field
+  may be absent (.get('source', '')), when the match should ignore
+  case (.lower()), or when the test is anything more than containment.
+
+WHAT ELSE IS ALLOWED
+  Any registered ChatterLang segment works — including LLM transforms —
+  but the script must be a single pipeline of segments: no INPUT FROM
+  source, loops, or forks. Use Validate to compile the script without
+  saving it.
+
+WHERE IT RUNS
+  When active, the filter runs on Ask retrieval for this vault (keyword
+  and semantic streams are filtered independently, then merged) and
+  can be applied on the Search and Keywords tabs with their "Apply
+  retrieval filter" checkbox.
+"""
+
 
 class RetrievalFilterScreen(_Dialog[dict[str, Any] | None]):
     """Edit the open vault's retrieval filter script (web: Vaults & Documents)."""
@@ -309,7 +383,8 @@ class RetrievalFilterScreen(_Dialog[dict[str, Any] | None]):
             )
             yield Static(
                 "Each result is {doc_id, score, document} — `item` in lambda/"
-                f"lambdaFilter expressions — e.g. {FILTER_EXAMPLE}",
+                f"lambdaFilter expressions — e.g. {FILTER_EXAMPLE}\n"
+                "Help explains the result shape, isIn/isNotIn, and more recipes.",
                 classes="muted dialog-help",
                 markup=False,
             )
@@ -340,7 +415,14 @@ class RetrievalFilterScreen(_Dialog[dict[str, Any] | None]):
                 yield Button("Save", variant="primary", id="save")
                 yield Button("Validate", id="validate")
                 yield Button("Remove", variant="error", id="remove")
+                yield Button("Help", id="filter-help")
                 yield Button("Cancel", id="cancel")
+
+    @on(Button.Pressed, "#filter-help")
+    def _help(self) -> None:
+        self.app.push_screen(
+            MessageScreen("How to write a filter", FILTER_HELP_TEXT, markup=False)
+        )
 
     def _values(self, action: str) -> dict[str, Any]:
         return {
