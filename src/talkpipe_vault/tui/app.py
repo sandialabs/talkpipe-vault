@@ -10,6 +10,7 @@ responsive while embeddings, LLM calls, and index builds run.
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -1518,6 +1519,28 @@ class VaultApp(App[None]):
 # --------------------------------------------------------------------------
 
 
+def prepare_process_for_textual() -> None:
+    """Do the one-time process setup that must not happen under Textual.
+
+    The first tqdm progress bar in a process creates a multiprocessing lock,
+    which registers with multiprocessing's resource tracker, which spawns a
+    helper process. model2vec wraps its embedding batches in tqdm, so the
+    first embedding (the Settings probe, a search, or an indexing run) would
+    trigger that spawn from a worker thread while Textual owns the terminal —
+    and on Python 3.14 that fails with "bad value(s) in fds_to_keep", making
+    a perfectly good cached model report as broken. Creating the lock here,
+    before the app starts, moves the spawn to a normal context.
+    """
+    try:
+        from tqdm import tqdm
+    except ImportError:  # pragma: no cover - tqdm ships with model2vec
+        return
+    try:
+        tqdm.get_lock()
+    except Exception:  # pragma: no cover - never let setup abort the app
+        logging.getLogger(__name__).debug("tqdm lock setup failed", exc_info=True)
+
+
 def main(argv: list[str] | None = None) -> None:
     """Console entry point: ``vault-tui``."""
     from talkpipe.util.config import configure_logger
@@ -1557,6 +1580,7 @@ def main(argv: list[str] | None = None) -> None:
     )
     args = parser.parse_args(argv)
     configure_logger("root:ERROR")
+    prepare_process_for_textual()
     service = VaultService(show_source_paths=args.show_source_paths)
     app = VaultApp(service, vault_path=args.vault_path, resume=args.resume)
     try:

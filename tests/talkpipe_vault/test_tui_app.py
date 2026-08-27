@@ -809,3 +809,35 @@ async def test_config_status_shows_probe_detail(sample_vault, monkeypatch):
         await _wait_workers(app, pilot)
         text = _text(app.query_one("#config-status", Static))
         assert "Detail: probe did not finish within 20s" in text
+
+
+def test_prepare_process_creates_tqdm_lock_before_the_app(monkeypatch):
+    """The lock (and multiprocessing's resource tracker) must exist before
+    Textual owns the terminal; see prepare_process_for_textual."""
+    from tqdm import tqdm
+
+    from talkpipe_vault.tui.app import prepare_process_for_textual
+
+    # tqdm only builds the lock when the attribute is absent.
+    monkeypatch.delattr(tqdm, "_lock", raising=False)
+    prepare_process_for_textual()
+    assert getattr(tqdm, "_lock", None) is not None
+
+
+def test_main_prepares_the_process_before_running(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(
+        "talkpipe_vault.tui.app.prepare_process_for_textual",
+        lambda: calls.append("prepared"),
+    )
+
+    class FakeApp:
+        def __init__(self, service, *, vault_path, resume):
+            calls.append("constructed")
+
+        def run(self):
+            calls.append("ran")
+
+    monkeypatch.setattr("talkpipe_vault.tui.app.VaultApp", FakeApp)
+    main([str(tmp_path / "v")])
+    assert calls == ["prepared", "constructed", "ran"]
