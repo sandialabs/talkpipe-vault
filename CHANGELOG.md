@@ -3,6 +3,7 @@
 ## In Development
 
 ### Terminal interface
+- On Python 3.14 the first embedding inside `vault-tui` (Settings probe, search, or indexing) failed with `bad value(s) in fds_to_keep`, so a perfectly good cached model was reported as "failed to produce a test embedding": model2vec wraps its batches in tqdm, whose first use creates a multiprocessing lock and spawns the resource-tracker process, which cannot be launched from a worker thread once Textual owns the terminal. The app now creates that lock before starting.
 - The Settings tab's configuration status now shows each check's detail line (probe timeout, cache path, exception text), as the web Settings page does — previously a cached embedding model that timed out during the probe was reported only as "failed to produce a test embedding", with no way to tell a slow load from a broken model.
 - New `vault-tui` (also `python -m talkpipe_vault.tui`): a Textual terminal
   application with the web interface's functionality, for tmux/SSH sessions

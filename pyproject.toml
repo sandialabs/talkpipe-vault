@@ -198,6 +198,7 @@ enable_error_code = ["ignore-without-code"]
 [[tool.mypy.overrides]]
 module = [
     "parsy.*",
+    "tqdm.*",
     "uvicorn.*",
     "watchdog.*",
 ]
