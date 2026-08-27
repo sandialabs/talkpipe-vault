@@ -784,3 +784,28 @@ async def test_stale_full_text_index_is_called_out(tmp_path):
         assert "out of date" in note
         body = _text(app.query_one("#kw-results-detail-body", Static))
         assert "Rebuild full-text index" in body
+
+
+async def test_config_status_shows_probe_detail(sample_vault, monkeypatch):
+    """The detail line (timeout, cache path, exception text) must be visible."""
+    monkeypatch.setattr(
+        "talkpipe_vault.tui.service.VaultService.config_status",
+        lambda self, **_kw: {
+            "overall": "error",
+            "checks": [
+                {
+                    "name": "Embeddings provider",
+                    "status": "error",
+                    "value": "model2vec / m",
+                    "summary": "present locally but failed to produce a test embedding.",
+                    "fix": "re-download it",
+                    "detail": "probe did not finish within 20s",
+                }
+            ],
+        },
+    )
+    app = VaultApp(VaultService(), vault_path=sample_vault)
+    async with app.run_test(size=SIZE) as pilot:
+        await _wait_workers(app, pilot)
+        text = _text(app.query_one("#config-status", Static))
+        assert "Detail: probe did not finish within 20s" in text

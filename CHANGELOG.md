@@ -3,6 +3,7 @@
 ## In Development
 
 ### Terminal interface
+- The Settings tab's configuration status now shows each check's detail line (probe timeout, cache path, exception text), as the web Settings page does — previously a cached embedding model that timed out during the probe was reported only as "failed to produce a test embedding", with no way to tell a slow load from a broken model.
 - New `vault-tui` (also `python -m talkpipe_vault.tui`): a Textual terminal
   application with the web interface's functionality, for tmux/SSH sessions
   and machines without a browser. It runs in-process — no `vault-server`

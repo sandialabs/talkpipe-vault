@@ -1497,6 +1497,10 @@ class VaultApp(App[None]):
                 lines.append(f"       {_tui_wording(str(check['summary']))}")
             if check.get("fix"):
                 lines.append(f"       Fix: {_tui_wording(str(check['fix']))}")
+            if check.get("detail"):
+                # The probe's own words (timeout, cache path, exception): the
+                # only way to tell a slow load from a broken model.
+                lines.append(f"       Detail: {check['detail']}")
         self.query_one("#config-status", Static).update("\n".join(lines))
         if announce and overall and overall != "OK":
             # After Save the status panel is usually scrolled off the top of
