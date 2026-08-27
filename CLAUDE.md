@@ -88,7 +88,11 @@ synchronous and blocking; the app runs them in `@work(thread=True)` workers and 
 widgets via `call_from_thread`. Tests (`tests/talkpipe_vault/test_tui_*.py`) exercise the
 service against a real docs-table vault and the app with Textual's `Pilot`. Bindings for
 tabs/quit are `priority=True` (TextArea claims keys), labels are plain text (emoji width is
-unreliable in terminals), and the screen gets a `compact` class under 26 rows.
+unreliable in terminals), and the screen gets a `compact` class under 26 rows. The Ask
+answer is rendered with Textual's `Markdown` widget (LLM output is Markdown: tables,
+headings, emphasis); "Copy answer" copies the model's source text, kept in
+`_answer_text`, and non-Markdown prose shown in that widget (errors, the initial hint)
+goes through `_plain_text_as_markdown` so it appears verbatim.
 
 ## Model Configuration Precedence (highest to lowest)
 

@@ -13,6 +13,7 @@ from textual.widgets import (
     Button,
     Checkbox,
     Input,
+    Markdown,
     OptionList,
     Select,
     Static,
@@ -28,6 +29,7 @@ from talkpipe_vault.tui.app import (
     ResultsPane,
     ScriptArea,
     VaultApp,
+    _plain_text_as_markdown,
     _shorten_path,
     main,
 )
@@ -75,6 +77,11 @@ async def _wait_workers(app, pilot, timeout: float = 120.0) -> None:
 
 def _text(widget) -> str:
     return str(widget.content)
+
+
+def _answer_source(app) -> str:
+    """The Markdown the answer pane is currently rendering."""
+    return app.query_one("#answer", Markdown).source
 
 
 async def test_opens_vault_searches_and_shows_chunk(sample_vault):
@@ -163,13 +170,52 @@ async def test_ask_shows_answer_and_citations(sample_vault, monkeypatch):
         app.query_one("#question", TextArea).focus()
         await pilot.press("enter")  # Enter asks
         await _wait_workers(app, pilot)
-        assert "The answer to 'What is this?'" in _text(
-            app.query_one("#answer", Static)
-        )
+        assert "The answer to 'What is this?'" in _answer_source(app)
         assert "Answered by" in _text(app.query_one("#answer-meta", Static))
         assert len(app.query_one("#citations", ResultsPane).results) == 3
         app.query_one("#ask-copy", Button).press()
         await _settle(pilot)
+
+
+async def test_ask_renders_markdown_answer(sample_vault, monkeypatch):
+    """LLM answers are Markdown: tables and headings get laid out, and the
+    copy button still hands back the source text the model wrote."""
+    answer = (
+        "## Summary\n\n| Item | Count |\n|---|---|\n| apples | 3 |\n| pears | *5* |\n"
+    )
+    app = VaultApp(VaultService(), vault_path=sample_vault)
+    copied: list[str] = []
+    async with app.run_test(size=SIZE) as pilot:
+        await _wait_workers(app, pilot)
+        monkeypatch.setattr(app.service.state, "chat_pipeline", lambda q: answer)
+        monkeypatch.setattr(app.service.state, "last_refresh_time", float("inf"))
+        monkeypatch.setattr(app, "copy_to_clipboard", copied.append)
+        app.query_one("#question", TextArea).load_text("How many?")
+        app.query_one("#ask-go", Button).press()
+        await _wait_workers(app, pilot)
+        await _settle(pilot)
+        markdown = app.query_one("#answer", Markdown)
+        assert markdown.source == answer
+        # Rendered as blocks (a heading and a table), not as one raw string.
+        kinds = {type(block).__name__ for block in markdown.query("MarkdownBlock")}
+        assert "MarkdownH2" in kinds
+        assert "MarkdownTable" in kinds
+        app.query_one("#ask-copy", Button).press()
+        await _settle(pilot)
+        assert copied == [answer]
+
+
+async def test_plain_text_as_markdown_keeps_prose_verbatim():
+    """Error text and hints go through the Markdown widget unchanged."""
+    from markdown_it import MarkdownIt
+
+    text = "Set TALKPIPE_OLLAMA_SERVER_URL in ~/.talkpipe.toml\n*not* a list: - x"
+    html = MarkdownIt("gfm-like").render(_plain_text_as_markdown(text))
+    assert "<em>" not in html
+    assert "<li>" not in html
+    assert "TALKPIPE_OLLAMA_SERVER_URL in ~/.talkpipe.toml" in html
+    assert "*not* a list: - x" in html
+    assert "<br" in html  # the newline survives as a hard line break
 
 
 async def test_ask_error_is_shown(sample_vault, monkeypatch):
@@ -185,8 +231,8 @@ async def test_ask_error_is_shown(sample_vault, monkeypatch):
         app.query_one("#question", TextArea).load_text("hello")
         app.query_one("#ask-go", Button).press()
         await _wait_workers(app, pilot)
-        assert "connection refused" in _text(app.query_one("#answer", Static))
-        assert "Settings" in _text(app.query_one("#answer", Static))
+        assert "connection refused" in _answer_source(app)
+        assert "Settings" in _answer_source(app)
 
 
 async def test_starts_on_vault_tab_without_vault_and_creates_one(tmp_path):

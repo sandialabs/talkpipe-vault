@@ -27,6 +27,7 @@ from textual.widgets import (
     Footer,
     Input,
     Label,
+    Markdown,
     OptionList,
     Select,
     Static,
@@ -590,6 +591,22 @@ def _tui_wording(text: str) -> str:
     return text
 
 
+_MARKDOWN_PUNCTUATION = set(r"\`*_{}[]()#+-.!|<>~")
+
+
+def _plain_text_as_markdown(text: str) -> str:
+    """Escape ``text`` so a Markdown widget shows it verbatim.
+
+    Backslash-escapes every ASCII punctuation character Markdown could
+    interpret and turns each newline into a hard line break, so error
+    messages and hints keep their underscores, asterisks, and line layout.
+    """
+    escaped = "".join(
+        f"\\{char}" if char in _MARKDOWN_PUNCTUATION else char for char in text
+    )
+    return "  \n".join(escaped.split("\n"))
+
+
 def _set_select(select: Select[str], value: str) -> None:
     """Select ``value`` if it is one of the options, else leave it blank."""
     if value and any(option_value == value for _, option_value in select._options):
@@ -640,6 +657,8 @@ class VaultApp(App[None]):
         self._index_overwrite = False
         self._fulltext_timer: Any = None
         self._pending_confirm: dict[str, Any] | None = None
+        # The last answer as the model wrote it — what "Copy answer" copies.
+        self._answer_text = ""
 
     # -- layout ----------------------------------------------------------------------
 
@@ -749,11 +768,16 @@ class VaultApp(App[None]):
             yield Button("Copy answer", id="ask-copy")
         with VerticalScroll(id="answer-pane"):
             yield Static("", id="answer-meta")
-            yield Static(
-                "Ask a focused question, like: What did I write about deployment?\n"
-                "Type it above and press Ask (or Enter).",
+            # Answers are LLM output and usually Markdown (tables, headings,
+            # emphasis); the Markdown widget lays them out instead of showing
+            # the raw pipes and asterisks.
+            yield Markdown(
+                _plain_text_as_markdown(
+                    "Ask a focused question, like: What did I write about "
+                    "deployment?\nType it above and press Ask (or Enter)."
+                ),
                 id="answer",
-                markup=False,
+                open_links=False,
             )
         yield Label("Source chunks", classes="field-label")
         yield ResultsPane(
@@ -1327,7 +1351,8 @@ class VaultApp(App[None]):
             self.notify("Enter a question.", severity="warning")
             return
         self.query_one("#answer-meta", Static).update("Thinking…")
-        self.query_one("#answer", Static).update("")
+        self._answer_text = ""
+        self.query_one("#answer", Markdown).update("")
         self._ask_worker(question, self.query_one("#ask-keyword", Checkbox).value)
 
     def on_key(self, event: Any) -> None:
@@ -1353,25 +1378,30 @@ class VaultApp(App[None]):
 
     def _show_answer(self, outcome: dict[str, Any]) -> None:
         meta = self.query_one("#answer-meta", Static)
-        answer = self.query_one("#answer", Static)
+        answer = self.query_one("#answer", Markdown)
         citations = self.query_one("#citations", ResultsPane)
         self.refresh_status()
         if not outcome["ok"]:
             meta.update("Error")
-            answer.update(outcome["error"])
+            self._answer_text = ""
+            # Error text is prose, not Markdown: show it verbatim.
+            answer.update(_plain_text_as_markdown(outcome["error"]))
             # The previous question's chunks are not this error's sources.
             citations.show_results([], empty_text="No answer — see the message above.")
             self.notify(outcome["error"], severity="error", timeout=12)
             return
         meta.update(f"Answered by {outcome['answered_by']}")
-        answer.update(outcome["answer"])
+        self._answer_text = str(outcome["answer"])
+        answer.update(self._answer_text)
         citations.show_results(
             outcome["citations"], empty_text="No source chunks were retrieved."
         )
 
     @on(Button.Pressed, "#ask-copy")
     def _copy_answer(self) -> None:
-        text = str(self.query_one("#answer", Static).content)
+        # Copy the answer as the model wrote it (Markdown source), not the
+        # rendered layout, so it pastes cleanly into notes and editors.
+        text = self._answer_text
         if not text.strip():
             self.notify("Nothing to copy yet.", severity="warning")
             return
