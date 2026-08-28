@@ -61,6 +61,8 @@ HELP_TEXT = """\
       "Overwrite existing index" to replace it (re-indexing the same
       folder without it duplicates chunks). Adding documents does not
       update the full-text index — rebuild it on the Keywords tab.
+      Recent vaults: a click or Up/Down selects; Enter or a double
+      click opens; Open/Delete selected act on the selection.
   F3  Search (semantic)        F4  Keywords (full-text)
   F5  Ask: question answering with citations. Enter in the question
       box asks; the box wraps long questions.
@@ -487,6 +489,28 @@ class QuestionArea(ScriptArea):
         await super()._on_key(event)
 
 
+class RecentVaultList(OptionList):
+    """OptionList whose single click only highlights; double click selects.
+
+    The stock OptionList selects on every click, which on the recent-vaults
+    list means opening the vault (and jumping to the Search tab) before the
+    user can pick it for Delete. Here a click just moves the highlight so
+    the arrow keys and the Open/Delete buttons act on it; Enter or a double
+    click opens.
+    """
+
+    async def _on_click(self, event: events.Click) -> None:
+        # Textual also runs OptionList's own _on_click (handlers fire down the
+        # MRO); prevent_default stops it from selecting on the single click.
+        event.prevent_default()
+        clicked_option: int | None = event.style.meta.get("option")
+        if clicked_option is None or self._options[clicked_option].disabled:
+            return
+        self.highlighted = clicked_option
+        if event.chain >= 2:
+            self.action_select()
+
+
 # --------------------------------------------------------------------------
 # Result list + detail pane (shared by Search, Keywords, Ask citations)
 # --------------------------------------------------------------------------
@@ -786,10 +810,11 @@ class VaultApp(App[None]):
             yield Checkbox("Overwrite existing index", False, id="overwrite")
         yield Static("", id="index-progress", markup=False)
         yield Label(
-            "Recent vaults (Enter: open · Delete button removes files)",
+            "Recent vaults (click or arrows: select · Enter or double-click: open "
+            "· Delete button removes files)",
             classes="field-label",
         )
-        yield OptionList(id="recent-vaults")
+        yield RecentVaultList(id="recent-vaults")
         with Horizontal(classes="button-row"):
             yield Button("Open selected", id="open-recent")
             yield Button("Delete selected", variant="error", id="delete-recent")
