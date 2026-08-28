@@ -129,15 +129,26 @@ A compose service and instructions for deriving your own customized image
 
 Everything above is also available without a browser — in an SSH session, a
 tmux window, or on a headless machine — through `vault-tui`, installed
-alongside `vault-server`. It is new and not yet in a PyPI release: install
-from source ([Development setup](docs/ADVANCED.md#development-setup)) to
-get it.
+alongside `vault-server`. It is new and not yet in a PyPI release, so install
+it from source — either straight from the repository:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate      # Windows: .venv\Scripts\activate
+pip install "git+https://github.com/sandialabs/talkpipe-vault.git"
+```
+
+or from a clone with `pip install .` (contributors use the editable
+`pip install -e ".[dev]"` in [Development setup](docs/ADVANCED.md#development-setup)).
 
 ```bash
 vault-tui ~/my-vault      # open (or create) a vault
 vault-tui --resume        # reopen the most recently used vault
 vault-tui                 # start on the Vault tab and choose one there
 ```
+
+Enter in either path field on the Vault tab runs **Index documents** (it
+opens the vault when only the vault path is filled).
 
 It runs in-process (no server needed) and uses the same vault files, recent
 list, model settings and credentials as the web interface, so you can switch
@@ -168,7 +179,9 @@ shows "keywords out of date" until you rebuild it on the Keywords tab, and
 a keyword search that finds nothing says so. Long chunk text and long answers scroll once you `Tab` into
 their pane. The **Retrieval filter** button on the Vault tab edits the same
 per-vault ChatterLang script as the web page, with an example in the
-dialog; the script syntax is in the Advanced Guide under
+dialog (its **Help** button adds the result shape and more recipes); a
+saved filter does nothing until you tick **Enabled on this machine**. The
+script syntax is in the Advanced Guide under
 [Writing a retrieval filter](docs/ADVANCED.md#writing-a-retrieval-filter).
 
 ## The web interface

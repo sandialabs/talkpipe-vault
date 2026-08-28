@@ -351,6 +351,105 @@ async def test_directory_picker_lists_folders(tmp_path):
         assert app.query_one("#source-path", Input).value == str(tmp_path / "alpha")
 
 
+async def test_directory_picker_notes_an_empty_folder(tmp_path):
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    app = VaultApp(VaultService())
+    async with app.run_test(size=SIZE) as pilot:
+        await _wait_workers(app, pilot)
+        app.query_one("#source-browse", Button).press()
+        await _wait_workers(app, pilot)
+        assert isinstance(app.screen, DirectoryPickerScreen)
+        app.screen.query_one("#picker-path", Input).value = str(empty)
+        await pilot.press("enter")
+        await _wait_workers(app, pilot)
+        options = app.screen.query_one("#picker-list", OptionList)
+        assert options.option_count == 1
+        assert options.get_option_at_index(0).disabled
+        assert "no sub-folders" in options.get_option_at_index(0).prompt
+
+
+async def test_vault_suggestion_tracks_the_documents_path(tmp_path):
+    app = VaultApp(VaultService())
+    async with app.run_test(size=SIZE) as pilot:
+        await _wait_workers(app, pilot)
+        source = app.query_one("#source-path", Input)
+        vault = app.query_one("#vault-path", Input)
+        # The path is built up a keystroke at a time; the suggestion has to
+        # follow it, not freeze on the first change.
+        (tmp_path / "n").mkdir()
+        source.value = str(tmp_path / "n")
+        await _settle(pilot)
+        first = vault.value
+        assert first
+        (tmp_path / "notes").mkdir()
+        source.value = str(tmp_path / "notes")
+        await _settle(pilot)
+        assert vault.value != first
+        assert vault.value == app.service.suggest_vault_path(str(tmp_path / "notes"))
+        # Once the user types their own vault path, further edits leave it be.
+        vault.value = str(tmp_path / "chosen-vault")
+        source.value = str(tmp_path / "n")
+        await _settle(pilot)
+        assert vault.value == str(tmp_path / "chosen-vault")
+
+
+async def test_empty_vault_opens_on_the_vault_tab_with_a_hint(tmp_path):
+    app = VaultApp(VaultService(), vault_path=str(tmp_path / "fresh-vault"))
+    async with app.run_test(size=SIZE) as pilot:
+        await _wait_workers(app, pilot)
+        assert app.service.vault_path == str(tmp_path / "fresh-vault")
+        assert app.service.status()["chunks"] == 0
+        assert app.query_one("#tabs").active == "tab-vault"
+        assert "empty" in _text(app.query_one("#index-progress", Static)).lower()
+
+
+async def test_config_status_refreshes_after_indexing(tmp_path):
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "note.txt").write_text("Terminal interfaces are handy over ssh. " * 8)
+    app = VaultApp(VaultService(), vault_path=str(tmp_path / "vault"))
+    async with app.run_test(size=SIZE) as pilot:
+        await _wait_workers(app, pilot)
+        app.query_one("#source-path", Input).value = str(docs)
+        app.query_one("#index", Button).press()
+        for _ in range(600):
+            await pilot.pause(0.2)
+            snap = app.service.index_status()
+            if (
+                app._index_timer is None
+                and not snap["running"]
+                and (snap["message"] or snap["error"])
+            ):
+                break
+        await _wait_workers(app, pilot)
+        status = _text(app.query_one("#config-status", Static))
+        # The embedding↔index check must reflect the run that just finished,
+        # not still say the vault has nothing indexed.
+        assert "No documents have been indexed" not in status
+        assert "matches the one this vault was indexed with" in status
+
+
+async def test_filter_validate_error_is_bounded(sample_vault):
+    app = VaultApp(VaultService(), vault_path=sample_vault)
+    async with app.run_test(size=SIZE) as pilot:
+        await _wait_workers(app, pilot)
+        await pilot.press("f2")
+        await _settle(pilot)
+        app.query_one("#filter", Button).press()
+        await _settle(pilot)
+        app.screen.query_one("#filter-script", TextArea).load_text("| nosuchsegment")
+        await pilot.click("#validate")
+        await _settle(pilot)
+        status = _text(app.screen.query_one("#filter-status", Static))
+        # The real problem is kept; the full segment list can't push the
+        # buttons off a 24-row screen.
+        assert "not found" in status
+        assert len(status) <= 240
+        await pilot.press("escape")
+        await _settle(pilot)
+
+
 async def test_settings_tab_saves_models_and_credentials(sample_vault):
     app = VaultApp(VaultService(), vault_path=sample_vault)
     async with app.run_test(size=SIZE) as pilot:

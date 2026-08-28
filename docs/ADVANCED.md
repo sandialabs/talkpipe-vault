@@ -521,6 +521,10 @@ talkpipe-vault/
 │       │   ├── user_settings.py            # Persisted UI settings
 │       │   ├── templates/                  # HTML templates
 │       │   └── static/                     # Static assets
+│       ├── tui/
+│       │   ├── app.py                      # Textual app + vault-tui entry point
+│       │   ├── service.py                  # VaultService facade over the app helpers
+│       │   └── app.tcss                    # Terminal-interface styles
 │       └── watchdog.py                     # File system monitoring
 ├── docs/                                   # Images and this guide
 ├── tests/                                  # Test suite

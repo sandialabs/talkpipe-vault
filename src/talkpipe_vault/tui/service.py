@@ -455,8 +455,8 @@ class VaultService:
             return _ok(results=[], note="")
         if not state.keyword_search_enabled or not state.keyword_search_pipeline:
             return _fail(
-                "Keyword search is disabled because this vault has no full-text "
-                "index. Build one from the Keywords tab."
+                "Keyword search needs a full-text index for this vault. Build "
+                "one with the Build full-text index button above."
             )
         try:
             note = ""
@@ -745,8 +745,11 @@ class VaultService:
             state.vault_path, enabled=enabled, strict=strict
         )
         query._refresh_pipelines(force=True)
+        if enabled:
+            return _ok("Retrieval filter enabled.")
         return _ok(
-            f"Retrieval filter {'enabled' if enabled else 'saved but not enabled'}."
+            'Retrieval filter saved but not enabled — tick "Enabled on this '
+            'machine" in the dialog to apply it.'
         )
 
     # -- misc ---------------------------------------------------------------------

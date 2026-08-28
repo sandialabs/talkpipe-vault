@@ -3,6 +3,28 @@
 ## In Development
 
 ### Terminal interface
+- More terminal-interface refinements from a third first-use review: the
+  vault name suggested from the documents folder now follows that folder as
+  it is typed instead of freezing on the first keystroke (it stopped
+  updating once the field held anything, so typing a path a character at a
+  time left a vault named after its first letter) — and it still stops the
+  moment you type a vault path of your own; opening or creating an empty
+  vault now lands on the Vault tab with an "index a documents folder" hint
+  rather than on a Search tab that can only report no results; the Settings
+  configuration status re-checks the embedding↔index match when indexing
+  finishes, so it no longer keeps saying the vault has nothing indexed after
+  a run has just filled it; the keyword-search-without-an-index message and
+  the folder picker point at the controls on the current screen ("the Build
+  full-text index button above", "Type a folder path, or pick one below")
+  instead of naming a web page; an empty folder in the picker shows a
+  "(no sub-folders here)" line instead of a blank list that looks broken; a
+  filter that fails to validate keeps its error to a bounded length so the
+  full list of registered segments can no longer push the dialog's buttons
+  off a short screen; saving a retrieval filter without enabling it says how
+  to turn it on; and the F1 help and README note that Enter in a Vault-tab
+  path field runs Index documents. The README also gives a plain
+  source-install command for `vault-tui` and documents the ADVANCED project
+  tree's `tui/` package.
 - On Python 3.14 the first embedding inside `vault-tui` (Settings probe, search, or indexing) failed with `bad value(s) in fds_to_keep`, so a perfectly good cached model was reported as "failed to produce a test embedding": model2vec wraps its batches in tqdm, whose first use creates a multiprocessing lock and spawns the resource-tracker process, which cannot be launched from a worker thread once Textual owns the terminal. The app now creates that lock before starting.
 - The Settings tab's configuration status now shows each check's detail line (probe timeout, cache path, exception text), as the web Settings page does — previously a cached embedding model that timed out during the probe was reported only as "failed to produce a test embedding", with no way to tell a slow load from a broken model.
 - New `vault-tui` (also `python -m talkpipe_vault.tui`): a Textual terminal

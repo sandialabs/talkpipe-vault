@@ -113,7 +113,10 @@ def test_search_without_vault_fails_cleanly():
 def test_fulltext_index_then_keyword_search(sample_vault):
     service = VaultService()
     assert service.startup(sample_vault)["ok"]
-    assert not service.keyword_search("heading")["ok"]  # no index yet
+    no_index = service.keyword_search("heading")  # no index yet
+    assert not no_index["ok"]
+    # The message points at the button on the same tab, not the web page.
+    assert "button above" in no_index["error"]
     started = service.start_fulltext_index()
     assert started["ok"], started
     snap = _wait(service.fulltext_status)
@@ -292,6 +295,14 @@ def test_retrieval_filter_lifecycle(sample_vault):
         action="validate", script=ok_script, enabled=True, strict=False
     )
     assert good["ok"], good
+    # Saving without enabling says how to turn it on rather than looking done.
+    saved_off = service.save_filter(
+        action="save", script=ok_script, enabled=False, strict=False
+    )
+    assert saved_off["ok"], saved_off
+    assert "not enabled" in saved_off["message"]
+    assert "Enabled on this machine" in saved_off["message"]
+    assert service.filter_view()["enabled"] is False
     saved = service.save_filter(
         action="save", script=ok_script, enabled=True, strict=False
     )

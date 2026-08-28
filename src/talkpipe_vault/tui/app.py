@@ -59,8 +59,9 @@ HELP_TEXT = """\
   F2  Vault: open/create a vault, index documents, recent vaults,
       retrieval filter. Index documents adds to the open vault; tick
       "Overwrite existing index" to replace it (re-indexing the same
-      folder without it duplicates chunks). Adding documents does not
-      update the full-text index — rebuild it on the Keywords tab.
+      folder without it duplicates chunks). Enter in either path field
+      runs Index documents. Adding documents does not update the
+      full-text index — rebuild it on the Keywords tab.
       Recent vaults: a click or Up/Down selects; Enter or a double
       click opens; Open/Delete selected act on the selection.
   F3  Search (semantic)        F4  Keywords (full-text)
@@ -216,7 +217,11 @@ class DirectoryPickerScreen(_Dialog[str | None]):
     def compose(self) -> ComposeResult:
         with Vertical(classes="dialog dialog-wide dialog-tall"):
             yield Label("Choose a folder", classes="dialog-title")
-            yield Input(value=self._start, placeholder="Path", id="picker-path")
+            yield Input(
+                value=self._start,
+                placeholder="Type a folder path, or pick one below",
+                id="picker-path",
+            )
             yield Static("", id="picker-message", classes="status-line")
             yield OptionList(id="picker-list")
             yield Static(
@@ -252,13 +257,19 @@ class DirectoryPickerScreen(_Dialog[str | None]):
         options = self.query_one("#picker-list", OptionList)
         options.clear_options()
         sep = str(listing.get("sep") or "/")
-        for name in listing.get("directories") or []:
+        directories = listing.get("directories") or []
+        for name in directories:
             full = (
                 name if not self._current else f"{self._current.rstrip(sep)}{sep}{name}"
             )
             options.add_option(Option(name, id=full))
-        if options.option_count:
+        if directories:
             options.highlighted = 0
+        else:
+            # An empty list otherwise looks like the dialog stopped rendering.
+            options.add_option(
+                Option("(no sub-folders here — Use this folder, or Up)", disabled=True)
+            )
         options.focus()
 
     @on(Input.Submitted, "#picker-path")
@@ -449,7 +460,7 @@ class RetrievalFilterScreen(_Dialog[dict[str, Any] | None]):
         result = app.service.save_filter(**self._values("validate"))
         status = self.query_one("#filter-status", Static)
         status.update(
-            result["message"] if result["ok"] else f"Error: {result['error']}"
+            result["message"] if result["ok"] else f"Error: {_clip(result['error'])}"
         )
         status.set_classes(
             "status-line success" if result["ok"] else "status-line error"
@@ -671,6 +682,17 @@ class ResultsPane(Horizontal):
         )
 
 
+def _clip(text: str, limit: int = 220) -> str:
+    """Bound a one-line status message so it cannot push a dialog's buttons off.
+
+    Some validation errors (an unknown segment lists every registered one)
+    run to hundreds of characters; left whole they wrap to many rows and
+    shove the Save/Validate/Cancel row below a 24-row screen.
+    """
+    text = " ".join(text.split())
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
 def _shorten_path(path: str, width: int) -> str:
     """Keep the tail of a long path so the vault's own name stays visible."""
     width = max(width, 12)
@@ -765,6 +787,10 @@ class VaultApp(App[None]):
         self._pending_confirm: dict[str, Any] | None = None
         # The last answer as the model wrote it — what "Copy answer" copies.
         self._answer_text = ""
+        # The vault path the app last auto-suggested from the documents folder.
+        # Kept so the suggestion tracks the documents path as it is typed, and
+        # stops the moment the user types a vault path of their own.
+        self._suggested_vault = ""
 
     # -- layout ----------------------------------------------------------------------
 
@@ -810,8 +836,7 @@ class VaultApp(App[None]):
             yield Checkbox("Overwrite existing index", False, id="overwrite")
         yield Static("", id="index-progress", markup=False)
         yield Label(
-            "Recent vaults (click or arrows: select · Enter or double-click: open "
-            "· Delete button removes files)",
+            "Recent vaults — arrows select · Enter opens · Delete removes files",
             classes="field-label",
         )
         yield RecentVaultList(id="recent-vaults")
@@ -984,7 +1009,16 @@ class VaultApp(App[None]):
         self._load_recent_vaults()
         self._load_settings_form()
         self._load_config_status(probe=True, download=False)
-        if self.service.vault_path:
+        if self.service.vault_path and self.service.status()["chunks"] == 0:
+            # A freshly opened or created vault with nothing in it: point at
+            # indexing rather than a Search tab that can only say "no results".
+            self.query_one("#tabs", TabbedContent).active = "tab-vault"
+            self.query_one("#index-progress", Static).update(
+                "This vault is empty — index a documents folder above (or open a "
+                "different vault below) to search it."
+            )
+            self.query_one("#source-path", Input).focus()
+        elif self.service.vault_path:
             self.query_one("#tabs", TabbedContent).active = "tab-search"
             self.query_one("#search-query", Input).focus()
         elif not outcome["ok"] and self._initial_vault:
@@ -1135,10 +1169,14 @@ class VaultApp(App[None]):
 
     @on(Input.Changed, "#source-path")
     def _source_changed(self, event: Input.Changed) -> None:
-        if (
-            not self.service.vault_path
-            and not self.query_one("#vault-path", Input).value
-        ):
+        if self.service.vault_path:
+            return
+        # Re-suggest while the vault field is still empty or still holds the
+        # last suggestion — so it follows the documents path as it is typed
+        # (the path is built one keystroke at a time) — but leave it alone
+        # once the user has typed a vault path of their own.
+        current = self.query_one("#vault-path", Input).value
+        if current == "" or current == self._suggested_vault:
             self._suggest_vault(event.value)
 
     def _suggest_vault(self, source: str) -> None:
@@ -1146,6 +1184,7 @@ class VaultApp(App[None]):
             return
         suggestion = self.service.suggest_vault_path(source)
         if suggestion:
+            self._suggested_vault = suggestion
             self.query_one("#vault-path", Input).value = suggestion
 
     @on(Input.Submitted, "#source-path")
@@ -1250,6 +1289,11 @@ class VaultApp(App[None]):
             # documents" run would silently wipe the vault (the web form
             # comes back unticked as well).
             self.query_one("#overwrite", Checkbox).value = False
+            # The Settings configuration status is computed at open and after
+            # Save; recompute the embedding↔index comparison now so it does not
+            # keep saying "no documents indexed yet" once this run has written
+            # the vault's embedding record. (No live probes — as after an open.)
+            self._load_config_status(probe=False, download=False)
         self._refresh_worker(report_total=snap["error"] is None)
 
     @on(Button.Pressed, "#open-vault")
