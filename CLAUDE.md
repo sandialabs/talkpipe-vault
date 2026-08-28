@@ -36,6 +36,10 @@ src/talkpipe_vault/
 │   ├── templates/              # Jinja2 templates (base, home, documents,
 │   │                           #   settings, search, keyword_search, chat, partials)
 │   └── static/                 # favicon.svg, logo.jpg
+├── tui/
+│   ├── app.py                  # Textual terminal interface (vault-tui): tabs, dialogs, bindings
+│   ├── app.tcss                # Its stylesheet
+│   └── service.py              # VaultService: in-process facade over query.py's state/helpers
 └── pipelines/
     ├── config.py               # Model/template config resolution + vault layout helpers
     ├── cli.py                  # Experimental watcher CLI helpers (not installed as scripts)
@@ -68,6 +72,27 @@ Routes in `apps/query.py`:
 
 State lives in the module-level `_state: AppState` singleton; pipelines are rebuilt by
 `_refresh_pipelines()` (throttled to every 5s unless forced).
+
+## The Terminal Interface
+
+`vault-tui [vault_path] [--resume] [--show-source-paths]` (`talkpipe_vault/tui/`) is a
+Textual application with the web interface's functionality for terminals (tmux, SSH,
+headless machines). It runs **in-process**: `tui/service.py` (`VaultService`) calls the
+same module-level helpers the routes in `apps/query.py` call (`init_pipelines`,
+`_refresh_pipelines`, `start_index_job`, `_process_semantic_results`, `_collect_config_status`,
+`_resolve_vault_request`, …) on the same `_state` singleton, so both interfaces share one
+implementation and the web application is not modified. Keep it that way: a TUI feature
+that needs new logic gets a helper in `query.py` (or a pipelines module) that both
+interfaces call — never TUI-only copies of route logic. Every service method is
+synchronous and blocking; the app runs them in `@work(thread=True)` workers and updates
+widgets via `call_from_thread`. Tests (`tests/talkpipe_vault/test_tui_*.py`) exercise the
+service against a real docs-table vault and the app with Textual's `Pilot`. Bindings for
+tabs/quit are `priority=True` (TextArea claims keys), labels are plain text (emoji width is
+unreliable in terminals), and the screen gets a `compact` class under 26 rows. The Ask
+answer is rendered with Textual's `Markdown` widget (LLM output is Markdown: tables,
+headings, emphasis); "Copy answer" copies the model's source text, kept in
+`_answer_text`, and non-Markdown prose shown in that widget (errors, the initial hint)
+goes through `_plain_text_as_markdown` so it appears verbatim.
 
 ## Model Configuration Precedence (highest to lowest)
 

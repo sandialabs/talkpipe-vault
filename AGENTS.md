@@ -43,3 +43,10 @@ has a relevant section, update that section rather than creating a new one.
 ## Important Commands
 python -m build for creating a new release
 pytest --cov=src for unit test coverage
+
+## Terminal interface
+
+`vault-tui` (`src/talkpipe_vault/tui/`) is a Textual client of the same in-process
+state and helpers the web routes use (`tui/service.py` → `apps/query.py`). Do not
+duplicate route logic in the TUI; add a shared helper instead. See CLAUDE.md,
+"The Terminal Interface".

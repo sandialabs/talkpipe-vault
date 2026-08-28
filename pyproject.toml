@@ -38,7 +38,8 @@ dependencies = [
     "fastapi[standard]>=0.109.1",  # security floor
     "uvicorn>=0.24.0",
     "jinja2>=3.1.6",  # security floor
-    "watchdog[watchmedo]"
+    "watchdog[watchmedo]",
+    "textual>=8.0.0",  # terminal interface (vault-tui)
 ]
 dynamic = ["version"]
 
@@ -79,16 +80,22 @@ Documentation = "https://github.com/sandialabs/talkpipe-vault#readme"
 
 [project.scripts]
 vault-server = "talkpipe_vault.apps.vault_server:main"
+vault-tui = "talkpipe_vault.tui.app:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-"*" = ["*.html", "*.css", "*.js", "*.json"]
+"*" = ["*.html", "*.css", "*.js", "*.json", "*.tcss"]
 "talkpipe_vault.apps" = ["templates/**/*", "static/**/*"]
 
 [tool.setuptools_scm]
 # Use defaults
+
+[tool.pytest.ini_options]
+# Auto mode runs coroutine tests under pytest-asyncio without a mark, so sync
+# tests in the same module are never mislabeled asyncio.
+asyncio_mode = "auto"
 
 [tool.coverage.run]
 source = ["src/talkpipe_vault"]
@@ -196,6 +203,7 @@ enable_error_code = ["ignore-without-code"]
 [[tool.mypy.overrides]]
 module = [
     "parsy.*",
+    "tqdm.*",
     "uvicorn.*",
     "watchdog.*",
 ]
