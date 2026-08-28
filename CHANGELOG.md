@@ -42,6 +42,12 @@
 
 ### Features
 
+#### Agent-Selected Search Results
+- The Semantic Search page gained a **Let an agent select the results** option. Instead of showing the top vector hits, an agent (built on the new `talkpipe-agents` dependency) searches the vault iteratively: it runs semantic and keyword searches as tools, reads the chunks that come back, keeps the relevant ones and ignores the rest, and rewrites its queries from what it learns — new terms, names, and phrasings from useful chunks — until it has kept the configured number of chunks or used its iteration budget. When the vault has no keyword index it can build one itself.
+- Two new settings control it: **Agent Result Count** (stop once this many chunks are kept) and **Agent Search Iterations** (cap on agent turns per search).
+- Every tool call and decision is printed to the server console as it happens and listed under the results in a collapsible "Agent tool calls" panel, and the results note says how the run ended (target reached, iteration cap, stopped on its own, or error) and how many chunks were kept and ignored. The option is hidden when the chat model cannot be set up as an agent model; plain search is unaffected.
+- Added the `vaultAgentSearch` segment (`pipelines/agent_search.py`), which exposes the same loop to TalkPipe pipelines and yields the kept chunks with the trace.
+
 #### Per-Vault Retrieval Filter
 - Added an advanced, per-vault **ChatterLang retrieval filter**: a script that filters or transforms retrieved results before they reach the Ask answer. Each result reaches the script as `{"doc_id", "score", "document"}` — emit it to keep it, drop it to filter it, modify it to transform it — so any registered segment (including LLM transforms) can prune noisy documents or rewrite them in flight. In `lambda`/`lambdaFilter` expressions the result is `item` (`item['document']`), as everywhere in TalkPipe; its top-level keys are also exposed as bare names.
 - Edit it under **Vaults & Documents → Retrieval filter for this vault (advanced)**, a folded section inside the open vault's panel with Save/Validate/Remove, worked starter recipes you can insert with one click, and help describing the result structure. Scripts must be a single segment-only pipeline (no `INPUT FROM` source, loops, or forks); Validate reports compile errors without saving.

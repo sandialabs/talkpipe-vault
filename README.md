@@ -132,12 +132,23 @@ A compose service and instructions for deriving your own customized image
   open, a vault name is suggested from the documents folder and created on
   submit; with one open, the same form adds documents to it. Recent vaults
   are remembered for one-click reopening, and indexing shows live progress.
-- **Settings** — choose embedding and chat providers/models, with a live
+- **Settings** — choose embedding and chat providers/models (the chat model
+  also drives the agent search; the Agent search section sets its result
+  count and iteration cap), with a live
   **Configuration status** panel that tests your selection (and can download
   an uncached embedding model via Re-test), plus **Connections &
   credentials** for API keys and the Ollama URL — no environment variables
   required.
-- **Semantic Search** — vector similarity search over your documents.
+- **Semantic Search** — vector similarity search over your documents. A
+  **Let an agent select the results** checkbox hands the search to an agent
+  instead: it runs semantic and keyword searches as tools, reads what comes
+  back, keeps the relevant chunks and discards the rest, and rewrites its
+  queries from what it learns (it can also build the keyword index if the
+  vault has none) until it has kept the number of chunks set on the
+  Settings page or used up its iteration budget. Every tool call is printed
+  to the server console and listed under the results, so you can see what
+  it did. Slower than plain search, and needs a chat model that supports
+  tool calling.
 - **Keyword Search** — boolean and phrase queries. Matching is
   case-insensitive but on exact word tokens (`apple` won't match `apples`);
   use semantic search for meaning-based lookups.
@@ -231,6 +242,11 @@ Two consequences worth remembering:
 - The lock must still stay honest. CI runs `uv lock --check`, which installs
   nothing and fails only when `uv.lock` and `pyproject.toml` have drifted
   apart. If you change dependencies, run `uv lock` and commit the result.
+
+One temporary exception: `talkpipe-agents` (the agent search) has no PyPI
+release yet, so `pyproject.toml` points uv at its source repository under
+`[tool.uv.sources]`. Until it is published, a fresh pip resolve cannot find
+it — remove that table once the first release is out.
 
 ## License
 

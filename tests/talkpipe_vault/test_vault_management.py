@@ -522,6 +522,8 @@ class TestModelSettings:
         assert 'name="shingle_size"' in response.text
         assert 'name="shingle_overlap"' in response.text
         assert 'name="rag_result_limit"' in response.text
+        assert 'name="agent_search_result_count"' in response.text
+        assert 'name="agent_search_iterations"' in response.text
         # Providers registered with talkpipe appear as options.
         assert 'value="ollama"' in response.text
         assert 'value="openai"' in response.text
@@ -538,10 +540,14 @@ class TestModelSettings:
                 "shingle_size": "4",
                 "shingle_overlap": "2",
                 "rag_result_limit": "7",
+                "agent_search_result_count": "4",
+                "agent_search_iterations": "6",
             },
         )
 
         assert response.status_code == 303
+        assert query._state.agent_search_result_count == 4
+        assert query._state.agent_search_iterations == 6
         assert query._state.embedding_source == "openai"
         assert query._state.embedding_model == "text-embedding-3-large"
         assert query._state.chat_source == "openai"

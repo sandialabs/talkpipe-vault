@@ -1,5 +1,10 @@
 ## Dev environment tips
 - When running code or pytest, use the .venv environment in the root of the project.
+- `uv sync --extra dev` builds it from the committed `uv.lock`. CI installs with pip and
+  resolves fresh on purpose; the lock is a convenience, not a security control — fix a
+  vulnerable dependency by raising its floor in `pyproject.toml`, then `uv lock`.
+- `talkpipe-agents` is not on PyPI yet; `[tool.uv.sources]` in `pyproject.toml` resolves it
+  from its source repository. Remove that table once it is published.
 - If the .venv environment doesn't exist and you need to run code or tests, abort and ask the user to create the environment.
 
 ## Project Overview
@@ -14,7 +19,8 @@ application, but constituent parts can also be used in other applications.
 ## Project Structure
 - `src/talkpipe_vault/` - Main library source code
  - `apps/` - Application code (query interface, vault server)
- - `pipelines/` - Pipeline implementations (building vector DBs, searching, watching)
+ - `pipelines/` - Pipeline implementations (building vector DBs, searching, watching,
+   agent-driven result selection in `agent_search.py` on top of talkpipe-agents)
  - `segments.py` - Text extraction segments
  - `watchdog.py` - File monitoring source
  - `initialize_plugin.py` - TalkPipe plugin initialization

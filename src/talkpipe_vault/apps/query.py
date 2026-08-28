@@ -53,7 +53,12 @@ from talkpipe.util.config import configure_logger
 
 from talkpipe_vault import memtune
 from talkpipe_vault.apps import access_control, credentials, user_settings
-from talkpipe_vault.pipelines import diagnostics, retrieval_filter, vault_metadata
+from talkpipe_vault.pipelines import (
+    agent_search,
+    diagnostics,
+    retrieval_filter,
+    vault_metadata,
+)
 from talkpipe_vault.pipelines.config import (
     DEFAULT_VECTOR_TABLE_NAME,
     FULLTEXT_VAULT_SUBDIR,
@@ -91,6 +96,8 @@ DEFAULT_RAG_RESULT_LIMIT = 5
 # Mirrors the vector store's own default result count, so the filtered
 # semantic-search pipeline can over-fetch and truncate back to it.
 DEFAULT_SEARCH_RESULT_LIMIT = 10
+DEFAULT_AGENT_SEARCH_ITERATIONS = agent_search.DEFAULT_MAX_ITERATIONS
+DEFAULT_AGENT_SEARCH_RESULT_COUNT = agent_search.DEFAULT_TARGET_COUNT
 
 
 @dataclass
@@ -105,6 +112,14 @@ class AppState:
     chat_pipeline: Callable[[str], str | dict[str, Any]] | None = None
     keyword_chat_pipeline: Callable[[str], dict[str, Any]] | None = None
     keyword_search_pipeline: Callable[[str], list[Any]] | None = None
+    # Agent-driven result selection on the Search page: an agent runs the
+    # vector and keyword searches as tools and keeps/ignores chunks until it
+    # has agent_search_result_count of them or agent_search_iterations turns
+    # are used. None when the agent's model cannot be built; the page then
+    # offers plain search only.
+    agent_search_pipeline: Callable[[str], agent_search.AgentSearchOutcome] | None = (
+        None
+    )
     # Retrieval filter (issue #22): the open vault's script, whether it is
     # active (present + enabled + compiles), and the search-page pipelines
     # that apply it on demand. Each filtered pipeline returns
@@ -134,6 +149,8 @@ class AppState:
     shingle_size: int | None = None
     shingle_overlap: int | None = None
     rag_result_limit: int | None = None
+    agent_search_iterations: int | None = None
+    agent_search_result_count: int | None = None
 
 
 # Application state singleton
@@ -160,6 +177,7 @@ def _template_context(
         "keyword_search_enabled": state.keyword_search_enabled,
         "show_source_paths": state.show_source_paths,
         "result_filter_active": state.result_filter_active,
+        "agent_search_available": state.agent_search_pipeline is not None,
     }
     context.update(extra)
     return context
@@ -176,6 +194,10 @@ def _effective_models(state: AppState) -> dict[str, Any]:
         "shingle_size": state.shingle_size or DEFAULT_SHINGLE_SIZE,
         "shingle_overlap": state.shingle_overlap or DEFAULT_SHINGLE_OVERLAP,
         "rag_result_limit": state.rag_result_limit or DEFAULT_RAG_RESULT_LIMIT,
+        "agent_search_iterations": state.agent_search_iterations
+        or DEFAULT_AGENT_SEARCH_ITERATIONS,
+        "agent_search_result_count": state.agent_search_result_count
+        or DEFAULT_AGENT_SEARCH_RESULT_COUNT,
     }
 
 
@@ -231,6 +253,8 @@ def load_saved_model_overrides() -> None:
     _state.shingle_size = overrides.get("shingle_size")
     _state.shingle_overlap = overrides.get("shingle_overlap")
     _state.rag_result_limit = overrides.get("rag_result_limit")
+    _state.agent_search_iterations = overrides.get("agent_search_iterations")
+    _state.agent_search_result_count = overrides.get("agent_search_result_count")
 
 
 def _parse_int_setting(value: str, label: str, minimum: int) -> int | None:
@@ -507,7 +531,48 @@ def _refresh_pipelines(force: bool = False) -> None:
         _state.keyword_search_pipeline = None
         _state.keyword_chat_pipeline = None
     _refresh_filtered_search_pipelines(vault_path, filter_script)
+    _refresh_agent_search_pipeline(vault_path)
     _state.last_refresh_time = current_time
+
+
+def _build_keyword_index_now(vault_path: str) -> None:
+    """Synchronous full-text index build for the agent's create_keyword_index
+    tool; refuses while the page-driven background build is running."""
+    with _fulltext_index_job_lock:
+        if _fulltext_index_job.running:
+            raise RuntimeError("a full-text index build is already in progress")
+    documents = _iter_lancedb_docs_for_whoosh(vault_path)
+    print(
+        f"Building full-text index: {len(documents)} document(s) from {vault_path}",
+        flush=True,
+    )
+    _build_whoosh_index(vault_path, documents)
+    _state.keyword_search_enabled = _keyword_search_enabled(vault_path)
+
+
+def _refresh_agent_search_pipeline(vault_path: str) -> None:
+    """(Re)build the agent-driven Search page pipeline.
+
+    Building it resolves the agent's model eagerly, which fails on a bad chat
+    configuration; Search must keep working without the option, so failure
+    leaves the pipeline unset and the checkbox hidden.
+    """
+    try:
+        _state.agent_search_pipeline = agent_search.AgentVaultSearch(
+            vault_path=vault_path,
+            embedding_model=_state.embedding_model,
+            embedding_source=_state.embedding_source,
+            chat_model=_state.chat_model,
+            chat_source=_state.chat_source,
+            target_count=_state.agent_search_result_count
+            or DEFAULT_AGENT_SEARCH_RESULT_COUNT,
+            max_iterations=_state.agent_search_iterations
+            or DEFAULT_AGENT_SEARCH_ITERATIONS,
+            create_keyword_index=lambda: _build_keyword_index_now(vault_path),
+        ).as_function(single_in=True, single_out=True)
+    except Exception:
+        logger.warning("Could not build the agent search pipeline", exc_info=True)
+        _state.agent_search_pipeline = None
 
 
 def _refresh_filtered_search_pipelines(
@@ -2263,6 +2328,8 @@ async def save_settings(
     shingle_size: Annotated[str, Form()] = "",
     shingle_overlap: Annotated[str, Form()] = "",
     rag_result_limit: Annotated[str, Form()] = "",
+    agent_search_iterations: Annotated[str, Form()] = "",
+    agent_search_result_count: Annotated[str, Form()] = "",
     state: AppState = Depends(get_state),
 ) -> Response:
     """Save model configuration chosen in the web interface.
@@ -2291,6 +2358,16 @@ async def save_settings(
         rag_result_limit_value = _parse_int_setting(
             rag_result_limit, "Ask result count", minimums["rag_result_limit"]
         )
+        agent_iterations_value = _parse_int_setting(
+            agent_search_iterations,
+            "Agent search iterations",
+            minimums["agent_search_iterations"],
+        )
+        agent_count_value = _parse_int_setting(
+            agent_search_result_count,
+            "Agent search result count",
+            minimums["agent_search_result_count"],
+        )
     except ValueError as exc:
         return _redirect_with_message("/settings", error=str(exc))
 
@@ -2312,6 +2389,8 @@ async def save_settings(
         shingle_size=shingle_size_value,
         shingle_overlap=shingle_overlap_value,
         rag_result_limit=rag_result_limit_value,
+        agent_search_iterations=agent_iterations_value,
+        agent_search_result_count=agent_count_value,
     )
     load_saved_model_overrides()
     if _vault_selected(state):
@@ -2390,6 +2469,7 @@ async def search_results(
     request: Request,
     query: Annotated[str, Form()] = "",
     apply_filter: Annotated[str, Form()] = "",
+    use_agent: Annotated[str, Form()] = "",
     state: AppState = Depends(get_state),
 ) -> HTMLResponse:
     """
@@ -2399,12 +2479,15 @@ async def search_results(
         - query: str - The search query string
         - apply_filter: str - If truthy, run the vault's retrieval filter over
           the results (only honored while a filter is active)
+        - use_agent: str - If truthy, let the agent select the results
+          (only honored while the agent pipeline is available)
 
     Returns HTML page with search results containing path, filename, snippet, and score.
     """
     results: list[dict[str, Any]] = []
     error: str | None = None
     filter_note = ""
+    agent_trace: list[str] = []
 
     if query.strip() and state.search_pipeline:
         try:
@@ -2413,7 +2496,12 @@ async def search_results(
             # Update document counts to reflect latest state
             _update_document_counts(state.vault_path)
             # Perform search with refreshed pipeline
-            if apply_filter and state.filtered_search_pipeline:
+            if use_agent and state.agent_search_pipeline:
+                outcome = state.agent_search_pipeline(query)
+                results = _process_semantic_results(outcome.results)
+                filter_note = outcome.note
+                agent_trace = outcome.trace
+            elif apply_filter and state.filtered_search_pipeline:
                 raw_results, filter_error = state.filtered_search_pipeline(query)
                 results = _process_semantic_results(raw_results)
                 filter_note = _filter_outcome_note(len(results), filter_error)
@@ -2433,7 +2521,9 @@ async def search_results(
             results=results,
             error=error,
             apply_filter=bool(apply_filter),
+            use_agent=bool(use_agent),
             filter_note=filter_note,
+            agent_trace=agent_trace,
         ),
     )
 
@@ -2892,6 +2982,7 @@ def run_app(
             _state.result_filter_active = False
             _state.filtered_search_pipeline = None
             _state.filtered_keyword_search_pipeline = None
+            _state.agent_search_pipeline = None
         user_settings.remember_vault(vault_path)
     if open_browser:
         _launch_browser_when_ready(host, port)

@@ -18,7 +18,11 @@ built on the TalkPipe framework and demonstrates real-world usage of its composa
 - **Package**: `talkpipe-vault`
 - **Module**: `talkpipe_vault`
 - **Python**: 3.11.4+ required
-- **TalkPipe**: >=1.0.0b2 (`talkpipe[all]`; ships `py.typed`, so mypy checks against its real signatures)
+- **TalkPipe**: >=1.0.0b5 (`talkpipe[all]`; ships `py.typed`, so mypy checks against its real signatures)
+- **talkpipe-agents**: >=0.0.1a1 — the `llmAgent`/Strands layer behind agent search. Not on PyPI
+  yet: `[tool.uv.sources]` resolves it from its source repository for `uv sync`; a fresh pip
+  resolve (CI) fails until it is published. No `py.typed`, so it is in the mypy
+  `ignore_missing_imports` list.
 - **Status**: Alpha (active development)
 - **License**: Apache 2.0
 
@@ -40,7 +44,8 @@ src/talkpipe_vault/
     ├── config.py               # Model/template config resolution + vault layout helpers
     ├── cli.py                  # Experimental watcher CLI helpers (not installed as scripts)
     ├── building_and_watching.py # Experimental watch/batch vector DB pipelines
-    └── searching_and_prompting.py # VaultSearch / VaultChat / VaultTextSearch segments
+    ├── searching_and_prompting.py # VaultSearch / VaultChat / VaultTextSearch segments
+    └── agent_search.py         # AgentVaultSearch: agent-driven result selection (talkpipe-agents)
 ```
 
 ## The Web Application (primary user path)
@@ -122,7 +127,27 @@ non-authoritative `indexed_via_url` breadcrumb).
 
 Sources: `fileWatcher`, `watchIntoVectorDB`, `listIntoVectorDB` (watcher ones experimental).
 Segments: `buildVectorDBFromPaths`, `vaultSearch`, `vaultChat`, `vaultTextSearch`,
-`searchLance`, `extractSearchKeywords`, `mergeSearchResults`.
+`searchLance`, `extractSearchKeywords`, `mergeSearchResults`, `filterSearchResults`,
+`vaultAgentSearch`.
+
+**Agent search** (`pipelines/agent_search.py`): `vaultAgentSearch` runs a Strands agent
+(via talkpipe-agents' `build_agent_model`, using the vault's chat source/model) with five
+tools bound to one `AgentSearchSession` per query — `vector_search`, `keyword_search`,
+`create_keyword_index`, `keep_chunk`, `ignore_chunk`. Hits are assigned short ids (`c1`,
+`c2`, …; deduped by doc_id across searches) and the agent is told to decide on each and to
+refine its queries from what it finds. The run ends when kept chunks reach `target_count`
+(Settings → Agent Result Count; a hook cancels any further tool call) or after
+`max_iterations` agent turns (Settings → Agent Search Iterations). The outcome is an
+`AgentSearchOutcome(results, note, trace)`: kept chunks as `SearchResult` in keep order, a
+note on how it ended, and the tool-call trace, which is also printed (`progress`, stdout
+by default) so the agent's behavior is visible on the server console. The Search page
+shows a **Let an agent select the results** checkbox when `_state.agent_search_pipeline`
+exists — `_refresh_agent_search_pipeline` builds the model eagerly and leaves the option
+off on failure — and renders the trace under the results. `create_keyword_index` is
+injected by the app (`_build_keyword_index_now`, synchronous, refused while the page-driven
+background build is running). `AgentVaultSearch.vector_search` / `keyword_search` /
+`run_agent` are overridable seams; tests drive the tools with scripted callables and no
+LLM.
 
 **Keyword-augmented Ask** (issue #11): `vaultChat[keyword_search=True]` composes the
 reusable pipeline prompt → `extractSearchKeywords` (LLM distills the question into a

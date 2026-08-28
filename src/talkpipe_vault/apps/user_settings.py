@@ -39,6 +39,8 @@ INTEGER_SETTING_MINIMUMS = {
     "shingle_size": 1,
     "shingle_overlap": 0,
     "rag_result_limit": 1,
+    "agent_search_iterations": 1,
+    "agent_search_result_count": 1,
 }
 
 # Retrieval-filter activation, keyed by resolved vault path: the flags are this

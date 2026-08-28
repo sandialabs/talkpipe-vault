@@ -74,7 +74,68 @@ def reset_app_state(tmp_path, monkeypatch):
     query._state.result_filter_error = None
     query._state.filtered_search_pipeline = None
     query._state.filtered_keyword_search_pipeline = None
+    query._state.agent_search_pipeline = None
+    query._state.agent_search_iterations = None
+    query._state.agent_search_result_count = None
     return
+
+
+def _agent_outcome(query_text):
+    from talkpipe.search.abstract import SearchResult
+
+    from talkpipe_vault.pipelines.agent_search import AgentSearchOutcome
+
+    return AgentSearchOutcome(
+        results=[
+            SearchResult(
+                score=0.9,
+                doc_id="row-1",
+                document={"title": "Notes.md", "content": f"About {query_text}"},
+            )
+        ],
+        note="Agent reached its target: kept 1 of 1 chunks after 2 searches, ignored 3.",
+        trace=["agent → vector_search(query='x')", "agent · keep c1 — on topic"],
+    )
+
+
+def test_search_page_offers_agent_option_only_when_pipeline_exists(monkeypatch):
+    monkeypatch.setattr(query, "_refresh_pipelines", lambda force=False: None)
+    monkeypatch.setattr(query, "_update_document_counts", lambda vault_path: None)
+    client = TestClient(query.app)
+
+    assert 'name="use_agent"' not in client.get("/search").text
+
+    query._state.agent_search_pipeline = _agent_outcome
+    assert 'name="use_agent"' in client.get("/search").text
+
+
+def test_search_post_uses_agent_and_shows_trace(monkeypatch):
+    monkeypatch.setattr(query, "_refresh_pipelines", lambda force=False: None)
+    monkeypatch.setattr(query, "_update_document_counts", lambda vault_path: None)
+    plain_calls = []
+
+    def plain(query_text):
+        plain_calls.append(query_text)
+        return []
+
+    query._state.search_pipeline = plain
+    query._state.agent_search_pipeline = _agent_outcome
+    client = TestClient(query.app)
+
+    response = client.post("/search", data={"query": "podman", "use_agent": "1"})
+
+    assert response.status_code == 200
+    assert plain_calls == []
+    assert "Notes.md" in response.text
+    assert "About podman" in response.text
+    assert "Agent reached its target" in response.text
+    assert "Agent tool calls (2)" in response.text
+    assert "keep c1" in response.text
+
+    # Unchecked, the plain pipeline runs and no trace is rendered.
+    response = client.post("/search", data={"query": "podman"})
+    assert plain_calls == ["podman"]
+    assert "Agent tool calls" not in response.text
 
 
 def test_keyword_search_page_is_disabled_without_whoosh():

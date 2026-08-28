@@ -35,6 +35,10 @@ classifiers = [
 # lands, do not lower one.
 dependencies = [
     "talkpipe[all]>=1.0.0b5",  # floor: first release shipping py.typed and typed decorators
+    # Agent-driven result selection on the Search page (llmAgent + tool
+    # registry). Not yet on PyPI: developers resolve it from the source
+    # repository through [tool.uv.sources] below until the first release.
+    "talkpipe-agents>=0.0.1a1",
     "fastapi[standard]>=0.109.1",  # security floor
     "uvicorn>=0.24.0",
     "jinja2>=3.1.6",  # security floor
@@ -173,6 +177,12 @@ known-first-party = ["talkpipe_vault"]
 [tool.ruff.format]
 docstring-code-format = true
 
+# talkpipe-agents has no PyPI release yet; until it does, the development
+# lock resolves it from its source repository. Remove this once it is
+# published so the lock resolves the way `pip install` does.
+[tool.uv.sources]
+talkpipe-agents = { git = "ssh://git@<server>/travis/talkpipe-agents.git" }
+
 [tool.mypy]
 # 3.12+ so mypy can parse modern dependency stubs (e.g. numpy uses `type`
 # statements); the package itself still supports Python 3.11.
@@ -196,6 +206,7 @@ enable_error_code = ["ignore-without-code"]
 [[tool.mypy.overrides]]
 module = [
     "parsy.*",
+    "talkpipe_agents.*",  # ships no py.typed yet
     "uvicorn.*",
     "watchdog.*",
 ]
@@ -223,5 +234,6 @@ filterSearchResults = "talkpipe_vault.pipelines.searching_and_prompting:SearchRe
 mergeSearchResults = "talkpipe_vault.pipelines.searching_and_prompting:MergeSearchResults"
 searchLance = "talkpipe_vault.pipelines.searching_and_prompting:searchLance"
 vaultChat = "talkpipe_vault.pipelines.searching_and_prompting:VaultChat"
+vaultAgentSearch = "talkpipe_vault.pipelines.agent_search:AgentVaultSearch"
 vaultSearch = "talkpipe_vault.pipelines.searching_and_prompting:VaultSearch"
 vaultTextSearch = "talkpipe_vault.pipelines.searching_and_prompting:VaultTextSearch"

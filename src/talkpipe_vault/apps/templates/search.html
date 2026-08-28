@@ -8,6 +8,13 @@
         <input type="text" name="query" id="search-input" placeholder="Search your vault. Works best with a full question..." value="{{ query }}" autofocus>
         <button type="submit" id="search-btn">Search</button>
     </form>
+    {% if agent_search_available %}
+    <label class="overwrite-option">
+        <input type="checkbox" name="use_agent" value="1" form="search-form"
+               {% if use_agent %}checked{% endif %}>
+        Let an agent select the results (iterative semantic + keyword search; slower)
+    </label>
+    {% endif %}
     {% if result_filter_active %}
     <label class="overwrite-option">
         <input type="checkbox" name="apply_filter" value="1" form="search-form"
@@ -17,6 +24,13 @@
     {% endif %}
     {% if filter_note %}
     <p class="search-hint filter-note">{{ filter_note }}</p>
+    {% endif %}
+    {% if agent_trace %}
+    <details class="agent-trace">
+        <summary>Agent tool calls ({{ agent_trace|length }})</summary>
+        <pre>{% for line in agent_trace %}{{ line }}
+{% endfor %}</pre>
+    </details>
     {% endif %}
     <p class="search-hint">Best for natural-language questions and conceptual matches across indexed chunks.</p>
 </div>
