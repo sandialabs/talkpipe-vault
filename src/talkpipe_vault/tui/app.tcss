@@ -200,6 +200,13 @@ Checkbox {
     color: $text-muted;
 }
 
+#answer {
+    /* The pane already pads; the Markdown widget's own 2-cell padding would
+       double it. The pane's panel background shows through. */
+    padding: 0;
+    background: transparent;
+}
+
 #citations {
     height: 2fr;
     min-height: 4;
