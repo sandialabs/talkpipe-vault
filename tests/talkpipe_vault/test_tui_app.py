@@ -361,7 +361,13 @@ async def test_directory_picker_notes_an_empty_folder(tmp_path):
         app.query_one("#source-browse", Button).press()
         await _wait_workers(app, pilot)
         assert isinstance(app.screen, DirectoryPickerScreen)
-        app.screen.query_one("#picker-path", Input).value = str(empty)
+        # The picker focuses its folder list after loading, so Enter would
+        # descend into the highlighted sub-folder of the start directory
+        # (whatever the host has there) rather than submit the typed path.
+        path_input = app.screen.query_one("#picker-path", Input)
+        path_input.value = str(empty)
+        path_input.focus()
+        await _settle(pilot)
         await pilot.press("enter")
         await _wait_workers(app, pilot)
         options = app.screen.query_one("#picker-list", OptionList)
