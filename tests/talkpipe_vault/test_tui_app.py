@@ -722,6 +722,40 @@ async def test_small_terminal_keeps_every_button_on_screen(tmp_path):
         await _settle(pilot)
 
 
+async def test_recent_vault_click_selects_and_double_click_opens(tmp_path):
+    victim = tmp_path / "victim-vault"
+    other = tmp_path / "other-vault"
+    service = VaultService()
+    service.startup("")
+    service.open_vault(str(victim))
+    service.open_vault(str(other))
+    app = VaultApp(service, vault_path=str(other))
+    async with app.run_test(size=SIZE) as pilot:
+        await _wait_workers(app, pilot)
+        await pilot.press("f2")
+        await _settle(pilot)
+        recents = app.query_one("#recent-vaults", OptionList)
+        assert recents.get_option_at_index(1).id == str(victim)
+        # A single click on the second row only moves the highlight: the
+        # vault stays as it was and the Vault tab stays put.
+        await pilot.click(recents, offset=(2, 2))
+        await _settle(pilot)
+        assert recents.highlighted == 1
+        assert app.service.vault_path == str(other)
+        assert app.query_one("#tabs").active == "tab-vault"
+        # The highlight is what Delete selected acts on.
+        app.query_one("#delete-recent", Button).press()
+        await _settle(pilot)
+        assert isinstance(app.screen, ConfirmScreen)
+        await pilot.click("#cancel")
+        await _settle(pilot)
+        # A double click opens the vault.
+        await pilot.double_click(recents, offset=(2, 2))
+        await _wait_workers(app, pilot)
+        assert app.service.vault_path == str(victim)
+        assert app.query_one("#tabs").active == "tab-search"
+
+
 async def test_deleting_the_open_vault_refuses_before_confirming(tmp_path):
     vault = tmp_path / "open-vault"
     app = VaultApp(VaultService(), vault_path=str(vault))
