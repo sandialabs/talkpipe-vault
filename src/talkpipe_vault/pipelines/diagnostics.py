@@ -815,8 +815,18 @@ def _check_ollama(
     names, error = _ollama_tags(url, timeout)
     if names is None or error is not None:
         base["status"] = "error"
-        base["summary"] = f"Can't reach Ollama at {url}."
         base["detail"] = f"{base['detail']} — {error}"
+        if _url_scheme_problem(url):
+            # A malformed address is a typo in the URL field, not a server
+            # that is down: "Start Ollama" would send the user the wrong way.
+            base["summary"] = f"The Ollama server URL {url} is not an http(s) URL."
+            base["fix"] = (
+                "Enter the server's address as http://host:port under "
+                "Connections & credentials below (e.g. http://localhost:11434), "
+                "or in TALKPIPE_OLLAMA_SERVER_URL."
+            )
+            return base
+        base["summary"] = f"Can't reach Ollama at {url}."
         base["fix"] = (
             "Start Ollama, set the Ollama server URL under Connections & "
             "credentials below, or point TALKPIPE_OLLAMA_SERVER_URL at your "
@@ -964,11 +974,19 @@ def _ollama_url_and_source() -> tuple[str, str]:
 # --------------------------------------------------------------------------
 
 
-def _ollama_tags(url: str, timeout: float) -> tuple[list[str] | None, str | None]:
-    """Return (model names, None) on success or (None, error message) on failure."""
+def _url_scheme_problem(url: str) -> str | None:
+    """Why ``url`` cannot be requested, or None when its scheme is http(s)."""
     scheme = urllib.parse.urlparse(url).scheme
     if scheme not in ("http", "https"):
-        return None, f"unsupported URL scheme {scheme!r} (expected http or https)"
+        return f"unsupported URL scheme {scheme!r} (expected http or https)"
+    return None
+
+
+def _ollama_tags(url: str, timeout: float) -> tuple[list[str] | None, str | None]:
+    """Return (model names, None) on success or (None, error message) on failure."""
+    problem = _url_scheme_problem(url)
+    if problem:
+        return None, problem
     try:
         request = urllib.request.Request(f"{url}/api/tags", method="GET")
         with urllib.request.urlopen(  # nosec B310 - scheme validated above

@@ -55,6 +55,10 @@ def _newest_mtime(folder: Path) -> float | None:
     return newest
 
 
+# Connection settings that hold a server address rather than a secret.
+URL_CREDENTIAL_KEYS = ("openai_base_url", "ollama_server_url")
+
+
 def _ok(message: str = "", **extra: Any) -> dict[str, Any]:
     return {"ok": True, "message": message, "error": "", **extra}
 
@@ -297,15 +301,41 @@ class VaultService:
         docs = _newest_mtime(vault / "docs.lance")
         return fulltext is not None and docs is not None and docs > fulltext
 
+    def vault_gone_note(self) -> str:
+        """A warning when the open vault's index has vanished from disk, else "".
+
+        A vault folder deleted (or unmounted) underneath the app does not
+        error: LanceDB recreates the folder on the next query and every
+        search just finds nothing, which looks like the documents were never
+        indexed. Checked before each operation that would recreate it, while
+        the in-memory chunk count still remembers what was there.
+        """
+        state = self.state
+        if not state.vault_path or state.shingled_chunks_count <= 0:
+            return ""
+        vault = Path(state.vault_path)
+        if (vault / "docs.lance").exists():
+            return ""
+        what = "is no longer on disk" if not vault.exists() else "has lost its index"
+        return (
+            f"The vault {state.vault_path} {what} — its {state.shingled_chunks_count} "
+            "indexed chunk(s) are gone. If it was deleted or unmounted outside this "
+            "app, restore it and press Ctrl+R, or index the documents again "
+            "on the Vault tab (F2)."
+        )
+
     def refresh(self) -> dict[str, Any]:
         """Force-rebuild pipelines and recount documents (the web Refresh)."""
         if not self.state.vault_path:
             return _fail("No vault is open.")
+        gone = self.vault_gone_note()
         try:
             query._refresh_pipelines(force=True)
             query._update_document_counts(self.state.vault_path)
         except Exception as exc:
             return _fail(f"Refresh failed: {exc}")
+        if gone:
+            return _fail(gone)
         return _ok("Pipelines refreshed.")
 
     # -- vaults -------------------------------------------------------------------
@@ -534,6 +564,8 @@ class VaultService:
             return _ok(results=[], note="")
         if not state.search_pipeline:
             return _fail("The search pipeline is not available; check Settings.")
+        if gone := self.vault_gone_note():
+            return _fail(gone)
         try:
             query._refresh_pipelines()
             query._update_document_counts(state.vault_path)
@@ -554,6 +586,8 @@ class VaultService:
         state = self.state
         if not state.vault_path:
             return _fail("Open a vault first.")
+        if gone := self.vault_gone_note():
+            return _fail(gone)
         try:
             query._refresh_pipelines()
             query._update_document_counts(state.vault_path)
@@ -632,6 +666,8 @@ class VaultService:
             return _fail("Enter a question.")
         if not state.chat_pipeline:
             return _fail("The Ask pipeline is not available; check Settings.")
+        if gone := self.vault_gone_note():
+            return _fail(gone)
         citations: list[dict[str, Any]] = []
         retrieval_note = ""
         filter_error: str | None = None
@@ -808,17 +844,37 @@ class VaultService:
         return _ok(message)
 
     def save_credentials(self, changes: dict[str, str | None]) -> dict[str, Any]:
-        """Persist connection settings; secrets set to "" are cleared."""
+        """Persist connection settings; secrets set to "" are cleared.
+
+        URL fields are checked first: a bare ``host:port`` is completed with
+        ``http://`` (the outcome says so), and a URL that can never work (no
+        host, or a scheme other than http/https) is refused here, where the
+        field is, rather than saved and reported by the configuration probe
+        as "Can't reach Ollama".
+        """
+        notes: list[str] = []
+        cleaned: dict[str, str | None] = dict(changes)
+        for key in URL_CREDENTIAL_KEYS:
+            if cleaned.get(key):
+                try:
+                    url, note = credentials.normalize_server_url(str(cleaned[key]))
+                except ValueError as exc:
+                    label = credentials.label_for(key)
+                    return _fail(f"{label}: {exc}", field=key)
+                cleaned[key] = url
+                if note:
+                    notes.append(note)
         try:
-            credentials.set_values(changes)
+            credentials.set_values(cleaned)
         except Exception as exc:
             return _fail(f"Could not save connection settings: {exc}")
+        message = " ".join(["Connection settings saved for this app.", *notes])
         if self.state.vault_path:
             try:
                 query._refresh_pipelines(force=True)
             except Exception as exc:
                 return _ok(f"Connection settings saved; pipelines not rebuilt: {exc}")
-        return _ok("Connection settings saved for this app.")
+        return _ok(message)
 
     def config_status(
         self, *, probe: bool = True, download: bool = False

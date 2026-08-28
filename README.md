@@ -179,21 +179,29 @@ Long operations (embedding, Ask, indexing) run in the background and report
 progress in the tab that started them. As in the browser, Ask needs a chat
 provider: enter the Ollama URL or an API key under **Connections &
 credentials** on the Settings tab (`F6`) — it is the last field on the tab,
-so `Shift+Tab` from the top reaches it quickest — and press **Save
-connection settings**, which re-tests the configuration by itself (or
-export `TALKPIPE_OLLAMA_SERVER_URL` before starting; the OpenAI base URL
-field points the OpenAI provider at any OpenAI-compatible endpoint — see
-[Provider notes](docs/ADVANCED.md#provider-notes)). While an answer is being
-generated, `Esc` stops waiting for it. "Index
+and one `Shift+Tab` from the top (the Re-test button `F6` lands on) jumps
+straight to it; `PageUp`/`PageDown` scroll the tab — and press **Save
+connection settings**, which re-tests the configuration by itself. A bare
+`host:11434` is completed to `http://host:11434` when saved. Alternatively
+export `TALKPIPE_OLLAMA_SERVER_URL` before starting — but a URL saved on the
+Settings tab takes precedence over the variable, so clear the field to go
+back to it (the configuration status names which one is in effect). The
+OpenAI base URL field points the OpenAI provider at any OpenAI-compatible
+endpoint — see [Provider notes](docs/ADVANCED.md#provider-notes). While an
+answer is being generated, `Esc` stops waiting for it. "Index
 documents" adds to the open vault — tick **Overwrite existing index** to
 replace it; re-indexing the same folder without it duplicates every chunk
 (the summary line says so when it happens, and the box unticks itself after
 a replace run). Indexing never updates the full-text index: the header
 shows "keywords out of date" until you rebuild it on the Keywords tab, and
 a keyword search that finds nothing says so. Long chunk text scrolls once
-you `Tab` into its pane; `PageUp`/`PageDown` in the question box scroll a
-long answer (the answer pane is also four `Tab` stops from the question
-box). The **Retrieval filter** button on the Vault tab edits the same
+you `Tab` into its pane; the question box grows as a long question wraps,
+and `PageUp`/`PageDown` in it scroll a long answer (the answer pane is also
+four `Tab` stops from the question box). After a search the result list has
+the focus, so `F3`/`F4` (or `Shift+Tab`) return to the query field before
+you type the next query. If the open vault's folder disappears from disk
+(deleted or unmounted outside the app), Search, Ask and `Ctrl+R` say so
+instead of quietly recreating it empty. The **Retrieval filter** button on the Vault tab edits the same
 per-vault ChatterLang script as the web page, with an example in the
 dialog (its **Help** button adds the result shape and more recipes); a
 saved filter does nothing until you tick **Enabled on this machine**. The

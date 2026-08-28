@@ -467,3 +467,47 @@ def test_source_file_reports_whether_it_is_text(tmp_path):
     assert not looks_like_text(binary)
     assert looks_like_text(empty)
     assert not looks_like_text(tmp_path / "missing.txt")
+
+
+def test_save_credentials_normalises_server_urls(sample_vault):
+    service = VaultService()
+    service.startup(sample_vault)
+    outcome = service.save_credentials({"ollama_server_url": "ollama.example:11434/"})
+    assert outcome["ok"]
+    assert "Added http://" in outcome["message"]
+    creds = {c["key"]: c for c in service.settings_view()["credentials"]}
+    assert creds["ollama_server_url"]["value"] == "http://ollama.example:11434"
+
+    outcome = service.save_credentials({"openai_base_url": "ftp://llm.example/v1"})
+    assert not outcome["ok"]
+    assert outcome["error"].startswith("OpenAI base URL:")
+    assert "http://host:port" in outcome["error"]
+    outcome = service.save_credentials({"ollama_server_url": "http://"})
+    assert not outcome["ok"]
+    assert "no host" in outcome["error"]
+    # A blank value still clears the field.
+    outcome = service.save_credentials({"ollama_server_url": ""})
+    assert outcome["ok"]
+    creds = {c["key"]: c for c in service.settings_view()["credentials"]}
+    assert not creds["ollama_server_url"]["value"]
+
+
+def test_vault_deleted_underneath_is_reported_not_recreated(sample_vault, tmp_path):
+    import shutil
+
+    vault = tmp_path / "vault"
+    shutil.copytree(sample_vault, vault)
+    service = VaultService()
+    assert service.startup(str(vault))["ok"]
+    assert service.status()["chunks"] > 0
+    assert service.vault_gone_note() == ""
+    shutil.rmtree(vault)
+    assert "no longer on disk" in service.vault_gone_note()
+    outcome = service.semantic_search("python")
+    assert not outcome["ok"]
+    assert "no longer on disk" in outcome["error"]
+    assert not service.keyword_search("python")["ok"]
+    assert "no longer on disk" in service.ask("what?")["error"]
+    outcome = service.refresh()
+    assert not outcome["ok"]
+    assert "Ctrl+R" in outcome["error"]

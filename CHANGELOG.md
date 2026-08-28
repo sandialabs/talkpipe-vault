@@ -3,6 +3,37 @@
 ## In Development
 
 ### Terminal interface
+- Terminal-interface fixes from a fifth first-use review, driven through a
+  pseudo-terminal at several sizes and inside tmux: on the Settings tab,
+  `Shift+Tab` from the top (the Re-test button `F6` lands on) now jumps
+  straight to the last field, the Ollama server URL — the documented
+  shortcut used to need four presses that visibly did nothing, because the
+  scrolling container and the tab strip came first. A server URL typed
+  without a scheme (`host:11434`) is completed to `http://host:11434` when
+  saved, and one that can never work (`ftp://…`, no host) is refused at the
+  field with an example instead of being saved and then reported by the
+  configuration probe as "Can't reach Ollama … Start Ollama"; the probe
+  itself now says "not an http(s) URL" for a malformed address rather than
+  blaming the server. A vault whose folder is deleted or unmounted while
+  it is open is reported by Search, Keywords, Ask and `Ctrl+R` ("no longer
+  on disk … restore it and press Ctrl+R, or index again") instead of being
+  quietly recreated empty, which looked like the documents had never been
+  indexed. The question box grows with a long question (up to five lines)
+  so the whole of it can be read before Enter; the F1 help reflows to the
+  terminal's width instead of wrapping twice at 60 columns; the startup
+  "Opening the vault…" toast is gone (the Vault tab and header already say
+  so, and it covered the screen on small terminals); a `TALKPIPE_VAULT_ROOT`
+  or `TALKPIPE_DOCUMENT_ROOTS` that names a missing folder stays on the
+  Vault tab's status line rather than only in a toast that expires; and
+  the after-save "see the top of the Settings tab" toast says PageUp. The
+  fast exit taken when a worker thread is still blocked at quit now gives
+  such a thread two seconds to finish (a Whoosh commit or a settings write
+  that is nearly done), flushes logging, prints the traceback and exits
+  non-zero if the interface itself crashed, instead of leaving with status
+  0 and no message. README: how the Settings-tab shortcut works, that a
+  saved URL takes precedence over `TALKPIPE_OLLAMA_SERVER_URL`, that the
+  result list holds the focus after a search (`F3`/`F4` return to the
+  query field), and what happens when a vault folder disappears.
 - Terminal-interface fixes from a fourth first-use review, this one driven
   through a real pseudo-terminal: quitting no longer hangs while a service
   call is still blocked — Ctrl+Q during the first-run embedding-model

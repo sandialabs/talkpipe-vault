@@ -839,16 +839,47 @@ def test_config_status_wording_names_tabs():
     )
 
 
-def test_help_text_fits_the_dialog_and_lists_ctrl_c():
+def test_help_text_reflows_and_lists_ctrl_c():
     from talkpipe_vault.tui.app import HELP_TEXT
 
-    # The help dialog is 80 columns at most, minus border, padding and the
-    # scrollbar: pre-wrapped lines longer than that re-wrap with orphans.
-    assert all(len(line) <= 70 for line in HELP_TEXT.splitlines()), [
-        line for line in HELP_TEXT.splitlines() if len(line) > 70
+    # The dialog wraps the text to whatever width the terminal has. Lines
+    # pre-wrapped for one width re-wrap with orphans at a narrower one, so
+    # every paragraph is one logical line: nothing starts with a hanging
+    # indent, and a line ends only where a sentence or heading does.
+    lines = [line for line in HELP_TEXT.splitlines() if line.strip()]
+    assert not [line for line in lines if line.startswith(" ")]
+    assert all(line.rstrip().endswith((".", ")", ":", "[/b]")) for line in lines), [
+        line for line in lines if not line.rstrip().endswith((".", ")", ":", "[/b]"))
     ]
     assert "Ctrl+C" in HELP_TEXT
     assert "scroll" in HELP_TEXT.lower()
+
+
+async def test_help_dialog_wraps_cleanly_at_sixty_columns(sample_vault):
+    from talkpipe_vault.tui.app import HELP_TEXT
+
+    app = VaultApp(VaultService(), vault_path=sample_vault)
+    async with app.run_test(size=(60, 20)) as pilot:
+        await _wait_workers(app, pilot)
+        await pilot.press("f1")
+        await _settle(pilot)
+        assert isinstance(app.screen, MessageScreen)
+        body = app.screen.query_one("#message-body").query_one(Static)
+        region = body.content_region
+        rendered = [
+            strip.text.rstrip() for strip in body.render_lines(region.reset_offset)
+        ]
+        assert rendered
+        assert any("F2 Vault" in line for line in rendered), rendered
+        # No rendered line is a one- or two-word orphan left by double wrapping
+        # (a heading is short on purpose).
+        headings = {
+            line[3:-4] for line in HELP_TEXT.splitlines() if line.startswith("[b]")
+        }
+        for line in rendered:
+            words = line.split()
+            orphan = 0 < len(words) <= 2 and not line.endswith((".", ")"))
+            assert not orphan or line in headings, (line, rendered)
 
 
 def _inside(app, widget) -> bool:
@@ -1283,3 +1314,113 @@ def test_blocked_worker_threads_ignores_daemons_and_self():
         release.set()
         worker.join()
         daemon.join()
+
+
+async def test_shift_tab_from_the_top_of_settings_reaches_the_ollama_url(
+    sample_vault,
+):
+    app = VaultApp(VaultService(), vault_path=sample_vault)
+    async with app.run_test(size=SIZE) as pilot:
+        await _wait_workers(app, pilot)
+        await pilot.press("f6")
+        await _settle(pilot)
+        assert app.focused is not None
+        assert app.focused.id == "config-retest"
+        await pilot.press("shift+tab")
+        await _settle(pilot)
+        assert app.focused is not None
+        assert app.focused.id == "cred-ollama_server_url"
+        # Elsewhere Shift+Tab keeps its ordinary meaning.
+        await pilot.press("shift+tab")
+        await _settle(pilot)
+        assert app.focused.id != "cred-ollama_server_url"
+
+
+async def test_saving_a_bare_host_port_completes_the_ollama_url(sample_vault):
+    app = VaultApp(VaultService(), vault_path=sample_vault)
+    async with app.run_test(size=SIZE) as pilot:
+        await _wait_workers(app, pilot)
+        await pilot.press("f6")
+        await _settle(pilot)
+        app.query_one("#cred-ollama_server_url", Input).value = "ollama.example:11434"
+        app.query_one("#credentials-save", Button).press()
+        await _wait_workers(app, pilot)
+        creds = {c["key"]: c for c in app.service.settings_view()["credentials"]}
+        assert creds["ollama_server_url"]["value"] == "http://ollama.example:11434"
+        assert app.query_one("#cred-ollama_server_url", Input).value == (
+            "http://ollama.example:11434"
+        )
+        assert any("Added http://" in str(n.message) for n in app._notifications)
+
+        app.query_one("#cred-ollama_server_url", Input).value = "ftp://ollama.example"
+        app.query_one("#credentials-save", Button).press()
+        await _settle(pilot)
+        assert any("not an http(s) URL" in str(n.message) for n in app._notifications)
+        creds = {c["key"]: c for c in app.service.settings_view()["credentials"]}
+        assert creds["ollama_server_url"]["value"] == "http://ollama.example:11434"
+
+
+async def test_a_vault_deleted_underneath_the_app_is_reported(tmp_path):
+    import shutil
+
+    vault = tmp_path / "vault"
+    build_docs_vault(SAMPLE_DOCS / "*", vault)
+    app = VaultApp(VaultService(), vault_path=str(vault))
+    async with app.run_test(size=SIZE) as pilot:
+        await _wait_workers(app, pilot)
+        assert app.service.status()["chunks"] > 0
+        shutil.rmtree(vault)
+        await pilot.press("f3")
+        app.query_one("#search-query", Input).value = "python"
+        app.query_one("#search-go", Button).press()
+        await _wait_workers(app, pilot)
+        note = _text(app.query_one("#search-note", Static))
+        assert "no longer on disk" in note, note
+        await pilot.press("ctrl+r")
+        await _wait_workers(app, pilot)
+        assert any("no longer on disk" in str(n.message) for n in app._notifications)
+
+
+async def test_question_box_grows_with_a_long_question(sample_vault):
+    app = VaultApp(VaultService(), vault_path=sample_vault)
+    async with app.run_test(size=SIZE) as pilot:
+        await _wait_workers(app, pilot)
+        await pilot.press("f5")
+        await _settle(pilot)
+        box = app.query_one("#question", TextArea)
+        before = box.size.height
+        box.text = "tell me about " + "deployment and testing and " * 30
+        await _settle(pilot)
+        assert box.size.height > before
+        assert box.size.height <= 7
+
+
+async def test_path_fence_error_stays_on_the_vault_tab(tmp_path, monkeypatch):
+    monkeypatch.setenv("TALKPIPE_VAULT_ROOT", str(tmp_path / "missing"))
+    app = VaultApp(VaultService())
+    async with app.run_test(size=SIZE) as pilot:
+        await _wait_workers(app, pilot)
+        line = _text(app.query_one("#index-progress", Static))
+        assert "TALKPIPE_VAULT_ROOT" in line, line
+        assert "missing" in line, line
+
+
+def test_run_app_reports_a_crash_before_the_fast_exit(monkeypatch, capsys):
+    import threading
+
+    from talkpipe_vault.tui import app as app_module
+
+    calls: list[Any] = []
+    monkeypatch.setattr(app_module.os, "_exit", lambda code: calls.append(code))
+    monkeypatch.setattr(app_module, "BLOCKED_THREAD_GRACE_SECONDS", 0.01)
+
+    class CrashingApp:
+        def run(self, *, loop):
+            raise RuntimeError("boom")
+
+    stuck = threading.Thread(target=lambda: None)
+    monkeypatch.setattr(app_module, "_blocked_worker_threads", lambda: [stuck])
+    with pytest.raises(RuntimeError):
+        app_module.run_app(CrashingApp())  # type: ignore[arg-type]  # stand-in
+    assert calls == [1]
+    assert "boom" in capsys.readouterr().err

@@ -186,9 +186,10 @@ Checkbox {
 /* ---- Ask ------------------------------------------------------------------------ */
 
 #question {
-    height: 3;
+    /* Grows with a wrapped question so the whole of it stays readable. */
+    height: auto;
     min-height: 3;
-    max-height: 5;
+    max-height: 7;
     border: round $primary-darken-1;
     background: $panel;
 }

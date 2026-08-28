@@ -16,6 +16,7 @@ import logging
 import os
 import sys
 import threading
+import traceback
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, ClassVar, cast
@@ -60,50 +61,50 @@ HELP_TEXT = """\
 (This text scrolls: PageDown / arrow keys, or Tab into it.)
 
 [b]Tabs[/b]
-  F2  Vault: open/create a vault, index documents, recent vaults,
-      retrieval filter. Index documents adds to the open vault; tick
-      "Overwrite existing index" to replace it (re-indexing the same
-      folder without it duplicates chunks). Enter in either path field
-      runs Index documents. Adding documents does not update the
-      full-text index — rebuild it on the Keywords tab.
-      Recent vaults: a click or Up/Down selects; Enter or a double
-      click opens; Open/Delete selected act on the selection.
-  F3  Search (semantic)        F4  Keywords (full-text)
-  F5  Ask: question answering with citations. Enter in the question
-      box asks; the box wraps long questions. PageUp/PageDown in
-      the box scroll the answer; Esc cancels an Ask still running.
-  F6  Settings: models, connections & credentials, configuration
-      status.
-  Tab / Shift+Tab move between fields and buttons inside a tab.
+F2 Vault — open/create a vault, index documents, recent vaults, retrieval \
+filter. Index documents adds to the open vault; tick "Overwrite existing \
+index" to replace it (re-indexing the same folder without it duplicates \
+chunks). Enter in either path field runs Index documents. Adding documents \
+does not update the full-text index — rebuild it on the Keywords tab. \
+Recent vaults: a click or Up/Down selects; Enter or a double click opens; \
+Open/Delete selected act on the selection.
+F3 Search — semantic search.
+F4 Keywords — full-text search.
+F5 Ask — question answering with citations. Enter in the question box \
+asks; the box wraps and grows with a long question. PageUp/PageDown in the \
+box scroll the answer; Esc cancels an Ask still running.
+F6 Settings — models, connections & credentials, configuration status. \
+Shift+Tab from the top (Re-test) jumps to the last field, the Ollama URL.
+Tab / Shift+Tab move between fields and buttons inside a tab.
 
 [b]Results (Search, Keywords, Ask citations)[/b]
-  Up/Down   move through results; the detail pane follows
-  Enter     load the full chunk text into the detail pane
-  o         show where the source document is on disk (view it if
-            text)
-  c         copy the highlighted chunk to the clipboard
-  Copy All  copies every result (button)
-  Tab       into the detail pane (or Ask's answer pane), then
-            Up/Down or PageUp/PageDown scroll long text
-  Exact words: semantic Search ranks by meaning, so a rare word can
-  land below unrelated notes — the Keywords tab finds it exactly
-  (build its index there first).
-  When the vault's retrieval filter is enabled, an "Apply retrieval
-  filter" checkbox appears on Search and Keywords; Ask always applies
-  it.
+After a search the result list has the focus: Up/Down move through the \
+results and the detail pane follows. Press F3/F4 (or Shift+Tab) to get \
+back to the query field — while the list is focused, letters are keys:
+Enter — load the full chunk text into the detail pane.
+o — show where the source document is on disk (view it if text).
+c — copy the highlighted chunk to the clipboard.
+Copy All (button) — copy every result.
+Tab — into the detail pane (or Ask's answer pane), then Up/Down or \
+PageUp/PageDown scroll long text.
+Exact words: semantic Search ranks by meaning, so a rare word can land \
+below unrelated notes — the Keywords tab finds it exactly (build its index \
+there first).
+When the vault's retrieval filter is enabled, an "Apply retrieval filter" \
+checkbox appears on Search and Keywords; Ask always applies it.
 
 [b]Everywhere[/b]
-  Ctrl+R  reload the vault and settings (after indexing or changing
-          ~/.talkpipe.toml or TALKPIPE_* variables outside this app)
-  F1      this help        Ctrl+Q  quit        Esc  close a dialog
-  Ctrl+C  does not quit (it only reminds you of Ctrl+Q), so a stray
-          Ctrl+C never loses a long answer. Ctrl+Q asks first while
-          an indexing run is in progress (quitting abandons it).
+Ctrl+R — reload the vault and settings (after indexing or changing \
+~/.talkpipe.toml or TALKPIPE_* variables outside this app).
+F1 — this help.  Ctrl+Q — quit.  Esc — close a dialog.
+Ctrl+C does not quit (it only reminds you of Ctrl+Q), so a stray Ctrl+C \
+never loses a long answer. Ctrl+Q asks first while an indexing run is in \
+progress (quitting abandons it).
 
 [b]Where things live[/b]
-  Recent vaults, model settings and credentials: the same files the
-  web interface uses (TALKPIPE_VAULT_HOME, default ~/.talkpipe-vault),
-  so both interfaces share every vault and setting.
+Recent vaults, model settings and credentials: the same files the web \
+interface uses (TALKPIPE_VAULT_HOME, default ~/.talkpipe-vault), so both \
+interfaces share every vault and setting.
 """
 
 
@@ -1000,7 +1001,6 @@ class VaultApp(App[None]):
             # run (embedding-model download). Keep a line on screen until then.
             self.query_one("#vault-name", Static).update("opening…")
             self.query_one("#index-progress", Static).update("Opening the vault…")
-        self.notify("Opening the vault…", timeout=3)
         self._startup()
 
     def on_resize(self, event: Any) -> None:
@@ -1059,6 +1059,9 @@ class VaultApp(App[None]):
         else:
             self.notify(outcome["error"], severity="error", timeout=15)
             self.query_one("#tabs", TabbedContent).active = "tab-vault"
+            # A path fence that names a missing folder, or a vault that would
+            # not open: keep the reason where it stays readable (toasts expire).
+            self.query_one("#index-progress", Static).update(outcome["error"])
         self.refresh_status()
         self._load_recent_vaults()
         self._load_settings_form()
@@ -1203,6 +1206,23 @@ class VaultApp(App[None]):
 
     def action_help(self) -> None:
         self.push_screen(MessageScreen("Help", HELP_TEXT))
+
+    def action_focus_previous(self) -> None:
+        """Shift+Tab from the top of the Settings tab wraps to its last field.
+
+        F6 focuses Re-test, the first control on the tab; Textual's previous
+        focusable from there is the scrolling container and then the tab
+        strip, so the "Shift+Tab from the top reaches the Ollama URL" route
+        needed four presses that visibly did nothing. Jump straight to the
+        last input of the tab instead.
+        """
+        focused = self.focused
+        if focused is not None and focused.id == "config-retest":
+            inputs = self.query_one("#settings-scroll").query(Input)
+            if inputs:
+                inputs.last().focus()
+                return
+        super().action_focus_previous()
 
     # -- vault tab -----------------------------------------------------------------------
 
@@ -1841,7 +1861,7 @@ class VaultApp(App[None]):
             # the tab; say where the problem is described.
             self.notify(
                 f"Configuration status: {overall} — see the top of the Settings "
-                "tab (Shift+Tab to scroll up).",
+                "tab (PageUp scrolls up).",
                 severity="warning",
                 timeout=8,
             )
@@ -1919,6 +1939,12 @@ def main(argv: list[str] | None = None) -> None:
     run_app(app)
 
 
+# How long run_app waits for a still-running worker thread before leaving the
+# process without it. Long enough for a write that is finishing, far shorter
+# than the minutes a blocked network request can take.
+BLOCKED_THREAD_GRACE_SECONDS = 2.0
+
+
 def _blocked_worker_threads() -> list[threading.Thread]:
     """Non-daemon threads (other than this one) that would delay exit.
 
@@ -1946,16 +1972,32 @@ def run_app(app: VaultApp) -> None:
     process without waiting for it.
     """
     loop = asyncio.new_event_loop()
+    exit_code = 0
     try:
         asyncio.set_event_loop(loop)
         with contextlib.suppress(KeyboardInterrupt):
             app.run(loop=loop)
         loop.run_until_complete(loop.shutdown_asyncgens())
+    except BaseException:
+        # Report before the fast exit below, which skips the interpreter's
+        # own traceback printing along with the thread join.
+        traceback.print_exc()
+        exit_code = 1
+        raise
     finally:
+        blocked = _blocked_worker_threads()
+        if blocked:
+            # A worker that is nearly done (a Whoosh commit, a settings write)
+            # gets a moment to finish; one blocked in a download or an LLM
+            # request does not hold the terminal.
+            for thread in blocked:
+                with contextlib.suppress(RuntimeError):  # not started yet
+                    thread.join(timeout=BLOCKED_THREAD_GRACE_SECONDS)
         if _blocked_worker_threads():
+            logging.shutdown()
             sys.stdout.flush()
             sys.stderr.flush()
-            os._exit(0)
+            os._exit(exit_code)
         loop.close()
 
 
