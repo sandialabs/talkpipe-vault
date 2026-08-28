@@ -63,7 +63,7 @@ Open http://127.0.0.1:8002, then:
 1. **Vaults & Documents** — pick the folder (or glob pattern) to index. A
    vault name is suggested for you; one click creates the vault and indexes
    into it. The first index downloads the default embedding model from
-   Hugging Face (~30 MB, cached afterward).
+   Hugging Face (about 250 MB on disk, cached afterward).
 2. **Search** and **Ask** away.
 
 Answers on the Ask page need a chat provider — any one that TalkPipe
@@ -142,10 +142,18 @@ or from a clone with `pip install .` (contributors use the editable
 `pip install -e ".[dev]"` in [Development setup](docs/ADVANCED.md#development-setup)).
 
 ```bash
-vault-tui ~/my-vault      # open (or create) a vault
+vault-tui ~/my-vault      # open (or create) a vault — the index folder, not your documents
 vault-tui --resume        # reopen the most recently used vault
 vault-tui                 # start on the Vault tab and choose one there
 ```
+
+A vault is a folder that holds the search index; the documents live wherever
+they already are and are named on the Vault tab. Point `vault-tui` at a folder
+of documents by mistake and it asks before turning that folder into a vault.
+Opening a vault loads the embedding model, which on a first run means
+downloading it (about 250 MB for the default model2vec model) — the Vault tab
+says so while it waits, and the header reads "opening…" until the vault is
+ready.
 
 Enter in either path field on the Vault tab runs **Index documents** (it
 opens the vault when only the vault path is filled).
@@ -161,7 +169,7 @@ between the two freely. Tabs mirror the web pages:
 | `F4` | Keywords | Full-text search (Whoosh syntax), and building/rebuilding the full-text index |
 | `F5` | Ask | Question answering with the answer, its "Answered by" line and the source chunks it used; optional keyword boost |
 | `F6` | Settings | Configuration status (Re-test), embedding/chat model settings, connections & credentials |
-| `F1` / `Ctrl+R` / `Ctrl+Q` | | Help / reload the vault and settings (after indexing or editing `~/.talkpipe.toml` outside the app) / quit (`Ctrl+C` only reminds you of `Ctrl+Q`) |
+| `F1` / `Ctrl+R` / `Ctrl+Q` | | Help / reload the vault and settings (after indexing or editing `~/.talkpipe.toml` outside the app) / quit (`Ctrl+C` only reminds you of `Ctrl+Q`; while an indexing run is in progress `Ctrl+Q` asks first, because quitting abandons it) |
 
 `--show-source-paths` shows file paths in results, as for `vault-server`.
 On a shared machine, `TALKPIPE_VAULT_ROOT` and `TALKPIPE_DOCUMENT_ROOTS`
@@ -170,14 +178,22 @@ confine where vaults and documents may live for both interfaces — see
 Long operations (embedding, Ask, indexing) run in the background and report
 progress in the tab that started them. As in the browser, Ask needs a chat
 provider: enter the Ollama URL or an API key under **Connections &
-credentials** on the Settings tab (`F6`) and press **Re-test**. "Index
+credentials** on the Settings tab (`F6`) — it is the last field on the tab,
+so `Shift+Tab` from the top reaches it quickest — and press **Save
+connection settings**, which re-tests the configuration by itself (or
+export `TALKPIPE_OLLAMA_SERVER_URL` before starting; the OpenAI base URL
+field points the OpenAI provider at any OpenAI-compatible endpoint — see
+[Provider notes](docs/ADVANCED.md#provider-notes)). While an answer is being
+generated, `Esc` stops waiting for it. "Index
 documents" adds to the open vault — tick **Overwrite existing index** to
 replace it; re-indexing the same folder without it duplicates every chunk
 (the summary line says so when it happens, and the box unticks itself after
 a replace run). Indexing never updates the full-text index: the header
 shows "keywords out of date" until you rebuild it on the Keywords tab, and
-a keyword search that finds nothing says so. Long chunk text and long answers scroll once you `Tab` into
-their pane. The **Retrieval filter** button on the Vault tab edits the same
+a keyword search that finds nothing says so. Long chunk text scrolls once
+you `Tab` into its pane; `PageUp`/`PageDown` in the question box scroll a
+long answer (the answer pane is also four `Tab` stops from the question
+box). The **Retrieval filter** button on the Vault tab edits the same
 per-vault ChatterLang script as the web page, with an example in the
 dialog (its **Help** button adds the result shape and more recipes); a
 saved filter does nothing until you tick **Enabled on this machine**. The

@@ -7,6 +7,7 @@ chat LLM is stubbed on the app state, as the web-app tests do.
 import os
 import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 from textual.widgets import (
@@ -591,7 +592,7 @@ def test_main_runs_app(monkeypatch, tmp_path):
         def __init__(self, service, *, vault_path, resume):
             captured.update(vault_path=vault_path, resume=resume, service=service)
 
-        def run(self):
+        def run(self, **_kwargs):
             captured["ran"] = True
 
     monkeypatch.setattr("talkpipe_vault.tui.app.VaultApp", FakeApp)
@@ -1046,9 +1047,239 @@ def test_main_prepares_the_process_before_running(monkeypatch, tmp_path):
         def __init__(self, service, *, vault_path, resume):
             calls.append("constructed")
 
-        def run(self):
+        def run(self, **_kwargs):
             calls.append("ran")
 
     monkeypatch.setattr("talkpipe_vault.tui.app.VaultApp", FakeApp)
     main([str(tmp_path / "v")])
     assert calls == ["prepared", "constructed", "ran"]
+
+
+async def test_startup_keeps_an_opening_line_until_the_vault_is_ready(tmp_path):
+    vault = tmp_path / "slow-vault"
+    app = VaultApp(VaultService(), vault_path=str(vault))
+    async with app.run_test(size=SIZE) as pilot:
+        # Before the worker finishes the header and the Vault tab say so.
+        await pilot.pause(0.01)
+        assert _text(app.query_one("#vault-name", Static)) == "opening…"
+        await _wait_workers(app, pilot)
+        assert _text(app.query_one("#vault-name", Static)).endswith("slow-vault")
+        assert app.query_one("#tabs").active == "tab-vault"
+        assert "This vault is empty" in _text(app.query_one("#index-progress", Static))
+
+
+async def test_command_line_documents_folder_is_confirmed_first(tmp_path):
+    docs = tmp_path / "notes"
+    docs.mkdir()
+    (docs / "a.md").write_text("# a\n")
+    app = VaultApp(VaultService(), vault_path=str(docs))
+    async with app.run_test(size=SIZE) as pilot:
+        await _wait_workers(app, pilot)
+        assert isinstance(app.screen, ConfirmScreen)
+        await pilot.press("escape")
+        await _wait_workers(app, pilot)
+        assert app.service.vault_path == ""
+        assert app.query_one("#tabs").active == "tab-vault"
+        assert app.query_one("#vault-path", Input).value == str(docs)
+        assert "was not opened" in _text(app.query_one("#index-progress", Static))
+        assert not (docs / "docs.lance").exists()
+
+
+async def test_escape_cancels_waiting_for_an_answer(sample_vault, monkeypatch):
+    import threading
+
+    release = threading.Event()
+    app = VaultApp(VaultService(), vault_path=sample_vault)
+    async with app.run_test(size=SIZE) as pilot:
+        await _wait_workers(app, pilot)
+
+        def slow(_q):
+            release.wait(10)
+            return "late answer"
+
+        monkeypatch.setattr(app.service.state, "chat_pipeline", slow)
+        monkeypatch.setattr(app.service.state, "last_refresh_time", float("inf"))
+        app.query_one("#question", TextArea).load_text("hello")
+        app.query_one("#ask-go", Button).press()
+        await _settle(pilot)
+        assert app.ask_running()
+        assert "Esc" in _text(app.query_one("#answer-meta", Static))
+        await pilot.press("escape")
+        await _settle(pilot)
+        assert _text(app.query_one("#answer-meta", Static)) == "Cancelled"
+        release.set()
+        await _wait_workers(app, pilot)
+        # The late result must not replace the cancellation.
+        assert _text(app.query_one("#answer-meta", Static)) == "Cancelled"
+        assert "late answer" not in _answer_source(app)
+
+
+async def test_page_keys_in_the_question_box_scroll_the_answer(
+    sample_vault, monkeypatch
+):
+    from textual.containers import VerticalScroll
+
+    app = VaultApp(VaultService(), vault_path=sample_vault)
+    async with app.run_test(size=SIZE) as pilot:
+        await _wait_workers(app, pilot)
+        monkeypatch.setattr(
+            app.service.state,
+            "chat_pipeline",
+            lambda _q: "\n\n".join(f"Paragraph {i}." for i in range(80)),
+        )
+        monkeypatch.setattr(app.service.state, "last_refresh_time", float("inf"))
+        question = app.query_one("#question", TextArea)
+        question.load_text("hello")
+        question.focus()
+        await pilot.press("enter")
+        await _wait_workers(app, pilot)
+        pane = app.query_one("#answer-pane", VerticalScroll)
+        assert pane.scroll_y == 0
+        await pilot.press("pagedown")
+        await _settle(pilot)
+        assert pane.scroll_y > 0
+        await pilot.press("pageup")
+        await _settle(pilot)
+        assert pane.scroll_y == 0
+
+
+async def test_quit_asks_first_while_indexing(sample_vault, monkeypatch):
+    app = VaultApp(VaultService(), vault_path=sample_vault)
+    async with app.run_test(size=SIZE) as pilot:
+        await _wait_workers(app, pilot)
+        monkeypatch.setattr(
+            app.service,
+            "index_status",
+            lambda: {
+                "running": True,
+                "phase": "indexing",
+                "source": "/docs",
+                "vault_path": sample_vault,
+                "files_done": 3,
+                "total_files": 40,
+            },
+        )
+        await pilot.press("ctrl+q")
+        await _settle(pilot)
+        assert isinstance(app.screen, ConfirmScreen)
+        assert "3/40" in app.screen._message
+        await pilot.press("escape")
+        await _settle(pilot)
+        assert not app._exit
+        assert not isinstance(app.screen, ConfirmScreen)
+
+
+async def test_source_dialog_shows_any_text_file(sample_vault, tmp_path):
+    csv = tmp_path / "rows.csv"
+    csv.write_text("item,qty\nsensor,12\n")
+    app = VaultApp(VaultService(), vault_path=sample_vault)
+    async with app.run_test(size=SIZE) as pilot:
+        await _wait_workers(app, pilot)
+        pane = app.query_one("#search-results", ResultsPane)
+        pane._show_source({"ok": True, "path": str(csv), "is_text": True})
+        await _settle(pilot)
+        assert isinstance(app.screen, MessageScreen)
+        assert "sensor,12" in app.screen._body
+        await pilot.press("escape")
+        await _settle(pilot)
+        pane._show_source({"ok": True, "path": str(csv), "is_text": False})
+        await _settle(pilot)
+        assert "cannot be shown" in app.screen._body
+        await pilot.press("escape")
+
+
+async def test_indexing_summary_counts_files_without_content(tmp_path):
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "note.md").write_text("# Note\n\nSomething worth indexing here.\n")
+    (docs / "empty.md").write_text("")
+    (docs / "blob.bin").write_bytes(bytes(range(256)) * 4)
+    vault = tmp_path / "vault"
+    app = VaultApp(VaultService(), vault_path=str(vault))
+    async with app.run_test(size=SIZE) as pilot:
+        await _wait_workers(app, pilot)
+        app.query_one("#source-path", Input).value = str(docs)
+        await _index_and_wait(app, pilot)
+        text = _text(app.query_one("#index-progress", Static))
+        assert "The vault now holds" in text
+        assert "of the matched files had no readable content" in text
+        assert "2 of the matched files" in text
+
+
+async def test_full_chunk_is_labelled_in_the_detail_title(sample_vault):
+    app = VaultApp(VaultService(), vault_path=sample_vault)
+    async with app.run_test(size=SIZE) as pilot:
+        await _wait_workers(app, pilot)
+        query = app.query_one("#search-query", Input)
+        query.value = "sample document"
+        query.focus()
+        await pilot.press("enter")
+        await _wait_workers(app, pilot)
+        title = app.query_one("#search-results-detail-title", Static)
+        assert "full chunk" not in _text(title)
+        app.query_one("#search-results", ResultsPane).option_list.focus()
+        await pilot.press("enter")
+        await _wait_workers(app, pilot)
+        assert "full chunk" in _text(title)
+
+
+async def test_header_keeps_the_vault_name_at_80_columns(tmp_path):
+    vault = tmp_path / "a-rather-long-parent-folder-name" / "budget-notes-vault"
+    app = VaultApp(VaultService(), vault_path=str(vault))
+    async with app.run_test(size=(80, 24)) as pilot:
+        await _wait_workers(app, pilot)
+        shown = _text(app.query_one("#vault-name", Static))
+        assert shown.endswith("budget-notes-vault")
+        assert len(shown) <= app.query_one("#vault-name", Static).content_size.width
+
+
+def test_run_app_leaves_without_waiting_for_blocked_threads(monkeypatch):
+    import threading
+
+    from talkpipe_vault.tui import app as app_module
+
+    calls: list[Any] = []
+    monkeypatch.setattr(app_module.os, "_exit", lambda code: calls.append(code))
+
+    class FakeApp:
+        def run(self, *, loop):
+            calls.append(("run", loop))
+
+    stuck = threading.Thread(target=lambda: None)
+    monkeypatch.setattr(app_module, "_blocked_worker_threads", lambda: [stuck])
+    app_module.run_app(FakeApp())  # type: ignore[arg-type]  # duck-typed stand-in
+    assert calls[0][0] == "run"
+    assert calls[-1] == 0
+
+    calls.clear()
+    monkeypatch.setattr(app_module, "_blocked_worker_threads", list)
+    app_module.run_app(FakeApp())  # type: ignore[arg-type]  # duck-typed stand-in
+    assert calls == [("run", calls[0][1])]
+
+
+def test_blocked_worker_threads_ignores_daemons_and_self():
+    import threading
+
+    from talkpipe_vault.tui.app import _blocked_worker_threads
+
+    started = threading.Event()
+    release = threading.Event()
+
+    def wait():
+        started.set()
+        release.wait(5)
+
+    daemon = threading.Thread(target=wait, daemon=True)
+    worker = threading.Thread(target=wait)
+    daemon.start()
+    worker.start()
+    started.wait(5)
+    try:
+        blocked = _blocked_worker_threads()
+        assert worker in blocked
+        assert daemon not in blocked
+        assert threading.current_thread() not in blocked
+    finally:
+        release.set()
+        worker.join()
+        daemon.join()

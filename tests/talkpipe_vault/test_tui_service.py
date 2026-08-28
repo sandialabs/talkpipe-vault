@@ -363,3 +363,107 @@ def test_status_reports_full_text_index_older_than_the_vault(sample_vault):
     assert service.start_fulltext_index()["ok"]
     assert _wait(service.fulltext_status)["error"] is None
     assert service.status()["keyword_index_stale"] is False
+
+
+def test_startup_asks_before_making_a_documents_folder_a_vault(tmp_path):
+    docs = tmp_path / "notes"
+    docs.mkdir()
+    (docs / "a.md").write_text("# a\n")
+    (docs / "b.md").write_text("# b\n")
+    service = VaultService()
+    outcome = service.startup(str(docs))
+    assert not outcome["ok"]
+    assert outcome["needs_confirm"]
+    assert outcome["confirm_path"] == str(docs)
+    assert outcome["entry_count"] == 2
+    assert service.vault_path == ""
+    # Confirmed, the same call opens it (the Vault form's flow).
+    confirmed = service.startup(str(docs), confirm_non_vault=True)
+    assert confirmed["ok"], confirmed
+    assert service.vault_path == str(docs)
+
+
+def test_startup_reports_what_it_is_waiting_on(tmp_path):
+    seen: list[str] = []
+    service = VaultService()
+    outcome = service.startup(str(tmp_path / "new-vault"), progress=seen.append)
+    assert outcome["ok"], outcome
+    assert len(seen) == 1
+    assert "loading the embedding model model2vec/" in seen[0]
+    assert str(tmp_path / "new-vault") in seen[0]
+
+
+def test_opening_note_mentions_the_download_when_the_model_is_not_cached(
+    monkeypatch,
+):
+    from talkpipe_vault.pipelines import diagnostics
+
+    service = VaultService()
+    monkeypatch.setattr(
+        diagnostics, "_model2vec_cache_state", lambda _model: ("absent", None)
+    )
+    note = service.opening_note("/tmp/v")
+    assert "downloaded from Hugging Face" in note
+    assert "250 MB" in note
+    monkeypatch.setattr(
+        diagnostics, "_model2vec_cache_state", lambda _model: ("ready", "/cache")
+    )
+    assert "downloaded" not in service.opening_note("/tmp/v")
+
+
+def test_startup_explains_an_unusable_parent(tmp_path):
+    blocker = tmp_path / "a-file"
+    blocker.write_text("not a folder")
+    outcome = VaultService().startup(str(blocker / "vault"))
+    assert not outcome["ok"]
+    assert f"the parent {blocker} is a file, not a folder" in outcome["error"]
+
+    if os.geteuid() == 0:  # pragma: no cover - root can write anywhere
+        pytest.skip("permissions do not apply to root")
+    sealed = tmp_path / "sealed"
+    sealed.mkdir()
+    sealed.chmod(0o555)
+    try:
+        outcome = VaultService().startup(str(sealed / "missing" / "vault"))
+    finally:
+        sealed.chmod(0o755)
+    assert not outcome["ok"]
+    assert f"the parent folder {sealed / 'missing'} does not exist" in outcome["error"]
+    assert "Permission denied" in outcome["error"]
+
+
+def test_ask_timeout_names_the_ollama_server(sample_vault, monkeypatch):
+    service = VaultService()
+    assert service.startup(sample_vault)["ok"]
+
+    def slow(_q):
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr(service.state, "chat_pipeline", slow)
+    monkeypatch.setattr(service.state, "last_refresh_time", float("inf"))
+    monkeypatch.setenv("TALKPIPE_OLLAMA_SERVER_URL", "http://10.255.255.1:11434")
+    monkeypatch.setattr(
+        query,
+        "_effective_models",
+        lambda _state: {"chat_source": "ollama", "chat_model": "m"},
+    )
+    outcome = service.ask("hello")
+    assert not outcome["ok"]
+    assert "http://10.255.255.1:11434" in outcome["error"]
+    assert "Settings tab (F6)" in outcome["error"]
+    assert "timed out" in outcome["error"]
+
+
+def test_source_file_reports_whether_it_is_text(tmp_path):
+    from talkpipe_vault.tui.service import looks_like_text
+
+    csv = tmp_path / "rows.csv"
+    csv.write_text("a,b\n1,2\n")
+    binary = tmp_path / "blob.bin"
+    binary.write_bytes(bytes(range(256)))
+    empty = tmp_path / "empty.txt"
+    empty.write_text("")
+    assert looks_like_text(csv)
+    assert not looks_like_text(binary)
+    assert looks_like_text(empty)
+    assert not looks_like_text(tmp_path / "missing.txt")

@@ -75,7 +75,9 @@ Two environment variables restrict where either interface may look. Both
 are unset by default (no restriction), apply to `vault-server` and
 `vault-tui` alike, and are checked against fully resolved paths, so a
 symlink pointing outside an allowed root is rejected. If either names a
-folder that does not exist, the app refuses to start and says which one.
+folder that does not exist, `vault-server` refuses to start and says which
+one; `vault-tui` starts on the Vault tab with the same message on screen
+and no vault open, so the variable can be fixed and the app restarted.
 
 - `TALKPIPE_VAULT_ROOT` — a single directory. Vaults can only be created,
   opened, deleted, or resumed inside it, and the vault name suggested for a

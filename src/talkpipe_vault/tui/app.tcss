@@ -122,6 +122,14 @@ Screen.compact .button-row Static {
     width: auto;
 }
 
+/* The result-count / error labels end their rows; clipped with an ellipsis
+   rather than spilling past 80 columns. */
+#search-note, #kw-note {
+    width: 1fr;
+    text-wrap: nowrap;
+    text-overflow: ellipsis;
+}
+
 Checkbox {
     height: auto;
     margin: 0;

@@ -19,14 +19,24 @@ import asyncio
 import json
 import os
 import shutil
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from talkpipe.llm.config import getEmbeddingSources, getPromptSources
 
 from talkpipe_vault.apps import access_control, credentials, query, user_settings
-from talkpipe_vault.pipelines import config, retrieval_filter, vault_metadata
+from talkpipe_vault.pipelines import (
+    config,
+    diagnostics,
+    retrieval_filter,
+    vault_metadata,
+)
 from talkpipe_vault.pipelines.config import ensure_supported_vault_layout
+
+# The default model2vec model unpacks to roughly this much on disk; the figure
+# only sizes the first-run wait in the startup message.
+DEFAULT_EMBEDDING_DOWNLOAD_NOTE = "about 250 MB for the default model"
 
 
 def _newest_mtime(folder: Path) -> float | None:
@@ -53,6 +63,49 @@ def _fail(error: str, **extra: Any) -> dict[str, Any]:
     return {"ok": False, "message": "", "error": error, **extra}
 
 
+def looks_like_text(path: Path, sample_bytes: int = 8192) -> bool:
+    """True when the start of ``path`` decodes as UTF-8 text with no NUL bytes.
+
+    The terminal can show any text file inline (CSV, JSON, YAML, source
+    code …), not only the handful of extensions the browser renders inline,
+    so the decision is made from the bytes rather than the suffix.
+    """
+    try:
+        with path.open("rb") as handle:
+            sample = handle.read(sample_bytes)
+    except OSError:
+        return False
+    if b"\0" in sample:
+        return False
+    try:
+        sample.decode("utf-8")
+    except UnicodeDecodeError:
+        # A multi-byte character cut off at the sample boundary is still text.
+        try:
+            sample[:-3].decode("utf-8")
+        except UnicodeDecodeError:
+            return False
+    return True
+
+
+def _mkdir_failure(path: Path, exc: OSError) -> str:
+    """Explain why a vault folder could not be created.
+
+    ``mkdir(parents=True)`` under a missing, unwritable top-level folder
+    raises "Permission denied: '/nonexistent'" — a folder the user never
+    typed, for a reason that is not the real one.
+    """
+    parent = path.parent
+    if parent.exists() and not parent.is_dir():
+        return f"the parent {parent} is a file, not a folder."
+    if not parent.exists():
+        return (
+            f"the parent folder {parent} does not exist and cannot be created "
+            f"({exc.strerror or exc}: {exc.filename})."
+        )
+    return str(exc)
+
+
 class VaultService:
     """Everything the TUI can do, expressed as plain-data operations."""
 
@@ -62,12 +115,27 @@ class VaultService:
 
     # -- startup ----------------------------------------------------------------
 
-    def startup(self, vault_path: str = "", *, resume: bool = False) -> dict[str, Any]:
+    def startup(
+        self,
+        vault_path: str = "",
+        *,
+        resume: bool = False,
+        confirm_non_vault: bool = False,
+        progress: Callable[[str], None] | None = None,
+    ) -> dict[str, Any]:
         """Apply saved credentials/settings and open the initial vault.
 
         Mirrors ``run_app``: a vault that cannot be opened degrades to "no
         vault" with a warning rather than aborting, so Settings and its
         configuration status stay reachable.
+
+        A ``vault_path`` naming a folder of documents (no vault data, not
+        empty) is not opened silently: the outcome carries ``needs_confirm``
+        exactly as :meth:`open_vault` does, so the interface can ask before
+        index files land among someone's notes. ``progress`` receives a
+        one-line description of what the open is waiting on (loading — on a
+        first run, downloading — the embedding model), because that can take
+        minutes and nothing else on screen says so.
         """
         problems = access_control.startup_errors()
         if problems:
@@ -91,8 +159,25 @@ class VaultService:
                 f"Vault path {chosen} is outside {access_control.VAULT_ROOT_ENV} "
                 f"({access_control.vault_root()})."
             )
+        if not resumed and not confirm_non_vault:
+            entries = query._existing_non_vault_entries(Path(chosen))
+            if entries > 0:
+                return _fail(
+                    f"{chosen} already contains {entries} item(s) that are not "
+                    "vault data.",
+                    needs_confirm=True,
+                    confirm_path=chosen,
+                    entry_count=entries,
+                )
+        if progress is not None:
+            progress(self.opening_note(chosen))
         try:
             Path(chosen).mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            return _fail(
+                f"Error opening vault at {chosen}: {_mkdir_failure(Path(chosen), exc)}"
+            )
+        try:
             query.init_pipelines(chosen)
         except (OSError, ValueError) as exc:
             return _fail(f"Error opening vault at {chosen}: {exc}")
@@ -113,6 +198,29 @@ class VaultService:
                 "one used before it was opened instead"
             )
         return _ok(f"Opened vault {chosen}{note}.", vault_path=chosen)
+
+    def opening_note(self, vault_path: str) -> str:
+        """What opening ``vault_path`` is about to wait on.
+
+        Opening a vault constructs the search pipelines, which load the
+        embedding model; with model2vec that means a Hugging Face download on
+        a first run. The toast that announces the open expires long before a
+        slow download finishes, so this line stays on screen instead.
+        """
+        models = query._effective_models(self.state)
+        source = str(models["embedding_source"])
+        model = str(models["embedding_model"])
+        note = f"Opening {vault_path}… loading the embedding model {source}/{model}"
+        if source == "model2vec":
+            state, _path = diagnostics._model2vec_cache_state(model)
+            if state == "absent":
+                return (
+                    f"{note}, which is not cached yet, so it is being downloaded "
+                    f"from Hugging Face ({DEFAULT_EMBEDDING_DOWNLOAD_NOTE}). This "
+                    "can take a few minutes on a slow connection; the vault opens "
+                    "when it finishes."
+                )
+        return f"{note}."
 
     @staticmethod
     def _missing_recent_vaults_before(chosen: str) -> list[str]:
@@ -511,7 +619,7 @@ class VaultService:
             return _fail("This result's source document is not in the vault index.")
         if not path.is_file():
             return _fail(f"The source document is no longer at {path}.")
-        return _ok(path=str(path))
+        return _ok(path=str(path), is_text=looks_like_text(path))
 
     # -- ask ----------------------------------------------------------------------
 
@@ -566,10 +674,25 @@ class VaultService:
         except Exception as exc:
             error = str(exc)
             lowered = error.lower()
+            chat_source = str(query._effective_models(state).get("chat_source", ""))
             if "ollama" in lowered and ("connect" in lowered or "refused" in lowered):
                 error = (
                     "Set the Ollama server URL on the Settings tab (F6), "
                     "Connections & credentials. " + error
+                )
+            elif chat_source == "ollama" and (
+                "timed out" in lowered or "timeout" in lowered
+            ):
+                # The client's own text is just "timed out": say which server
+                # was waited on and where the URL is changed, as the
+                # connection-refused message does.
+                url, url_source = diagnostics._ollama_url_and_source()
+                error = (
+                    f"Timed out waiting for Ollama at {url} ({url_source}). If "
+                    "that is the wrong server, change the Ollama server URL on the "
+                    "Settings tab (F6), Connections & credentials; if it is the "
+                    "right one, the model may still be loading or the machine "
+                    f"unreachable. Original error: {error}"
                 )
             elif ("openai" in lowered or "anthropic" in lowered) and (
                 "api key" in lowered or "api_key" in lowered or "credential" in lowered

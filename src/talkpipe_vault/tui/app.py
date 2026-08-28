@@ -10,8 +10,12 @@ responsive while embeddings, LLM calls, and index builds run.
 from __future__ import annotations
 
 import argparse
+import asyncio
+import contextlib
 import logging
+import os
 import sys
+import threading
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, ClassVar, cast
@@ -66,7 +70,8 @@ HELP_TEXT = """\
       click opens; Open/Delete selected act on the selection.
   F3  Search (semantic)        F4  Keywords (full-text)
   F5  Ask: question answering with citations. Enter in the question
-      box asks; the box wraps long questions.
+      box asks; the box wraps long questions. PageUp/PageDown in
+      the box scroll the answer; Esc cancels an Ask still running.
   F6  Settings: models, connections & credentials, configuration
       status.
   Tab / Shift+Tab move between fields and buttons inside a tab.
@@ -92,7 +97,8 @@ HELP_TEXT = """\
           ~/.talkpipe.toml or TALKPIPE_* variables outside this app)
   F1      this help        Ctrl+Q  quit        Esc  close a dialog
   Ctrl+C  does not quit (it only reminds you of Ctrl+Q), so a stray
-          Ctrl+C never loses a long answer.
+          Ctrl+C never loses a long answer. Ctrl+Q asks first while
+          an indexing run is in progress (quitting abandons it).
 
 [b]Where things live[/b]
   Recent vaults, model settings and credentials: the same files the
@@ -583,6 +589,9 @@ class ResultsPane(Horizontal):
         title = result["filename"]
         if result.get("score"):
             title += f"  ·  score {result['score']}"
+        if index in self._chunks:
+            # Enter on a short chunk otherwise looks like a no-op.
+            title += "  ·  full chunk"
         body = self._chunks.get(index) or result.get("snippet", "")
         path = result.get("path")
         if path and cast("VaultApp", self.app).service.status()["show_source_paths"]:
@@ -664,7 +673,7 @@ class ResultsPane(Horizontal):
         path = Path(str(outcome["path"]))
         body = f"Source document:\n{path}\n"
         copy_text = str(path)
-        if path.suffix.lower() in {".txt", ".text", ".md", ".markdown", ".rst", ".log"}:
+        if outcome.get("is_text"):
             try:
                 text = path.read_text(errors="replace")
             except OSError as exc:
@@ -766,6 +775,8 @@ class VaultApp(App[None]):
         # Not in the footer: with it, the footer overflows 80 columns. F1 lists it.
         Binding("ctrl+r", "refresh", "Refresh", priority=True, show=False),
         Binding("ctrl+q", "quit", "Quit", priority=True),
+        # Widgets that use Esc themselves (a Select's menu) see it first.
+        Binding("escape", "cancel_ask", "Cancel Ask", show=False),
     ]
 
     def __init__(
@@ -783,7 +794,13 @@ class VaultApp(App[None]):
         self._index_message = ""
         self._index_previous_chunks = 0
         self._index_overwrite = False
+        # Matched files the last run found no readable content in.
+        self._index_skipped_files = 0
         self._fulltext_timer: Any = None
+        # Bumped when an Ask is cancelled or superseded, so the thread that is
+        # still running (it cannot be interrupted) does not overwrite the
+        # screen when it finally returns.
+        self._ask_generation = 0
         self._pending_confirm: dict[str, Any] | None = None
         # The last answer as the model wrote it — what "Copy answer" copies.
         self._answer_text = ""
@@ -978,21 +995,58 @@ class VaultApp(App[None]):
     def on_mount(self) -> None:
         self._apply_size(self.size.height)
         self.query_one("#config-status", Static).update("Checking…")
+        if self._initial_vault or self._resume:
+            # The toast expires in seconds; opening can take minutes on a first
+            # run (embedding-model download). Keep a line on screen until then.
+            self.query_one("#vault-name", Static).update("opening…")
+            self.query_one("#index-progress", Static).update("Opening the vault…")
         self.notify("Opening the vault…", timeout=3)
         self._startup()
 
     def on_resize(self, event: Any) -> None:
         self._apply_size(event.size.height)
+        if self.service.vault_path:
+            self.call_after_refresh(self._show_vault_name, self.service.vault_path)
+
+    def _show_startup_progress(self, text: str) -> None:
+        self.query_one("#index-progress", Static).update(text)
 
     def _apply_size(self, rows: int) -> None:
         self.screen.set_class(rows < COMPACT_ROWS, "compact")
 
     @work(thread=True, exclusive=True, group="startup")
     def _startup(self) -> None:
-        outcome = self.service.startup(self._initial_vault, resume=self._resume)
+        outcome = self.service.startup(
+            self._initial_vault,
+            resume=self._resume,
+            progress=lambda text: self.call_from_thread(
+                self._show_startup_progress, text
+            ),
+        )
         self.call_from_thread(self._after_startup, outcome)
 
     def _after_startup(self, outcome: dict[str, Any]) -> None:
+        self.query_one("#index-progress", Static).update("")
+        if outcome.get("needs_confirm"):
+            # The command-line path names a folder of documents: ask, as the
+            # Vault form does, instead of quietly making it a vault.
+            path = str(outcome["confirm_path"])
+            self.refresh_status()
+            self._load_recent_vaults()
+            self._load_settings_form()
+            self._load_config_status(probe=True, download=False)
+            self.query_one("#tabs", TabbedContent).active = "tab-vault"
+            self.query_one("#vault-path", Input).value = path
+            self.query_one("#index-progress", Static).update(
+                f"{path} was not opened: it holds files that are not vault data. "
+                "To search those documents, index this folder into a vault kept "
+                "elsewhere (Documents to index above); Open vault creates the "
+                "vault here anyway."
+            )
+            self._confirm_non_vault(
+                outcome, lambda: self._open_vault(path, confirm=True)
+            )
+            return
         if outcome["ok"]:
             if outcome.get("vault_path"):
                 self.notify(outcome["message"])
@@ -1032,11 +1086,19 @@ class VaultApp(App[None]):
 
     # -- status --------------------------------------------------------------------------
 
+    def _show_vault_name(self, name: str) -> None:
+        # Shorten to the widget's own width: shortened to a guess at the
+        # width, the header clipped the vault's name — the useful part.
+        widget = self.query_one("#vault-name", Static)
+        width = widget.content_size.width or self.size.width // 2
+        widget.update(_shorten_path(name, width))
+
     def refresh_status(self) -> None:
         status = self.service.status()
-        name = status["vault_path"] or "no vault open"
-        self.query_one("#vault-name", Static).update(
-            _shorten_path(name, self.size.width // 2)
+        # After the facts label (chunk count, keyword state) has taken its
+        # width, so the name is shortened to the room actually left.
+        self.call_after_refresh(
+            self._show_vault_name, status["vault_path"] or "no vault open"
         )
         has_vault = bool(status["vault_path"])
         facts = []
@@ -1072,12 +1134,20 @@ class VaultApp(App[None]):
         self.query_one("#vault-path", Input).value = status["vault_path"]
 
     def action_refresh(self) -> None:
-        self._refresh_worker()
+        self._refresh_worker(announce=True)
 
     @work(thread=True, exclusive=True, group="refresh")
-    def _refresh_worker(self, *, report_total: bool = False) -> None:
+    def _refresh_worker(
+        self, *, report_total: bool = False, announce: bool = False
+    ) -> None:
+        """Reload the pipelines; ``announce`` toasts the result (Ctrl+R).
+
+        After indexing or an index build the status line already reports the
+        outcome, so a "Pipelines refreshed." toast on top of it is noise.
+        """
         outcome = self.service.refresh()
-        self.call_from_thread(self._notify_outcome, outcome)
+        if announce or not outcome["ok"]:
+            self.call_from_thread(self._notify_outcome, outcome)
         self.call_from_thread(self.refresh_status)
         if report_total:
             self.call_from_thread(self._report_vault_total)
@@ -1092,6 +1162,12 @@ class VaultApp(App[None]):
         status = self.service.status()
         chunks = status["chunks"]
         message = f"{self._index_message} The vault now holds {chunks} chunk(s)."
+        if self._index_skipped_files:
+            message += (
+                f" {self._index_skipped_files} of the matched files had no "
+                "readable content (empty, binary, or an unsupported format) and "
+                "were skipped."
+            )
         if status["keyword_index_stale"]:
             message += (
                 " The full-text index does not include this run — rebuild it on "
@@ -1228,13 +1304,15 @@ class VaultApp(App[None]):
                 lambda: self._start_indexing(source, vault, overwrite, confirm=True),
             )
             return
-        self._notify_outcome(outcome)
+        if not outcome["ok"]:
+            self._notify_outcome(outcome)
         self.refresh_status()
         self._load_recent_vaults()
         progress = self.query_one("#index-progress", Static)
         if outcome["ok"]:
             self._index_overwrite = overwrite
-            progress.update("Indexing started…")
+            self._index_skipped_files = 0
+            progress.update(outcome["message"] or "Indexing started…")
             self._index_timer = self.set_interval(1.0, self._poll_index)
         else:
             # Toasts expire; a refusal (path fence, unreadable folder) stays
@@ -1283,8 +1361,10 @@ class VaultApp(App[None]):
         else:
             message = snap["message"] or "Indexing finished."
             progress.update(message)
-            self.notify(message)
             self._index_message = message
+            self._index_skipped_files = max(
+                0, int(snap["total_files"]) - int(snap["files_done"])
+            )
             # A replace run is a one-off: left ticked, the next "add these
             # documents" run would silently wipe the vault (the web form
             # comes back unticked as well).
@@ -1490,7 +1570,6 @@ class VaultApp(App[None]):
         else:
             note.update(snap["message"] or "Full-text index built.")
             note.set_classes("status-line success")
-            self.notify(snap["message"] or "Full-text index built.")
         self._refresh_worker()
 
     # -- ask -------------------------------------------------------------------------------
@@ -1501,33 +1580,66 @@ class VaultApp(App[None]):
         if not question:
             self.notify("Enter a question.", severity="warning")
             return
-        self.query_one("#answer-meta", Static).update("Thinking…")
+        self.query_one("#answer-meta", Static).update("Thinking… (Esc cancels)")
         self._answer_text = ""
         self.query_one("#answer", Markdown).update("")
-        self._ask_worker(question, self.query_one("#ask-keyword", Checkbox).value)
+        self._ask_generation += 1
+        self._ask_worker(
+            question,
+            self.query_one("#ask-keyword", Checkbox).value,
+            self._ask_generation,
+        )
+
+    def ask_running(self) -> bool:
+        return any(w.is_running and w.group == "ask" for w in self.workers)
+
+    def action_cancel_ask(self) -> None:
+        """Esc: stop waiting for an Ask (the request itself cannot be aborted)."""
+        if not self.ask_running():
+            return
+        self._ask_generation += 1
+        self.workers.cancel_group(self, "ask")
+        self.query_one("#answer-meta", Static).update("Cancelled")
+        self.query_one("#answer", Markdown).update(
+            _plain_text_as_markdown(
+                "Stopped waiting for this answer. The request to the chat "
+                "provider finishes on its own in the background; ask again "
+                "whenever you like."
+            )
+        )
+        self.query_one("#question", TextArea).focus()
 
     def on_key(self, event: Any) -> None:
+        focused_question = self.focused is not None and self.focused.id == "question"
         # Enter in the question box asks; Shift+Enter (where the terminal
         # sends it) inserts a newline as usual.
-        if (
-            event.key == "enter"
-            and self.focused is not None
-            and self.focused.id == "question"
-        ):
+        if event.key == "enter" and focused_question:
             event.prevent_default()
             event.stop()
             self._ask_pressed()
+        elif event.key in ("pagedown", "pageup") and focused_question:
+            # The answer pane is four Tab stops away; page keys in the
+            # question box scroll it directly.
+            event.prevent_default()
+            event.stop()
+            pane = self.query_one("#answer-pane", VerticalScroll)
+            if event.key == "pagedown":
+                pane.scroll_page_down()
+            else:
+                pane.scroll_page_up()
 
     def ask_current_question(self) -> None:
         """Submit the question box (Enter in the box, or the Ask button)."""
         self._ask_pressed()
 
     @work(thread=True, exclusive=True, group="ask")
-    def _ask_worker(self, question: str, keyword: bool) -> None:
+    def _ask_worker(self, question: str, keyword: bool, generation: int) -> None:
         outcome = self.service.ask(question, use_keyword_search=keyword)
-        self.call_from_thread(self._show_answer, outcome)
+        self.call_from_thread(self._show_answer, outcome, generation)
 
-    def _show_answer(self, outcome: dict[str, Any]) -> None:
+    def _show_answer(self, outcome: dict[str, Any], generation: int = -1) -> None:
+        if generation not in (-1, self._ask_generation):
+            return  # cancelled, or superseded by a newer question
         meta = self.query_one("#answer-meta", Static)
         answer = self.query_one("#answer", Markdown)
         citations = self.query_one("#citations", ResultsPane)
@@ -1558,6 +1670,46 @@ class VaultApp(App[None]):
             return
         self.copy_to_clipboard(text)
         self.notify("Answer copied to the clipboard.")
+
+    # -- quitting ---------------------------------------------------------------------------
+
+    def _index_run_in_progress(self) -> str:
+        """A one-line description of the indexing work quitting would abandon."""
+        snap = self.service.index_status()
+        if snap["running"]:
+            if snap["phase"] == "counting":
+                return f"counting the files in {snap['source']}"
+            return (
+                f"indexing {snap['files_done']}/{snap['total_files']} files into "
+                f"{snap['vault_path']}"
+            )
+        fulltext = self.service.fulltext_status()
+        if fulltext["running"]:
+            return "building the full-text index"
+        return ""
+
+    async def action_quit(self) -> None:
+        """Ctrl+Q; asks first when quitting would abandon an indexing run."""
+        work_in_progress = self._index_run_in_progress()
+        if not work_in_progress:
+            self.exit()
+            return
+
+        def decided(confirmed: bool | None) -> None:
+            if confirmed:
+                self.exit()
+
+        self.push_screen(
+            ConfirmScreen(
+                "Quit while indexing?",
+                f"vault-tui is still {work_in_progress}. Quitting now stops it "
+                "part-way: the vault keeps the chunks written so far, and a "
+                "later run without Overwrite would add those files twice. Quit "
+                "anyway?",
+                confirm_label="Quit",
+            ),
+            decided,
+        )
 
     # -- settings ---------------------------------------------------------------------------
 
@@ -1764,10 +1916,47 @@ def main(argv: list[str] | None = None) -> None:
     prepare_process_for_textual()
     service = VaultService(show_source_paths=args.show_source_paths)
     app = VaultApp(service, vault_path=args.vault_path, resume=args.resume)
+    run_app(app)
+
+
+def _blocked_worker_threads() -> list[threading.Thread]:
+    """Non-daemon threads (other than this one) that would delay exit.
+
+    Service calls run on the event loop's default executor; a call still
+    blocked in a model download or an LLM request cannot be interrupted.
+    """
+    return [
+        thread
+        for thread in threading.enumerate()
+        if thread is not threading.current_thread()
+        and thread.is_alive()
+        and not thread.daemon
+    ]
+
+
+def run_app(app: VaultApp) -> None:
+    """Run the app and return promptly even if a service call is still blocked.
+
+    ``App.run()`` ends with ``asyncio.run``'s shutdown, which joins the
+    default executor — so Ctrl+Q during the first-run model download or an
+    Ask to an unreachable server restored the terminal and then hung, for
+    minutes, until that request gave up (and the interpreter's own exit
+    joins those threads again). Run on an explicit loop instead, and if a
+    worker thread is still blocked once the interface has closed, leave the
+    process without waiting for it.
+    """
+    loop = asyncio.new_event_loop()
     try:
-        app.run()
-    except KeyboardInterrupt:
-        sys.exit(0)
+        asyncio.set_event_loop(loop)
+        with contextlib.suppress(KeyboardInterrupt):
+            app.run(loop=loop)
+        loop.run_until_complete(loop.shutdown_asyncgens())
+    finally:
+        if _blocked_worker_threads():
+            sys.stdout.flush()
+            sys.stderr.flush()
+            os._exit(0)
+        loop.close()
 
 
 if __name__ == "__main__":  # pragma: no cover

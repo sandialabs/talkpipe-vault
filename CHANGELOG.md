@@ -3,6 +3,42 @@
 ## In Development
 
 ### Terminal interface
+- Terminal-interface fixes from a fourth first-use review, this one driven
+  through a real pseudo-terminal: quitting no longer hangs while a service
+  call is still blocked — Ctrl+Q during the first-run embedding-model
+  download, or during an Ask to an unreachable Ollama server, restored the
+  terminal and then sat for minutes (the interpreter joins the worker
+  thread that cannot be interrupted); `vault-tui` now leaves the process as
+  soon as the interface has closed. Opening a vault keeps a line on the
+  Vault tab and "opening…" in the header until it is ready, saying that
+  the embedding model is loading and, on a first run, that it is being
+  downloaded from Hugging Face (about 250 MB for the default model) — the
+  toast that used to carry this expired long before a slow download did,
+  leaving "no vault open" and no clue. Esc cancels waiting for an Ask, and
+  an answer that arrives after a cancel (or after a newer question) no
+  longer overwrites the screen; an Ask that times out names the Ollama
+  server it waited on and where to change the URL instead of just "timed
+  out". A vault path given on the command line that names a folder of
+  documents is confirmed first, as the Vault form already did, rather than
+  silently becoming a vault. Ctrl+Q while an indexing run is in progress
+  asks before abandoning it, since the vault keeps the half-written index.
+  The indexing summary counts the matched files that had no readable
+  content (empty, binary, unsupported) instead of reporting only the files
+  it embedded. `o` shows any UTF-8 text file (CSV, JSON, YAML, source …)
+  inline, not just .txt/.md. PageUp/PageDown in the question box scroll
+  the answer. A vault path whose parent folder does not exist says so
+  instead of "Permission denied: '/nonexistent'". Fewer duplicate toasts:
+  results that already appear on a status line (index finished, full-text
+  index built, pipelines refreshed after either) are no longer also
+  toasted, so they stop covering the recent-vault list and swallowing
+  clicks on it. The header shortens the vault path to the width it
+  actually has, so the vault's name survives; the Search/Keywords status
+  labels clip with an ellipsis instead of spilling past 80 columns; a
+  loaded full chunk is labelled as such in the detail-pane title. README:
+  the embedding model is about 250 MB, not ~30 MB; Save connection settings
+  re-tests by itself (no Re-test press needed); what a vault folder is; and
+  the Advanced Guide now says how `vault-tui` reports a bad path fence
+  (it starts and shows the error, where `vault-server` refuses to start).
 - More terminal-interface refinements from a third first-use review: the
   vault name suggested from the documents folder now follows that folder as
   it is typed instead of freezing on the first keystroke (it stopped
