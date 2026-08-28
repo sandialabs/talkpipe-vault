@@ -711,6 +711,32 @@ def _shorten_path(path: str, width: int) -> str:
     return "…" + path[-(width - 1) :]
 
 
+class ShortenedPath(Static):
+    """A Static that shortens its path to whatever width it currently has.
+
+    The header gives this widget the room the facts label leaves over
+    (`1fr` next to an auto-width sibling), and that room changes as facts
+    arrive. Shortening once to a measured width races the layout — the
+    facts label can widen a frame later, leaving a too-long name to wrap —
+    so the widget re-shortens itself on every resize instead.
+    """
+
+    def __init__(self, text: str = "", **kwargs: Any) -> None:
+        super().__init__(text, **kwargs)
+        self._full = text
+
+    def show_path(self, path: str) -> None:
+        self._full = path
+        self._reshorten()
+
+    def on_resize(self, event: events.Resize) -> None:
+        self._reshorten()
+
+    def _reshorten(self) -> None:
+        width = self.content_size.width or self.app.size.width // 2
+        self.update(_shorten_path(self._full, width))
+
+
 # The diagnostics are shared with the web app and name its pages; the
 # terminal has tabs instead.
 _PAGE_NAMES = {
@@ -815,7 +841,7 @@ class VaultApp(App[None]):
     def compose(self) -> ComposeResult:
         with Horizontal(id="topbar"):
             yield Static("TalkPipe Vault", id="brand")
-            yield Static("no vault open", id="vault-name")
+            yield ShortenedPath("no vault open", id="vault-name")
             yield Static("", id="vault-facts")
         with TabbedContent(id="tabs"):
             with TabPane("Vault", id="tab-vault"):
@@ -999,14 +1025,13 @@ class VaultApp(App[None]):
         if self._initial_vault or self._resume:
             # The toast expires in seconds; opening can take minutes on a first
             # run (embedding-model download). Keep a line on screen until then.
-            self.query_one("#vault-name", Static).update("opening…")
+            self.query_one("#vault-name", ShortenedPath).show_path("opening…")
             self.query_one("#index-progress", Static).update("Opening the vault…")
         self._startup()
 
     def on_resize(self, event: Any) -> None:
+        # The vault name re-shortens itself (ShortenedPath) on its own resize.
         self._apply_size(event.size.height)
-        if self.service.vault_path:
-            self.call_after_refresh(self._show_vault_name, self.service.vault_path)
 
     def _show_startup_progress(self, text: str) -> None:
         self.query_one("#index-progress", Static).update(text)
@@ -1090,11 +1115,7 @@ class VaultApp(App[None]):
     # -- status --------------------------------------------------------------------------
 
     def _show_vault_name(self, name: str) -> None:
-        # Shorten to the widget's own width: shortened to a guess at the
-        # width, the header clipped the vault's name — the useful part.
-        widget = self.query_one("#vault-name", Static)
-        width = widget.content_size.width or self.size.width // 2
-        widget.update(_shorten_path(name, width))
+        self.query_one("#vault-name", ShortenedPath).show_path(name)
 
     def refresh_status(self) -> None:
         status = self.service.status()
