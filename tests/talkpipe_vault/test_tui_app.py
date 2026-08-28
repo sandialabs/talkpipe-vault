@@ -41,10 +41,6 @@ from tests.conftest import build_docs_vault
 SAMPLE_DOCS = Path(__file__).resolve().parents[1] / "sampledocs"
 SIZE = (110, 36)
 
-# The pilot tests are coroutines; the project runs pytest-asyncio in strict mode.
-pytestmark = pytest.mark.asyncio
-
-
 @pytest.fixture(autouse=True)
 def _isolated_home(tmp_path, monkeypatch):
     monkeypatch.setenv(user_settings.VAULT_HOME_ENV, str(tmp_path / "home"))

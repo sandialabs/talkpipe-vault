@@ -92,6 +92,11 @@ where = ["src"]
 [tool.setuptools_scm]
 # Use defaults
 
+[tool.pytest.ini_options]
+# Auto mode runs coroutine tests under pytest-asyncio without a mark, so sync
+# tests in the same module are never mislabeled asyncio.
+asyncio_mode = "auto"
+
 [tool.coverage.run]
 source = ["src/talkpipe_vault"]
 omit = [
