@@ -315,6 +315,12 @@ Two consequences worth remembering:
   nothing and fails only when `uv.lock` and `pyproject.toml` have drifted
   apart. If you change dependencies, run `uv lock` and commit the result.
 
+## Releasing
+
+The release process — tag conventions, the manual application test that
+must pass before tagging, and the publish steps — is in
+[RELEASING.md](RELEASING.md).
+
 ## License
 
 Apache License 2.0 — see [LICENSE](LICENSE).
