@@ -169,7 +169,7 @@ between the two freely. Tabs mirror the web pages:
 | `F3` | Search | Semantic search; the detail pane follows the highlighted result — `Enter` loads the full chunk, `o` shows/opens the source document, `c` copies the chunk, Copy All copies every result. **Use Agent** hands the search to the agent, as in the browser |
 | `F4` | Keywords | Full-text search (Whoosh syntax), and building/rebuilding the full-text index |
 | `F5` | Ask | Question answering with the answer, its "Answered by" line and the source chunks it used; optional keyword boost, or **Use Agent** to let the agent gather the context it answers from |
-| `F6` | Settings | Configuration status (Re-test), embedding/chat model settings (including the agent's result count and iteration cap), connections & credentials |
+| `F6` | Settings | Configuration status (Re-test), embedding/chat model settings (including the agent's chunk limit and iteration cap), connections & credentials |
 | `F1` / `Ctrl+R` / `Ctrl+Q` | | Help / reload the vault and settings (after indexing or editing `~/.talkpipe.toml` outside the app) / quit (`Ctrl+C` only reminds you of `Ctrl+Q`; while an indexing run is in progress `Ctrl+Q` asks first, because quitting abandons it) |
 
 `--show-source-paths` shows file paths in results, as for `vault-server`.
@@ -218,7 +218,7 @@ script syntax is in the Advanced Guide under
   are remembered for one-click reopening, and indexing shows live progress.
 - **Settings** — choose embedding and chat providers/models (the chat model
   also drives the agent on the Search and Ask pages; the Agent retrieval
-  section sets its result count and iteration cap), with a live
+  section bounds how much one agent run may collect), with a live
   **Configuration status** panel that tests your selection (and can download
   an uncached embedding model via Re-test), plus **Connections &
   credentials** for API keys and the Ollama URL — no environment variables
@@ -228,10 +228,13 @@ script syntax is in the Advanced Guide under
   instead: it runs semantic and keyword searches as tools, reads what comes
   back, keeps the relevant chunks and discards the rest, and rewrites its
   queries from what it learns (it can also ask the model to turn a question
-  into keyword-search terms) until it has kept the number of chunks set on
-  the Settings page or used up its iteration budget. Every tool call is printed
-  to the server console and listed under the results, so you can see what
-  it did. Slower than plain search, and needs a chat model that supports
+  into keyword-search terms). **It stops when it judges that what it has kept
+  would answer your question well** — after one chunk or after eight, whichever
+  it takes — rather than after collecting a fixed number of results; the
+  Settings page's chunk limit and iteration cap only bound a run that never
+  gets there. The results note says which of those happened. Every tool call is
+  printed to the server console and listed under the results, so you can see
+  what it did. Slower than plain search, and needs a chat model that supports
   tool calling.
 - **Keyword Search** — boolean and phrase queries. Matching is
   case-insensitive but on exact word tokens (`apple` won't match `apples`);

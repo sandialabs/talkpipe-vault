@@ -866,7 +866,7 @@ class VaultService:
             )
             agent_count = query._parse_int_setting(
                 agent_search_result_count,
-                "Agent result count",
+                "Agent chunk limit",
                 minimums["agent_search_result_count"],
             )
             agent_iterations = query._parse_int_setting(

@@ -157,7 +157,7 @@ def _agent_chat_outcome(message):
         results=[
             SearchResult(score=0.9, doc_id="row-1", document={"content": "kept chunk"})
         ],
-        note="Agent reached its target: kept 1 of 1 chunks after 2 searches, ignored 3.",
+        note="Agent judged it had enough to answer (covers the question): kept 1 chunk after 2 searches, ignored 3.",
         trace=["agent → vector_search(query='x')", "agent · keep c1 — on topic"],
         response=f"Agent answer to {message}",
     )
@@ -175,7 +175,7 @@ def test_ask_with_the_agent_answers_from_its_selection(sample_vault, monkeypatch
     assert outcome["ok"], outcome
     assert outcome["answer"] == "Agent answer to What is it?"
     assert [c["snippet"] for c in outcome["citations"]] == ["kept chunk"]
-    assert "Agent reached its target" in outcome["answered_by"]
+    assert "Agent judged it had enough" in outcome["answered_by"]
     assert outcome["trace"][-1].endswith("on topic")
 
 
@@ -253,7 +253,7 @@ def test_save_settings_persists_the_agent_counts(sample_vault, monkeypatch):
 
     outcome = service.save_settings(agent_search_result_count="0")
     assert not outcome["ok"]
-    assert "Agent result count must be at least 1." in outcome["error"]
+    assert "Agent chunk limit must be at least 1." in outcome["error"]
 
 
 def test_ask_error_adds_connection_tip(sample_vault, monkeypatch):

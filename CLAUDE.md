@@ -158,13 +158,23 @@ Segments: `buildVectorDBFromPaths`, `vaultSearch`, `vaultChat`, `vaultTextSearch
 `vaultAgentSearch`, `vaultAgentChat`.
 
 **Agent retrieval** (`pipelines/agent_search.py`): `vaultAgentSearch` runs a Strands agent
-(via talkpipe-agents' `build_agent_model`, using the vault's chat source/model) with five
+(via talkpipe-agents' `build_agent_model`, using the vault's chat source/model) with six
 tools bound to one `AgentSearchSession` per query — `vector_search`, `keyword_search`,
-`extract_keywords`, `keep_chunk`, `ignore_chunk`. Hits are assigned short ids (`c1`,
-`c2`, …; deduped by doc_id across searches) and the agent is told to decide on each and to
-refine its queries from what it finds. The run ends when kept chunks reach `target_count`
-(Settings → Agent Result Count; a hook cancels any further tool call) or after
-`max_iterations` agent turns (Settings → Agent Search Iterations). The outcome is an
+`extract_keywords`, `keep_chunk`, `ignore_chunk`, `enough_information`. Hits are assigned
+short ids (`c1`, `c2`, …; deduped by doc_id across searches) and the agent is told to
+decide on each and to refine its queries from what it finds.
+
+**The stopping criterion is the agent's own judgement that it could answer the question
+well from what it kept, not a result count** — it says so by calling `enough_information`
+(refused while nothing is kept: an answer needs context), which sets `session.enough` and
+its reason. `max_chunks` (Settings → Agent Chunk Limit, default `DEFAULT_MAX_CHUNKS`) is a
+*ceiling* on collected context and `max_iterations` (Settings → Agent Search Iterations)
+caps agent turns; both only bound a run that never reaches that judgement. A `_SessionHooks`
+`BeforeToolCallEvent` callback cancels further tool calls once `session.should_stop`
+(`enough or at_capacity`), naming which. The note distinguishes all four endings — judged
+it had enough (with the reason), filled the chunk maximum, hit the iteration cap, or
+stopped without saying it had enough — because each means something different about how
+complete the selection is; the last is what weaker tool-calling models do. The outcome is an
 `AgentSearchOutcome(results, note, trace)`: kept chunks as `SearchResult` in keep order, a
 note on how it ended, and the tool-call trace, which is also printed (`progress`, stdout
 by default) so the agent's behavior is visible on the server console. `extract_keywords` is the LLM

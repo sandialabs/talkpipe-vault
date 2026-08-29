@@ -97,7 +97,7 @@ DEFAULT_RAG_RESULT_LIMIT = 5
 # semantic-search pipeline can over-fetch and truncate back to it.
 DEFAULT_SEARCH_RESULT_LIMIT = 10
 DEFAULT_AGENT_SEARCH_ITERATIONS = agent_search.DEFAULT_MAX_ITERATIONS
-DEFAULT_AGENT_SEARCH_RESULT_COUNT = agent_search.DEFAULT_TARGET_COUNT
+DEFAULT_AGENT_SEARCH_RESULT_COUNT = agent_search.DEFAULT_MAX_CHUNKS
 
 
 @dataclass
@@ -113,9 +113,11 @@ class AppState:
     keyword_chat_pipeline: Callable[[str], dict[str, Any]] | None = None
     keyword_search_pipeline: Callable[[str], list[Any]] | None = None
     # Agent-driven retrieval, offered on both search-style pages: an agent
-    # runs the vector and keyword searches as tools and keeps/ignores chunks
-    # until it has agent_search_result_count of them or agent_search_iterations
-    # turns are used. The Search page shows the chunks it kept; Ask answers
+    # runs the vector and keyword searches as tools, keeps/ignores chunks, and
+    # stops when it judges it could answer the question from what it kept.
+    # agent_search_result_count only bounds how much it may collect, and
+    # agent_search_iterations how many turns it may take, if it never does.
+    # The Search page shows the chunks it kept; Ask answers
     # from them. Both come from one AgentVaultChat segment (built once, so the
     # embedder and the agent model are not set up twice), and both are None
     # when the agent's model cannot be built — the pages then offer their
@@ -558,7 +560,7 @@ def _refresh_agent_pipelines(vault_path: str) -> None:
             embedding_source=_state.embedding_source,
             chat_model=_state.chat_model,
             chat_source=_state.chat_source,
-            target_count=_state.agent_search_result_count
+            max_chunks=_state.agent_search_result_count
             or DEFAULT_AGENT_SEARCH_RESULT_COUNT,
             max_iterations=_state.agent_search_iterations
             or DEFAULT_AGENT_SEARCH_ITERATIONS,
@@ -2362,7 +2364,7 @@ async def save_settings(
         )
         agent_count_value = _parse_int_setting(
             agent_search_result_count,
-            "Agent search result count",
+            "Agent chunk limit",
             minimums["agent_search_result_count"],
         )
     except ValueError as exc:

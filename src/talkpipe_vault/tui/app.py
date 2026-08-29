@@ -1015,7 +1015,7 @@ class VaultApp(App[None]):
                     yield Input(id="rag-result-limit", type="integer", valid_empty=True)
             with Horizontal(classes="form-row"):
                 with Vertical(classes="form-col"):
-                    yield Label("Agent result count", classes="field-label")
+                    yield Label("Agent chunk limit", classes="field-label")
                     yield Input(
                         id="agent-result-count", type="integer", valid_empty=True
                     )

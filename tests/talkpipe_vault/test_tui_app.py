@@ -766,7 +766,7 @@ def _agent_chat_outcome(message):
         results=[
             SearchResult(score=0.9, doc_id="row-1", document={"content": "kept chunk"})
         ],
-        note="Agent reached its target: kept 1 of 1 chunks after 2 searches, ignored 3.",
+        note="Agent judged it had enough to answer (covers the question): kept 1 chunk after 2 searches, ignored 3.",
         trace=["agent → vector_search(query='x')", "agent · keep c1 — on topic"],
         response=f"Agent answer to {message}",
     )
@@ -800,7 +800,7 @@ async def test_ask_use_agent_checkbox_answers_through_the_agent(
         await _settle(pilot)
 
         assert "Agent answer to What is this?" in _answer_source(app)
-        assert "Agent reached its target" in _text(
+        assert "Agent judged it had enough" in _text(
             app.query_one("#answer-meta", Static)
         )
         assert len(app.query_one("#citations", ResultsPane).results) == 1
@@ -851,7 +851,7 @@ async def test_search_use_agent_checkbox_shows_the_agents_results(
         await _settle(pilot)
 
         assert len(app.query_one("#search-results", ResultsPane).results) == 1
-        assert "Agent reached its target" in _text(
+        assert "Agent judged it had enough" in _text(
             app.query_one("#search-note", Static)
         )
         trace = app.query_one("#search-trace", Collapsible)

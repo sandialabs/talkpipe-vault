@@ -14,6 +14,7 @@ from talkpipe_vault.pipelines import (
     searching_and_prompting,
 )
 from talkpipe_vault.pipelines.searching_and_prompting import VaultTextSearch
+from talkpipe_vault.tui.service import VaultService
 
 
 def _wait_for_fulltext_job(timeout: float = 10.0) -> dict:
@@ -82,7 +83,12 @@ def reset_app_state(tmp_path, monkeypatch):
     query._state.agent_chat_pipeline = None
     query._state.agent_search_iterations = None
     query._state.agent_search_result_count = None
-    return
+    yield
+    # The state is a module-level singleton shared with the TUI service tests,
+    # whose own fixture starts from "no vault open". Setting up without also
+    # tearing down left this file's last tmp_path as the open vault for
+    # whatever ran next, so test_tui_service failed depending on file order.
+    VaultService()._clear_vault()
 
 
 def _agent_outcome(query_text):
@@ -98,7 +104,7 @@ def _agent_outcome(query_text):
                 document={"title": "Notes.md", "content": f"About {query_text}"},
             )
         ],
-        note="Agent reached its target: kept 1 of 1 chunks after 2 searches, ignored 3.",
+        note="Agent judged it had enough to answer (covers the question): kept 1 chunk after 2 searches, ignored 3.",
         trace=["agent → vector_search(query='x')", "agent · keep c1 — on topic"],
     )
 
@@ -133,7 +139,7 @@ def test_search_post_uses_agent_and_shows_trace(monkeypatch):
     assert plain_calls == []
     assert "Notes.md" in response.text
     assert "About podman" in response.text
-    assert "Agent reached its target" in response.text
+    assert "Agent judged it had enough" in response.text
     assert "Agent tool calls (2)" in response.text
     assert "keep c1" in response.text
 
@@ -156,7 +162,7 @@ def _agent_chat_outcome(message):
                 document={"title": "Notes.md", "content": f"About {message}"},
             )
         ],
-        note="Agent reached its target: kept 1 of 1 chunks after 2 searches, ignored 3.",
+        note="Agent judged it had enough to answer (covers the question): kept 1 chunk after 2 searches, ignored 3.",
         trace=["agent → vector_search(query='x')", "agent · keep c1 — on topic"],
         response=f"Agent answer about {message}.",
     )
@@ -197,7 +203,7 @@ def test_chat_uses_agent_pipeline_when_requested(monkeypatch):
     assert "Agent answer about podman." in response.text
     # The kept chunks are the citations, and the run is inspectable.
     assert "Notes.md" in response.text
-    assert "Agent reached its target" in response.text
+    assert "Agent judged it had enough" in response.text
     assert "keep c1" in response.text
 
     # Unchecked, the plain pipeline answers and no trace is embedded.
@@ -275,7 +281,7 @@ def test_search_agent_says_the_custom_transform_did_not_run(monkeypatch):
         "/search", data={"query": "podman", "use_agent": "1", "apply_filter": "1"}
     )
 
-    assert "Agent reached its target" in response.text
+    assert "Agent judged it had enough" in response.text
     assert "The custom transform does not apply to the agent&#39;s selection" in (
         response.text
     )
@@ -302,7 +308,7 @@ def test_refresh_agent_pipelines_builds_both_from_one_segment(monkeypatch):
     query._refresh_agent_pipelines("/tmp/vault")
 
     assert len(built) == 1
-    assert built[0]["target_count"] == 3
+    assert built[0]["max_chunks"] == 3
     assert built[0]["max_iterations"] == 4
     assert query._state.agent_search_pipeline is not None
     assert query._state.agent_chat_pipeline is not None

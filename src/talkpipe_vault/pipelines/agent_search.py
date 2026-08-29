@@ -3,7 +3,7 @@
 Instead of showing (or answering from) the top-k vector hits, an agent
 (talkpipe-agents on top of Strands) searches the vault iteratively and decides
 chunk by chunk what is worth having. ``vaultAgentSearch`` shows the chunks it
-kept; ``vaultAgentChat`` answers the question from them. It has five tools,
+kept; ``vaultAgentChat`` answers the question from them. It has six tools,
 all bound to one ``AgentSearchSession`` per query:
 
 - ``vector_search`` and ``keyword_search`` — the vault's semantic and Whoosh
@@ -14,11 +14,21 @@ all bound to one ``AgentSearchSession`` per query:
   to guess Whoosh syntax itself (the same ``extractSearchKeywords`` the Ask
   page's keyword boost uses);
 - ``keep_chunk`` / ``ignore_chunk`` — the decisions. Kept chunks, in the
-  order they were kept, are the results (and, for Ask, the RAG context).
+  order they were kept, are the results (and, for Ask, the RAG context);
+- ``enough_information`` — how a run is meant to end: the agent calls it when
+  it judges that what it has kept would answer the question well.
 
-The loop runs for at most ``max_iterations`` agent turns or until the number
-of kept chunks reaches ``target_count`` (both from the Settings page); once
-the target is reached, further tool calls are cancelled so the model stops.
+**The stopping criterion is that judgement, not a result count.** The agent
+searches, keeps what the answer needs, and asks itself after each search what
+the question still lacks; it stops when it can answer, whether that took one
+chunk or eight. ``max_chunks`` (Settings → Agent Chunk Limit) is a ceiling on
+how much context one run may collect, not a goal, and ``max_iterations``
+(Settings → Agent Search Iterations) caps the agent turns — both exist only to
+bound a run that never reaches the judgement. Once the agent has said it has
+enough, or the ceiling is full, further tool calls are cancelled so the model
+stops. The outcome's note says which of the four endings happened, because
+each means something different about how complete the selection is.
+
 Every tool call and its outcome is reported through ``progress`` (stdout by
 default, so the agent's behavior can be watched from the server console) and
 collected in the outcome's ``trace`` for the results page.
@@ -66,7 +76,10 @@ from .searching_and_prompting import (
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_TARGET_COUNT = 5
+# A ceiling on how much context one run may collect, not a goal: the agent
+# stops when it judges it can answer the question well, and this only bounds
+# a run that never reaches that judgement.
+DEFAULT_MAX_CHUNKS = 10
 DEFAULT_MAX_ITERATIONS = 8
 # Hits returned per search call, and how much of each chunk the agent sees.
 DEFAULT_SEARCH_LIMIT = 8
@@ -77,14 +90,15 @@ _ARGS_CHARS = 160
 
 SearchFn = Callable[[str], Iterable[Any]]
 
-SYSTEM_PROMPT = """You select the text chunks from a personal document vault that best answer a user's question. You do not answer the question yourself; you only decide which chunks the user should see.
+SYSTEM_PROMPT = """You gather the text chunks from a personal document vault that are needed to answer a user's question well. You do not answer the question yourself; you decide which chunks the answer will be built from.
 
 Work iteratively:
 1. Search with vector_search (natural-language, conceptual queries) and keyword_search (exact terms, names, identifiers; Whoosh syntax: terms are ANDed, use OR for alternatives and double quotes for phrases).
-2. Read the chunks each search returns. Call keep_chunk only for a chunk that actually contains information answering the question, and ignore_chunk for every other chunk, so that each chunk you have seen carries a decision. Be strict: a chunk that merely shares words with the question is not relevant, and it is better to keep fewer chunks than to keep a wrong one. If a search returned nothing useful, ignore all of its chunks and search differently.
-3. Refine: use what you learned from useful chunks - specific terms, names, phrasings, related topics - to run new, more precise searches, and change your keyword or vector queries whenever a search turned up little of use. Do not repeat a query you already ran.
+2. Read the chunks each search returns. Call keep_chunk only for a chunk that actually contributes information the answer needs, and ignore_chunk for every other chunk, so that each chunk you have seen carries a decision. Be strict: a chunk that merely shares words with the question is not relevant, and it is better to keep fewer chunks than to keep a wrong one. If a search returned nothing useful, ignore all of its chunks and search differently.
+3. After each search, ask yourself what the question still needs. Could you answer it completely and accurately from the chunks you have kept so far? If some part is still missing - a fact, a date, a name, the other side of a comparison, a second document that should corroborate the first - search for that specific missing piece, using terms, names and phrasings you learned from the chunks you kept. Do not repeat a query you already ran.
+4. Stop by calling enough_information as soon as the chunks you have kept would let you answer the question well, saying in one short phrase what they cover. That judgement is the reason to stop - not the number of chunks you have collected. Keeping more chunks that add nothing is not better than stopping. If repeated searches keep turning up nothing new and the question still cannot be fully answered, call enough_information anyway and say what is missing.
 Use extract_keywords when you want a keyword query built for you: give it the question or a topic in plain language and it returns a keyword query to pass to keyword_search. You may also write keyword queries yourself.
-Stop as soon as you have kept the target number of chunks, or when further searching is unlikely to find anything new. When you stop, reply with the single word: done."""
+After calling enough_information, or once you are told to stop, reply with the single word: done."""
 
 
 @dataclass
@@ -116,7 +130,8 @@ class _Chunk:
 
 class AgentSearchSession:
     """One query's worth of agent state: the chunks discovered so far, the
-    keep/ignore decisions, and the tools bound to them.
+    keep/ignore decisions, whether the agent has declared it has enough to
+    answer, and the tools bound to all of it.
 
     The search callables are injected so the session can be exercised without
     a vault or an LLM: ``vector_search``/``keyword_search`` take a query and
@@ -133,7 +148,7 @@ class AgentSearchSession:
         keyword_search: SearchFn,
         keyword_index_exists: Callable[[], bool],
         extract_keywords: Callable[[str], str] | None,
-        target_count: int,
+        max_chunks: int,
         tell: Callable[[str], None],
         rename_fields: dict[str, str] | None = None,
     ) -> None:
@@ -141,7 +156,7 @@ class AgentSearchSession:
         self._keyword_search = keyword_search
         self._keyword_index_exists = keyword_index_exists
         self._extract_keywords = extract_keywords
-        self.target_count = max(1, target_count)
+        self.max_chunks = max(1, max_chunks)
         self._tell = tell
         self._rename_fields = rename_fields or {}
         self._chunks: dict[str, _Chunk] = {}
@@ -150,6 +165,11 @@ class AgentSearchSession:
         self.ignored: set[str] = set()
         self.trace: list[str] = []
         self.queries_run: list[tuple[str, str]] = []
+        # Set by the enough_information tool: the agent's own judgement that
+        # what it has kept would answer the question well. This, not the
+        # number of chunks, is the run's stopping criterion.
+        self.enough = False
+        self.enough_reason = ""
 
     # -- bookkeeping ---------------------------------------------------------
 
@@ -158,8 +178,17 @@ class AgentSearchSession:
         self._tell(message)
 
     @property
-    def target_reached(self) -> bool:
-        return len(self.kept) >= self.target_count
+    def at_capacity(self) -> bool:
+        """True once the run has collected as much context as it may.
+
+        A backstop, not a goal: it bounds a run whose agent never decides it
+        has enough (or keeps collecting past the point of usefulness).
+        """
+        return len(self.kept) >= self.max_chunks
+
+    @property
+    def should_stop(self) -> bool:
+        return self.enough or self.at_capacity
 
     @property
     def results(self) -> list[SearchResult]:
@@ -198,7 +227,7 @@ class AgentSearchSession:
         return f"{head}\n{text}"
 
     def _status_line(self) -> str:
-        return f"Kept {len(self.kept)} of {self.target_count} target chunks."
+        return f"Kept {len(self.kept)} chunk(s), at most {self.max_chunks}."
 
     def _run_search(self, kind: str, query: str, search: SearchFn) -> str:
         query = query.strip()
@@ -232,7 +261,8 @@ class AgentSearchSession:
         body = "\n\n".join(self._describe(c) for c in chunks)
         return (
             f"{len(chunks)} result(s) for {query!r}. Decide on each undecided "
-            f"chunk with keep_chunk or ignore_chunk. {self._status_line()}\n\n{body}"
+            f"chunk with keep_chunk or ignore_chunk, then judge what the "
+            f"question still needs. {self._status_line()}\n\n{body}"
         )
 
     def extract_keywords(self, question: str) -> str:
@@ -287,17 +317,44 @@ class AgentSearchSession:
         reason = reason.strip().rstrip(".")
         why = f" — {reason}" if reason else ""
         self.tell(f"agent · {verb} {chunk_id}{why}. {self._status_line()}")
-        if self.target_reached:
+        if self.at_capacity:
             return (
-                f"{verb.capitalize()} {chunk_id}. Target reached: "
-                f"{len(self.kept)} chunks kept. Stop calling tools and reply: done"
+                f"{verb.capitalize()} {chunk_id}. You have kept the maximum of "
+                f"{self.max_chunks} chunks for this run. Stop calling tools and "
+                "reply: done"
             )
-        return f"{verb.capitalize()} {chunk_id}. {self._status_line()}"
+        return (
+            f"{verb.capitalize()} {chunk_id}. {self._status_line()} Call "
+            "enough_information once what you have kept would answer the "
+            "question well."
+        )
+
+    def declare_enough(self, reason: str) -> str:
+        """Record the agent's judgement that it can answer the question.
+
+        Refused while nothing has been kept: an answer needs context, and a
+        run that stops with none produces no answer at all, so the agent is
+        told to keep searching instead.
+        """
+        reason = reason.strip().rstrip(".")
+        if not self.kept:
+            self.tell("agent ✗ enough_information refused: nothing kept yet")
+            return (
+                "You have not kept any chunk yet, so there is nothing to answer "
+                "from. Keep searching, and keep the chunks the answer needs."
+            )
+        self.enough = True
+        self.enough_reason = reason
+        why = f" — {reason}" if reason else ""
+        self.tell(f"agent · enough information{why}. {self._status_line()}")
+        return (
+            f"Noted: {len(self.kept)} chunk(s) kept. Stop calling tools and reply: done"
+        )
 
     # -- tools ---------------------------------------------------------------
 
     def tools(self) -> list[Any]:
-        """The five Strands tools, bound to this session."""
+        """The six Strands tools, bound to this session."""
         session = self
 
         @strands_tool
@@ -346,12 +403,12 @@ class AgentSearchSession:
 
         @strands_tool
         def keep_chunk(chunk_id: str, reason: str = "") -> str:
-            """Keep a chunk: it is relevant to the question and the user
-            should see it. Kept chunks count toward the target.
+            """Keep a chunk: it contributes information the answer needs.
+            Kept chunks are what the question will be answered from.
 
             Args:
                 chunk_id: The id shown with the chunk, e.g. c3.
-                reason: One short phrase saying why it is relevant.
+                reason: One short phrase saying what it contributes.
             """
             return session._decide(chunk_id, reason, keep=True)
 
@@ -366,18 +423,35 @@ class AgentSearchSession:
             """
             return session._decide(chunk_id, reason, keep=False)
 
+        @strands_tool
+        def enough_information(reason: str = "") -> str:
+            """Declare that the chunks you have kept would let you answer the
+            question well, and end the search. This is how a run should end:
+            call it as soon as that is true, however many chunks that took.
+            Call it also when repeated searches find nothing new and the
+            question still cannot be fully answered, saying what is missing.
+
+            Args:
+                reason: One short phrase saying what the kept chunks cover,
+                    or what is still missing.
+            """
+            return session.declare_enough(reason)
+
         return [
             vector_search,
             keyword_search,
             extract_keywords,
             keep_chunk,
             ignore_chunk,
+            enough_information,
         ]
 
 
 class _SessionHooks(HookProvider):
-    """Report every tool call before it runs and cancel any call made after
-    the target is reached, so the agent stops instead of over-collecting."""
+    """Report every tool call before it runs, and cancel any call made after
+    the run should have stopped — once the agent has said it has enough, or
+    once it has collected as much context as the run allows — so a model that
+    keeps going anyway is brought to a halt."""
 
     def __init__(self, session: AgentSearchSession) -> None:
         self._session = session
@@ -387,19 +461,24 @@ class _SessionHooks(HookProvider):
         registry.add_callback(AfterToolCallEvent, self._after_tool)
 
     def _before_tool(self, event: BeforeToolCallEvent) -> None:
+        session = self._session
         name = event.tool_use.get("name")
         args = event.tool_use.get("input", {})
         shown = ", ".join(f"{k}={v!r}" for k, v in dict(args).items())
         if len(shown) > _ARGS_CHARS:
             shown = shown[:_ARGS_CHARS] + "…"
-        if self._session.target_reached:
-            self._session.tell(f"agent ✗ {name}({shown}) cancelled: target reached")
+        if session.should_stop:
+            why = (
+                "you already said you had enough"
+                if session.enough
+                else f"the {session.max_chunks}-chunk maximum is reached"
+            )
+            session.tell(f"agent ✗ {name}({shown}) cancelled: {why}")
             event.cancel_tool = (
-                f"Target of {self._session.target_count} kept chunks already "
-                "reached. Stop calling tools and reply: done"
+                f"The search is over — {why}. Stop calling tools and reply: done"
             )
             return
-        self._session.tell(f"agent → {name}({shown})")
+        session.tell(f"agent → {name}({shown})")
 
     def _after_tool(self, event: AfterToolCallEvent) -> None:
         if event.exception is not None:
@@ -421,8 +500,9 @@ class AgentVaultSearch(AbstractFieldSegment):
     item or in a specified field). For each query an agent runs the vault's
     vector and keyword searches as tools — with an LLM keyword extractor it
     can call to build a keyword query — refining its queries from what it
-    finds, and keeps or ignores every chunk it sees until it has kept the
-    target number of chunks or the iteration cap is hit.
+    finds, and keeps or ignores every chunk it sees. It runs until it judges
+    that what it has kept would answer the question well and says so, or
+    until the chunk ceiling or the iteration cap stops it.
 
     Emits an AgentSearchOutcome: the kept chunks as SearchResult objects (in
     keep order), a note describing how the run ended, and the trace of tool
@@ -457,9 +537,12 @@ class AgentVaultSearch(AbstractFieldSegment):
             str | None,
             "Source/provider of the agent's model. If None, uses TalkPipe config or default.",
         ] = None,
-        target_count: Annotated[
-            int, "Stop once this many chunks have been kept."
-        ] = DEFAULT_TARGET_COUNT,
+        max_chunks: Annotated[
+            int,
+            "Ceiling on chunks kept per run. Not a target: the agent stops "
+            "when it judges it can answer the question, and this only bounds "
+            "a run that never gets there.",
+        ] = DEFAULT_MAX_CHUNKS,
         max_iterations: Annotated[
             int, "Cap on agent turns per query."
         ] = DEFAULT_MAX_ITERATIONS,
@@ -479,7 +562,7 @@ class AgentVaultSearch(AbstractFieldSegment):
         self.vault_path = vault_path
         self.chat_model = chat_model if chat_model is not None else get_chat_model()
         self.chat_source = chat_source if chat_source is not None else get_chat_source()
-        self.target_count = max(1, target_count)
+        self.max_chunks = max(1, max_chunks)
         self.max_iterations = max(1, max_iterations)
         self.search_limit = max(1, search_limit)
         self.rename_fields = (
@@ -530,7 +613,7 @@ class AgentVaultSearch(AbstractFieldSegment):
             keyword_search=self.keyword_search,
             keyword_index_exists=self.keyword_index_exists,
             extract_keywords=self.extract_keywords,
-            target_count=self.target_count,
+            max_chunks=self.max_chunks,
             tell=self.tell,
             rename_fields=self.rename_fields,
         )
@@ -547,8 +630,9 @@ class AgentVaultSearch(AbstractFieldSegment):
         )
         prompt = (
             f"Question: {query}\n"
-            f"Target: keep {session.target_count} relevant chunks. "
-            "Nothing has been searched yet."
+            "Nothing has been searched yet. Search, keep the chunks the answer "
+            "needs, and call enough_information once they would answer this "
+            f"question well. You may keep at most {session.max_chunks} chunks."
         )
         result = agent(prompt, limits={"turns": self.max_iterations})
         return str(result.stop_reason)
@@ -562,8 +646,8 @@ class AgentVaultSearch(AbstractFieldSegment):
         """
         session = self.make_session()
         session.tell(
-            f"agent search: {value!r} (target {session.target_count}, "
-            f"max {self.max_iterations} iterations)"
+            f"agent search: {value!r} (at most {session.max_chunks} chunks, "
+            f"{self.max_iterations} iterations)"
         )
         try:
             stop_reason = self.run_agent(session, value)
@@ -574,14 +658,21 @@ class AgentVaultSearch(AbstractFieldSegment):
             return AgentSearchOutcome(session.results, note, session.trace)
         kept = len(session.kept)
         searches = len(session.queries_run)
-        if session.target_reached:
-            how = "reached its target"
+        # The four ways a run can end, most to least satisfying. The first is
+        # the intended one; the rest are worth telling apart, because each
+        # means the selection may be incomplete for a different reason.
+        if session.enough:
+            how = "judged it had enough to answer"
+            if session.enough_reason:
+                how += f" ({session.enough_reason})"
+        elif session.at_capacity:
+            how = f"filled its {session.max_chunks}-chunk maximum"
         elif stop_reason.startswith("limit"):
             how = f"hit the {self.max_iterations}-iteration cap"
         else:
-            how = "stopped on its own"
+            how = "stopped without saying it had enough"
         note = (
-            f"Agent {how}: kept {kept} of {session.target_count} chunks after "
+            f"Agent {how}: kept {kept} chunk{'s' if kept != 1 else ''} after "
             f"{searches} search{'es' if searches != 1 else ''}, "
             f"ignored {len(session.ignored)}."
         )
@@ -609,9 +700,10 @@ class AgentVaultChat(AgentVaultSearch):
     Expects input items containing a question string (either as the full item
     or in a specified field). The agent gathers the context exactly as
     vaultAgentSearch does — iterative vector and keyword search with a
-    keep/ignore decision on every chunk it sees — and the chunks it kept
-    become the background of a RAG prompt answered by the chat model, with
-    the cited sources appended. When it kept nothing, no prompt is sent.
+    keep/ignore decision on every chunk it sees, until it judges that what it
+    has kept would answer the question well — and the chunks it kept become
+    the background of a RAG prompt answered by the chat model, with the cited
+    sources appended. When it kept nothing, no prompt is sent.
 
     Emits an AgentChatOutcome: the answer, the kept chunks as SearchResult
     objects (in keep order), a note describing how the selection ended, and
@@ -647,9 +739,12 @@ class AgentVaultChat(AgentVaultSearch):
             str | None,
             "Source/provider of the agent's model. If None, uses TalkPipe config or default.",
         ] = None,
-        target_count: Annotated[
-            int, "Stop once this many chunks have been kept."
-        ] = DEFAULT_TARGET_COUNT,
+        max_chunks: Annotated[
+            int,
+            "Ceiling on chunks kept per run. Not a target: the agent stops "
+            "when it judges it can answer the question, and this only bounds "
+            "a run that never gets there.",
+        ] = DEFAULT_MAX_CHUNKS,
         max_iterations: Annotated[
             int, "Cap on agent turns per question."
         ] = DEFAULT_MAX_ITERATIONS,
@@ -674,7 +769,7 @@ class AgentVaultChat(AgentVaultSearch):
             embedding_source=embedding_source,
             chat_model=chat_model,
             chat_source=chat_source,
-            target_count=target_count,
+            max_chunks=max_chunks,
             max_iterations=max_iterations,
             search_limit=search_limit,
             rename_fields=rename_fields,

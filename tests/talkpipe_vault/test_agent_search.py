@@ -34,7 +34,7 @@ def _make_session(
     keyword: dict[str, list[Any]] | None = None,
     index_exists: bool = True,
     extract_keywords: Any = None,
-    target: int = 2,
+    max_chunks: int = 2,
 ) -> tuple[AgentSearchSession, list[str]]:
     told: list[str] = []
     vector = vector or {}
@@ -44,7 +44,7 @@ def _make_session(
         keyword_search=lambda q: keyword.get(q, []),
         keyword_index_exists=lambda: index_exists,
         extract_keywords=extract_keywords,
-        target_count=target,
+        max_chunks=max_chunks,
         tell=told.append,
     )
     return session, told
@@ -84,38 +84,73 @@ class TestSessionTools:
             keyword_search=boom,
             keyword_index_exists=lambda: True,
             extract_keywords=None,
-            target_count=1,
+            max_chunks=1,
             tell=lambda _m: None,
         )
         tools = _tools(session)
         assert "No vector results" in tools["vector_search"](query="nothing")
         assert "index unreadable" in tools["keyword_search"](query="x")
 
-    def test_keep_and_ignore_drive_results_and_target(self):
+    def test_keep_and_ignore_drive_results_and_the_chunk_ceiling(self):
         session, told = _make_session(
             vector={"q": [_hit("a", "one"), _hit("b", "two"), _hit("c", "three")]},
-            target=2,
+            max_chunks=2,
         )
         tools = _tools(session)
         tools["vector_search"](query="q")
 
         assert "Unknown chunk id" in tools["keep_chunk"](chunk_id="c9")
-        assert "Kept 1 of 2" in tools["keep_chunk"](chunk_id="c2", reason="on topic")
+        out = tools["keep_chunk"](chunk_id="c2", reason="on topic")
+        assert "Kept 1 chunk(s), at most 2." in out
+        # Every keep points at the real stopping criterion, not at a count.
+        assert "enough_information" in out
         assert "already kept" in tools["keep_chunk"](chunk_id="c2")
         tools["ignore_chunk"](chunk_id="c1", reason="off topic")
-        assert not session.target_reached
+        assert not session.should_stop
 
         out = tools["keep_chunk"](chunk_id="c3")
-        assert "Target reached" in out
+        assert "maximum of 2 chunks" in out
         assert "done" in out
-        assert session.target_reached
+        assert session.at_capacity
+        assert session.should_stop
+        assert not session.enough  # the ceiling stopped it, not its judgement
         assert [r.doc_id for r in session.results] == ["b", "c"]
         assert session.ignored == {"c1"}
         assert any("keep c2 — on topic" in line for line in told)
         assert any("ignore c1 — off topic" in line for line in told)
 
+    def test_enough_information_ends_the_run_at_any_chunk_count(self):
+        """The stopping criterion is the agent's judgement, not a count."""
+        session, told = _make_session(
+            vector={"q": [_hit("a", "one"), _hit("b", "two")]}, max_chunks=5
+        )
+        tools = _tools(session)
+        tools["vector_search"](query="q")
+        tools["keep_chunk"](chunk_id="c1")
+
+        assert not session.should_stop  # one of five kept, but that is not the test
+        out = tools["enough_information"](reason="covers the whole question")
+        assert "done" in out
+        assert session.enough
+        assert session.should_stop
+        assert session.enough_reason == "covers the whole question"
+        assert [r.doc_id for r in session.results] == ["a"]
+        assert any("enough information — covers the whole" in line for line in told)
+
+    def test_enough_information_is_refused_with_nothing_kept(self):
+        """Stopping with no context produces no answer; keep searching instead."""
+        session, told = _make_session(vector={"q": [_hit("a", "one")]}, max_chunks=5)
+        tools = _tools(session)
+        tools["vector_search"](query="q")
+
+        out = tools["enough_information"](reason="nothing here")
+        assert "not kept any chunk" in out
+        assert not session.enough
+        assert not session.should_stop
+        assert "refused" in told[-1]
+
     def test_keeping_an_ignored_chunk_reverses_the_decision(self):
-        session, _ = _make_session(vector={"q": [_hit("a", "one")]}, target=5)
+        session, _ = _make_session(vector={"q": [_hit("a", "one")]}, max_chunks=5)
         tools = _tools(session)
         tools["vector_search"](query="q")
         tools["ignore_chunk"](chunk_id="c1")
@@ -125,7 +160,7 @@ class TestSessionTools:
 
     def test_search_marks_already_decided_chunks(self):
         session, _ = _make_session(
-            vector={"q": [_hit("a", "one")], "r": [_hit("a", "one")]}, target=5
+            vector={"q": [_hit("a", "one")], "r": [_hit("a", "one")]}, max_chunks=5
         )
         tools = _tools(session)
         tools["vector_search"](query="q")
@@ -186,7 +221,7 @@ class _ScriptedSearch(AgentVaultSearch):
 
         AbstractFieldSegment.__init__(self, field=None, set_as=None, multi_emit=False)
         self.vault_path = "unused"
-        self.target_count = kwargs.get("target_count", 2)
+        self.max_chunks = kwargs.get("max_chunks", 2)
         self.max_iterations = kwargs.get("max_iterations", 3)
         self.search_limit = 8
         self.rename_fields = {}
@@ -211,32 +246,58 @@ class _ScriptedSearch(AgentVaultSearch):
 
 
 class TestAgentVaultSearch:
-    def test_outcome_reports_target_reached(self):
+    def test_outcome_reports_the_agents_own_judgement(self):
+        """The intended ending: the agent said it could answer, after one chunk."""
+
+        def script(tools: dict[str, Any]) -> None:
+            tools["vector_search"](query="what is one?")
+            tools["keep_chunk"](chunk_id="c1")
+            tools["ignore_chunk"](chunk_id="c2")
+            tools["enough_information"](reason="c1 answers it")
+
+        segment = _ScriptedSearch(script, max_chunks=5)
+        outcome = segment.process_value("what is one?")
+        assert isinstance(outcome, AgentSearchOutcome)
+        assert [r.doc_id for r in outcome.results] == ["a"]
+        assert outcome.note.startswith("Agent judged it had enough to answer")
+        # The reason it gave is carried into the note the pages display.
+        assert "(c1 answers it)" in outcome.note
+        assert "kept 1 chunk after 1 search" in outcome.note
+        assert outcome.trace[0].startswith("agent search: 'what is one?'")
+        assert outcome.trace == segment.told
+
+    def test_outcome_reports_the_chunk_ceiling(self):
         def script(tools: dict[str, Any]) -> None:
             tools["vector_search"](query="what is one?")
             tools["keep_chunk"](chunk_id="c1")
             tools["ignore_chunk"](chunk_id="c2")
             tools["keep_chunk"](chunk_id="c3")
 
-        segment = _ScriptedSearch(script, target_count=2)
+        segment = _ScriptedSearch(script, max_chunks=2)
         outcome = segment.process_value("what is one?")
-        assert isinstance(outcome, AgentSearchOutcome)
         assert [r.doc_id for r in outcome.results] == ["a", "c"]
-        assert outcome.note.startswith("Agent reached its target")
-        assert "kept 2 of 2" in outcome.note
-        assert "1 search" in outcome.note
-        assert outcome.trace[0].startswith("agent search: 'what is one?'")
-        assert outcome.trace == segment.told
+        assert outcome.note.startswith("Agent filled its 2-chunk maximum")
+        assert "kept 2 chunks after 1 search" in outcome.note
 
     def test_outcome_reports_iteration_cap(self):
         def script(tools: dict[str, Any]) -> None:
             tools["vector_search"](query="q")
             tools["keep_chunk"](chunk_id="c1")
 
-        segment = _ScriptedSearch(script, target_count=5, stop_reason="limit_turns")
+        segment = _ScriptedSearch(script, max_chunks=5, stop_reason="limit_turns")
         outcome = segment.process_value("q")
         assert [r.doc_id for r in outcome.results] == ["a"]
         assert "hit the 3-iteration cap" in outcome.note
+
+    def test_outcome_distinguishes_stopping_without_deciding(self):
+        """A model that stops without judging is not the same as one that did."""
+
+        def script(tools: dict[str, Any]) -> None:
+            tools["vector_search"](query="q")
+            tools["keep_chunk"](chunk_id="c1")
+
+        outcome = _ScriptedSearch(script, max_chunks=5).process_value("q")
+        assert outcome.note.startswith("Agent stopped without saying it had enough")
 
     def test_agent_failure_keeps_what_was_selected(self):
         def script(tools: dict[str, Any]) -> None:
@@ -253,7 +314,7 @@ class TestAgentVaultSearch:
             tools["vector_search"](query="q")
             tools["keep_chunk"](chunk_id="c1")
 
-        fn = _ScriptedSearch(script, target_count=1).as_function(
+        fn = _ScriptedSearch(script, max_chunks=1).as_function(
             single_in=True, single_out=True
         )
         assert [r.doc_id for r in fn("q").results] == ["a"]
@@ -279,15 +340,16 @@ class TestAgentVaultChat:
             tools["keep_chunk"](chunk_id="c1")
             tools["ignore_chunk"](chunk_id="c2")
             tools["keep_chunk"](chunk_id="c3")
+            tools["enough_information"](reason="both sides covered")
 
-        segment = _ScriptedChat(script, target_count=2)
+        segment = _ScriptedChat(script, max_chunks=5)
         outcome = segment.process_value("what is one?")
 
         assert isinstance(outcome, agent_search.AgentChatOutcome)
         assert outcome.response == "Answer to what is one? from 2 chunk(s)."
         # The citations are exactly the kept chunks, in keep order.
         assert [r.doc_id for r in outcome.results] == ["a", "c"]
-        assert outcome.note.startswith("Agent reached its target")
+        assert outcome.note.startswith("Agent judged it had enough to answer")
         assert outcome.trace == segment.told
         # The RAG prompt saw those same chunks, not a separate retrieval.
         question, background = segment.answered[0]
@@ -311,7 +373,7 @@ class TestAgentVaultChat:
             tools["vector_search"](query="q")
             tools["keep_chunk"](chunk_id="c1")
 
-        fn = _ScriptedChat(script, target_count=1).as_function(
+        fn = _ScriptedChat(script, max_chunks=1).as_function(
             single_in=True, single_out=True
         )
         outcome = fn("q")
@@ -325,7 +387,7 @@ class TestAgentVaultChat:
             tools["vector_search"](query="q")
             tools["keep_chunk"](chunk_id="c1")
 
-        segment = _ScriptedChat(script, target_count=1)
+        segment = _ScriptedChat(script, max_chunks=1)
         outcome = segment.select_chunks("q")
 
         assert isinstance(outcome, AgentSearchOutcome)
@@ -334,31 +396,46 @@ class TestAgentVaultChat:
         assert segment.answered == []
 
 
+class _Event:
+    def __init__(self, name: str, **args: Any) -> None:
+        self.tool_use = {"name": name, "input": args}
+        self.cancel_tool: str | bool = False
+
+
 class TestSessionHooks:
-    def test_calls_after_target_are_cancelled(self):
-        session, told = _make_session(vector={"q": [_hit("a", "one")]}, target=1)
+    def test_calls_after_the_agent_says_it_has_enough_are_cancelled(self):
+        session, told = _make_session(vector={"q": [_hit("a", "one")]}, max_chunks=5)
         hooks = agent_search._SessionHooks(session)
 
-        class Event:
-            def __init__(self, name: str, **args: Any) -> None:
-                self.tool_use = {"name": name, "input": args}
-                self.cancel_tool: str | bool = False
-
-        event = Event("vector_search", query="q")
+        event = _Event("vector_search", query="q")
         hooks._before_tool(event)  # type: ignore[arg-type]
         assert event.cancel_tool is False
         assert told[-1] == "agent → vector_search(query='q')"
 
         _tools(session)["vector_search"](query="q")
         _tools(session)["keep_chunk"](chunk_id="c1")
-        event = Event("vector_search", query="more")
+        _tools(session)["enough_information"](reason="that covers it")
+        event = _Event("vector_search", query="more")
         hooks._before_tool(event)  # type: ignore[arg-type]
         assert isinstance(event.cancel_tool, str)
+        assert "you already said you had enough" in event.cancel_tool
         assert "done" in event.cancel_tool
-        assert "cancelled: target reached" in told[-1]
+        assert "cancelled: you already said you had enough" in told[-1]
+
+    def test_calls_after_the_chunk_ceiling_are_cancelled(self):
+        session, told = _make_session(vector={"q": [_hit("a", "one")]}, max_chunks=1)
+        hooks = agent_search._SessionHooks(session)
+
+        _tools(session)["vector_search"](query="q")
+        _tools(session)["keep_chunk"](chunk_id="c1")
+        event = _Event("vector_search", query="more")
+        hooks._before_tool(event)  # type: ignore[arg-type]
+        assert isinstance(event.cancel_tool, str)
+        assert "1-chunk maximum is reached" in event.cancel_tool
+        assert "cancelled: the 1-chunk maximum is reached" in told[-1]
 
 
 @pytest.mark.parametrize("bad", [0, -3])
-def test_target_and_iterations_have_a_floor(bad):
-    session, _ = _make_session(target=bad)
-    assert session.target_count == 1
+def test_the_chunk_ceiling_has_a_floor(bad):
+    session, _ = _make_session(max_chunks=bad)
+    assert session.max_chunks == 1

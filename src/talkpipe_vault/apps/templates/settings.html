@@ -165,20 +165,28 @@
         </fieldset>
         <fieldset>
             <legend>Agent retrieval &mdash; Search and Ask page option</legend>
-            <label for="agent-search-result-count">Agent Result Count</label>
+            <p class="field-hint">
+                With "Let an agent select the results" checked on the Search page, or
+                "Use Agent" on the Ask page, the agent searches until it judges that the
+                chunks it has kept would answer the question well &mdash; however many
+                that turns out to be. On Ask, those chunks are the context the answer is
+                built from. The two limits below only bound a run that never reaches that
+                judgement; they are not targets to fill.
+            </p>
+            <label for="agent-search-result-count">Agent Chunk Limit</label>
             <input type="number" name="agent_search_result_count" id="agent-search-result-count" min="1"
                    value="{{ models.agent_search_result_count }}">
             <p class="field-hint">
-                When "Let an agent select the results" is checked on the Search page, or
-                "Use Agent" on the Ask page, the agent stops once it has kept this many
-                relevant chunks. On Ask, those chunks are the context the answer is built from.
+                The most chunks one run may keep. Reaching it stops the run, so raise it if
+                answers look like they were cut off mid-gathering, and lower it to keep the
+                context (and the cost of an answer) small.
             </p>
             <label for="agent-search-iterations">Agent Search Iterations</label>
             <input type="number" name="agent_search_iterations" id="agent-search-iterations" min="1"
                    value="{{ models.agent_search_iterations }}">
             <p class="field-hint">
                 Maximum number of reasoning turns the agent may take per search or question
-                before it is stopped, whether or not it has reached the result count.
+                before it is stopped, whether or not it has decided it has enough.
             </p>
         </fieldset>
         <button type="submit">Save Settings</button>
