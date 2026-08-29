@@ -2,6 +2,8 @@
 
 ## In Development
 
+## 1.0.0 (2026-08-29)
+
 ### Terminal interface
 - Terminal-interface fixes from a fifth first-use review, driven through a
   pseudo-terminal at several sizes and inside tmux: on the Settings tab,
