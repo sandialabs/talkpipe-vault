@@ -148,6 +148,42 @@ def apply(data: dict[str, str] | None = None) -> None:
     reset_config()
 
 
+def label_for(key: str) -> str:
+    """The form label of a managed credential (the key itself if unknown)."""
+    field = _FIELDS_BY_KEY.get(key)
+    return field.label if field else key
+
+
+def normalize_server_url(value: str) -> tuple[str, str]:
+    """Tidy a server/base URL typed into a settings form.
+
+    Returns ``(url, note)``. A bare ``host:port`` gets ``http://`` in front
+    (and the note says so); a URL with any scheme other than http/https raises
+    ``ValueError`` with a message fit for the form, because saving it would
+    only fail later, in a probe whose headline blames the server. A blank
+    value stays blank (it clears the field).
+    """
+    typed = value.strip()
+    if not typed:
+        return "", ""
+    scheme, sep, rest = typed.partition("://")
+    if not sep:
+        # "host:11434" has no "://"; urlparse would take "host" for a scheme.
+        cleaned = typed.rstrip("/")
+        return f"http://{cleaned}", f"Added http:// in front of {cleaned}."
+    if scheme.lower() not in ("http", "https"):
+        raise ValueError(
+            f"{typed} is not an http(s) URL — enter the server's address "
+            "as http://host:port (e.g. http://localhost:11434)."
+        )
+    if not rest.split("/", 1)[0]:
+        raise ValueError(
+            f"{typed} has no host — enter the server's address as "
+            "http://host:port (e.g. http://localhost:11434)."
+        )
+    return f"{scheme}://{rest.rstrip('/')}", ""
+
+
 def source_for(env_var: str) -> str:
     """Describe where a managed env var's current value comes from."""
     if env_var in _managed_env:

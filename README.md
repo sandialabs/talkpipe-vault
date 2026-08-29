@@ -63,7 +63,7 @@ Open http://127.0.0.1:8002, then:
 1. **Vaults & Documents** — pick the folder (or glob pattern) to index. A
    vault name is suggested for you; one click creates the vault and indexes
    into it. The first index downloads the default embedding model from
-   Hugging Face (~30 MB, cached afterward).
+   Hugging Face (about 250 MB on disk, cached afterward).
 2. **Search** and **Ask** away.
 
 Answers on the Ask page need a chat provider — any one that TalkPipe
@@ -124,6 +124,89 @@ podman machine start
 A compose service and instructions for deriving your own customized image
 (different default models, extra packages) are in the
 [Advanced Guide](docs/ADVANCED.md#containers).
+
+## The terminal interface (`vault-tui`)
+
+Everything above is also available without a browser — in an SSH session, a
+tmux window, or on a headless machine — through `vault-tui`, installed
+alongside `vault-server`. It is new and not yet in a PyPI release, so install
+it from source — either straight from the repository:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate      # Windows: .venv\Scripts\activate
+pip install "git+https://github.com/sandialabs/talkpipe-vault.git"
+```
+
+or from a clone with `pip install .` (contributors use the editable
+`pip install -e ".[dev]"` in [Development setup](docs/ADVANCED.md#development-setup)).
+
+```bash
+vault-tui ~/my-vault      # open (or create) a vault — the index folder, not your documents
+vault-tui --resume        # reopen the most recently used vault
+vault-tui                 # start on the Vault tab and choose one there
+```
+
+A vault is a folder that holds the search index; the documents live wherever
+they already are and are named on the Vault tab. Point `vault-tui` at a folder
+of documents by mistake and it asks before turning that folder into a vault.
+Opening a vault loads the embedding model, which on a first run means
+downloading it (about 250 MB for the default model2vec model) — the Vault tab
+says so while it waits, and the header reads "opening…" until the vault is
+ready.
+
+Enter in either path field on the Vault tab runs **Index documents** (it
+opens the vault when only the vault path is filled).
+
+It runs in-process (no server needed) and uses the same vault files, recent
+list, model settings and credentials as the web interface, so you can switch
+between the two freely. Tabs mirror the web pages:
+
+| Key | Tab | What you can do |
+|-----|-----|-----------------|
+| `F2` | Vault | Open/create a vault, browse to a documents folder, index it (with progress), open or delete recent vaults, edit the retrieval filter |
+| `F3` | Search | Semantic search; the detail pane follows the highlighted result — `Enter` loads the full chunk, `o` shows/opens the source document, `c` copies the chunk, Copy All copies every result |
+| `F4` | Keywords | Full-text search (Whoosh syntax), and building/rebuilding the full-text index |
+| `F5` | Ask | Question answering with the answer, its "Answered by" line and the source chunks it used; optional keyword boost |
+| `F6` | Settings | Configuration status (Re-test), embedding/chat model settings, connections & credentials |
+| `F1` / `Ctrl+R` / `Ctrl+Q` | | Help / reload the vault and settings (after indexing or editing `~/.talkpipe.toml` outside the app) / quit (`Ctrl+C` only reminds you of `Ctrl+Q`; while an indexing run is in progress `Ctrl+Q` asks first, because quitting abandons it) |
+
+`--show-source-paths` shows file paths in results, as for `vault-server`.
+On a shared machine, `TALKPIPE_VAULT_ROOT` and `TALKPIPE_DOCUMENT_ROOTS`
+confine where vaults and documents may live for both interfaces — see
+[Confining paths on a shared machine](docs/ADVANCED.md#confining-paths-on-a-shared-machine).
+Long operations (embedding, Ask, indexing) run in the background and report
+progress in the tab that started them. As in the browser, Ask needs a chat
+provider: enter the Ollama URL or an API key under **Connections &
+credentials** on the Settings tab (`F6`) — it is the last field on the tab,
+and one `Shift+Tab` from the top (the Re-test button `F6` lands on) jumps
+straight to it; `PageUp`/`PageDown` scroll the tab — and press **Save
+connection settings**, which re-tests the configuration by itself. A bare
+`host:11434` is completed to `http://host:11434` when saved. Alternatively
+export `TALKPIPE_OLLAMA_SERVER_URL` before starting — but a URL saved on the
+Settings tab takes precedence over the variable, so clear the field to go
+back to it (the configuration status names which one is in effect). The
+OpenAI base URL field points the OpenAI provider at any OpenAI-compatible
+endpoint — see [Provider notes](docs/ADVANCED.md#provider-notes). While an
+answer is being generated, `Esc` stops waiting for it. "Index
+documents" adds to the open vault — tick **Overwrite existing index** to
+replace it; re-indexing the same folder without it duplicates every chunk
+(the summary line says so when it happens, and the box unticks itself after
+a replace run). Indexing never updates the full-text index: the header
+shows "keywords out of date" until you rebuild it on the Keywords tab, and
+a keyword search that finds nothing says so. Long chunk text scrolls once
+you `Tab` into its pane; the question box grows as a long question wraps,
+and `PageUp`/`PageDown` in it scroll a long answer (the answer pane is also
+four `Tab` stops from the question box). After a search the result list has
+the focus, so `F3`/`F4` (or `Shift+Tab`) return to the query field before
+you type the next query. If the open vault's folder disappears from disk
+(deleted or unmounted outside the app), Search, Ask and `Ctrl+R` say so
+instead of quietly recreating it empty. The **Retrieval filter** button on the Vault tab edits the same
+per-vault ChatterLang script as the web page, with an example in the
+dialog (its **Help** button adds the result shape and more recipes); a
+saved filter does nothing until you tick **Enabled on this machine**. The
+script syntax is in the Advanced Guide under
+[Writing a retrieval filter](docs/ADVANCED.md#writing-a-retrieval-filter).
 
 ## The web interface
 

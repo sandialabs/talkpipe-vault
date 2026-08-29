@@ -2,6 +2,174 @@
 
 ## In Development
 
+### Terminal interface
+- Terminal-interface fixes from a fifth first-use review, driven through a
+  pseudo-terminal at several sizes and inside tmux: on the Settings tab,
+  `Shift+Tab` from the top (the Re-test button `F6` lands on) now jumps
+  straight to the last field, the Ollama server URL — the documented
+  shortcut used to need four presses that visibly did nothing, because the
+  scrolling container and the tab strip came first. A server URL typed
+  without a scheme (`host:11434`) is completed to `http://host:11434` when
+  saved, and one that can never work (`ftp://…`, no host) is refused at the
+  field with an example instead of being saved and then reported by the
+  configuration probe as "Can't reach Ollama … Start Ollama"; the probe
+  itself now says "not an http(s) URL" for a malformed address rather than
+  blaming the server. A vault whose folder is deleted or unmounted while
+  it is open is reported by Search, Keywords, Ask and `Ctrl+R` ("no longer
+  on disk … restore it and press Ctrl+R, or index again") instead of being
+  quietly recreated empty, which looked like the documents had never been
+  indexed. The question box grows with a long question (up to five lines)
+  so the whole of it can be read before Enter; the F1 help reflows to the
+  terminal's width instead of wrapping twice at 60 columns; the startup
+  "Opening the vault…" toast is gone (the Vault tab and header already say
+  so, and it covered the screen on small terminals); a `TALKPIPE_VAULT_ROOT`
+  or `TALKPIPE_DOCUMENT_ROOTS` that names a missing folder stays on the
+  Vault tab's status line rather than only in a toast that expires; and
+  the after-save "see the top of the Settings tab" toast says PageUp. The
+  fast exit taken when a worker thread is still blocked at quit now gives
+  such a thread two seconds to finish (a Whoosh commit or a settings write
+  that is nearly done), flushes logging, prints the traceback and exits
+  non-zero if the interface itself crashed, instead of leaving with status
+  0 and no message. README: how the Settings-tab shortcut works, that a
+  saved URL takes precedence over `TALKPIPE_OLLAMA_SERVER_URL`, that the
+  result list holds the focus after a search (`F3`/`F4` return to the
+  query field), and what happens when a vault folder disappears.
+- Terminal-interface fixes from a fourth first-use review, this one driven
+  through a real pseudo-terminal: quitting no longer hangs while a service
+  call is still blocked — Ctrl+Q during the first-run embedding-model
+  download, or during an Ask to an unreachable Ollama server, restored the
+  terminal and then sat for minutes (the interpreter joins the worker
+  thread that cannot be interrupted); `vault-tui` now leaves the process as
+  soon as the interface has closed. Opening a vault keeps a line on the
+  Vault tab and "opening…" in the header until it is ready, saying that
+  the embedding model is loading and, on a first run, that it is being
+  downloaded from Hugging Face (about 250 MB for the default model) — the
+  toast that used to carry this expired long before a slow download did,
+  leaving "no vault open" and no clue. Esc cancels waiting for an Ask, and
+  an answer that arrives after a cancel (or after a newer question) no
+  longer overwrites the screen; an Ask that times out names the Ollama
+  server it waited on and where to change the URL instead of just "timed
+  out". A vault path given on the command line that names a folder of
+  documents is confirmed first, as the Vault form already did, rather than
+  silently becoming a vault. Ctrl+Q while an indexing run is in progress
+  asks before abandoning it, since the vault keeps the half-written index.
+  The indexing summary counts the matched files that had no readable
+  content (empty, binary, unsupported) instead of reporting only the files
+  it embedded. `o` shows any UTF-8 text file (CSV, JSON, YAML, source …)
+  inline, not just .txt/.md. PageUp/PageDown in the question box scroll
+  the answer. A vault path whose parent folder does not exist says so
+  instead of "Permission denied: '/nonexistent'". Fewer duplicate toasts:
+  results that already appear on a status line (index finished, full-text
+  index built, pipelines refreshed after either) are no longer also
+  toasted, so they stop covering the recent-vault list and swallowing
+  clicks on it. The header shortens the vault path to the width it
+  actually has, so the vault's name survives; the Search/Keywords status
+  labels clip with an ellipsis instead of spilling past 80 columns; a
+  loaded full chunk is labelled as such in the detail-pane title. README:
+  the embedding model is about 250 MB, not ~30 MB; Save connection settings
+  re-tests by itself (no Re-test press needed); what a vault folder is; and
+  the Advanced Guide now says how `vault-tui` reports a bad path fence
+  (it starts and shows the error, where `vault-server` refuses to start).
+- More terminal-interface refinements from a third first-use review: the
+  vault name suggested from the documents folder now follows that folder as
+  it is typed instead of freezing on the first keystroke (it stopped
+  updating once the field held anything, so typing a path a character at a
+  time left a vault named after its first letter) — and it still stops the
+  moment you type a vault path of your own; opening or creating an empty
+  vault now lands on the Vault tab with an "index a documents folder" hint
+  rather than on a Search tab that can only report no results; the Settings
+  configuration status re-checks the embedding↔index match when indexing
+  finishes, so it no longer keeps saying the vault has nothing indexed after
+  a run has just filled it; the keyword-search-without-an-index message and
+  the folder picker point at the controls on the current screen ("the Build
+  full-text index button above", "Type a folder path, or pick one below")
+  instead of naming a web page; an empty folder in the picker shows a
+  "(no sub-folders here)" line instead of a blank list that looks broken; a
+  filter that fails to validate keeps its error to a bounded length so the
+  full list of registered segments can no longer push the dialog's buttons
+  off a short screen; saving a retrieval filter without enabling it says how
+  to turn it on; and the F1 help and README note that Enter in a Vault-tab
+  path field runs Index documents. The README also gives a plain
+  source-install command for `vault-tui` and documents the ADVANCED project
+  tree's `tui/` package.
+- On Python 3.14 the first embedding inside `vault-tui` (Settings probe, search, or indexing) failed with `bad value(s) in fds_to_keep`, so a perfectly good cached model was reported as "failed to produce a test embedding": model2vec wraps its batches in tqdm, whose first use creates a multiprocessing lock and spawns the resource-tracker process, which cannot be launched from a worker thread once Textual owns the terminal. The app now creates that lock before starting.
+- The Settings tab's configuration status now shows each check's detail line (probe timeout, cache path, exception text), as the web Settings page does — previously a cached embedding model that timed out during the probe was reported only as "failed to produce a test embedding", with no way to tell a slow load from a broken model.
+- New `vault-tui` (also `python -m talkpipe_vault.tui`): a Textual terminal
+  application with the web interface's functionality, for tmux/SSH sessions
+  and machines without a browser. It runs in-process — no `vault-server`
+  needed — driving the same state, pipelines, recent-vault list, settings and
+  credentials as the web app through a `VaultService` facade
+  (`talkpipe_vault/tui/service.py`); nothing in the web application changed.
+  Tabs: Vault (open/create, folder picker with the same path fences, indexing
+  with live progress, recent vaults with confirmed delete, retrieval-filter
+  editor with Validate), Search and Keywords (result list + detail pane: full
+  chunk on Enter, source document on `o`, copy on `c`, Copy All, custom
+  transform when a filter is active, full-text index build with progress), Ask
+  (answer, "Answered by" line, source chunks, keyword boost), Settings
+  (configuration status with Re-test, model settings, connections &
+  credentials). F1 help, F2–F6 tabs, Ctrl+R refresh; fits 80x24 and shrinks
+  its button rows under 26 lines. New dependency: `textual`.
+- Terminal-interface refinements from a first-use review: the Settings
+  provider dropdowns show the provider that will actually be used instead of
+  a blank "Select" when nothing is overridden, and the configuration status
+  re-probes after Save (it no longer drops to "not probed"); a vault path
+  given on the command line that cannot be opened stays in the Vault form
+  with the error on screen instead of only a passing toast; the indexing
+  summary reports the vault's total chunk count, so re-indexing a folder
+  with Overwrite unticked visibly doubles it rather than looking unchanged;
+  Ask's connection errors lead with the in-app fix (Settings tab, Connections
+  & credentials); the filter checkboxes say "Apply retrieval filter"; the
+  folder picker explains that Enter opens a folder; the command palette is
+  off and the Retrieval filter button sits with the recent-vault buttons so
+  the footer and button rows fit 80 columns; the text areas no longer shadow
+  F6/F7, which kept reordering the footer on the Ask tab. README and F1 help
+  now say what Ctrl+R reloads, that Overwrite avoids duplicate chunks, where
+  the Ollama URL goes, and that `vault-tui` needs a source install until the
+  next PyPI release.
+- Further terminal-interface refinements from a second first-use review:
+  confirmation dialogs (delete a vault, create a vault among documents) open
+  with Cancel focused, so Enter straight after the button press no longer
+  performs the irreversible action; "Overwrite existing index" unticks itself
+  after a replace run, as the web form does, instead of silently wiping the
+  vault on the next add; the indexing summary explains when kept chunks mean
+  duplicates; a refused Open or Index (path fence, unreadable folder) stays
+  on screen in the form instead of only in a passing toast, and
+  `--resume` with nothing to resume says so; result rows are numbered so
+  several chunks of one file are distinguishable; the Ask tab says how to
+  enable keyword boost while no full-text index exists and drops the previous
+  question's source chunks when an Ask fails; the retrieval-filter dialog
+  shows the result shape and an example script; help, chunk and document
+  dialogs open with their text focused so the arrow and page keys scroll them
+  (Enter closes) and dialog buttons shrink to one row on short terminals like
+  the main screen's; the folder picker highlights the first entry after each
+  descent; the empty number fields on Settings are no longer drawn as
+  invalid, saving reports a non-OK configuration status in a toast (the panel
+  is usually scrolled off the top), the shared diagnostics name the terminal's
+  tabs rather than the web pages, and the embedding-model-changed message no
+  longer claims existing vaults must be re-indexed before searching (a vault
+  reopens with the embedder it was built with). F1 help and README mention
+  Tab-to-scroll, that Enter asks, where the retrieval-filter syntax is
+  documented, and that the Keywords tab is the tool for exact words.
+- Terminal-interface refinements from a third first-use review, this time
+  over SSH, in small tmux panes and alongside `vault-server`: the Vault tab
+  scrolls and the folder picker and retrieval-filter dialogs drop their
+  explanatory prose on 16-row terminals, so their lists, editor and every
+  button stay on screen instead of being focusable but invisible; the
+  full-text index is now known to be out of date once documents are indexed
+  after it was built (by either interface) — the header says "keywords out
+  of date", the indexing summary says to rebuild, and a keyword search that
+  finds nothing explains why instead of a bare "0 results"; deleting the
+  open vault is refused before the "cannot be undone" dialog rather than
+  after it; `--resume` names the most recent vault that no longer exists
+  when it falls back to an older one; an empty Search or Keywords query says
+  so instead of leaving the previous results in place unexplained; the
+  header keeps a gap between a truncated vault path and the chunk count; and
+  the F1 help fits its dialog without re-wrapping, says it scrolls, and
+  lists Ctrl+C (which only reminds you of Ctrl+Q). The Advanced Guide now
+  documents `vault-tui` and the `TALKPIPE_VAULT_ROOT` /
+  `TALKPIPE_DOCUMENT_ROOTS` path fences for shared machines (previously
+  mentioned only in this changelog), and the README links to them.
+
 ### Security Hardening
 - The documents page's confirmation panel re-count now runs on the confined
   vault path as well: a `confirm_path` outside the vault fence is neither
