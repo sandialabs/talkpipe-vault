@@ -1,4 +1,6 @@
-"""Tests for agent-driven result selection (pipelines/agent_search.py).
+"""Tests for agent-driven retrieval: the vault's agent tool pack
+(pipelines/agent_tools.py) and the segments built on it
+(pipelines/agent_search.py).
 
 The session and its tools are exercised with injected search callables and a
 scripted stand-in for the agent loop, so nothing here needs a vault, an
@@ -12,20 +14,23 @@ from typing import Any
 import pytest
 from talkpipe.search.abstract import SearchResult
 
-from talkpipe_vault.pipelines import agent_search
+from talkpipe_vault.pipelines import agent_search, agent_tools
 from talkpipe_vault.pipelines.agent_search import (
     AgentSearchOutcome,
     AgentSearchSession,
     AgentVaultSearch,
 )
+from talkpipe_vault.pipelines.agent_tools import build_tools
 
 
 def _hit(doc_id: str, content: str, **doc: Any) -> SearchResult:
     return SearchResult(score=0.5, doc_id=doc_id, document={"content": content, **doc})
 
 
-def _tools(session: AgentSearchSession) -> dict[str, Any]:
-    return {t.tool_name: t for t in session.tools()}
+def _tools(session: AgentSearchSession, names: Any = None) -> dict[str, Any]:
+    """The session's tools, by tool name (the whole vault pack by default)."""
+    resolved = build_tools(session, agent_tools.parse_tool_names(names))
+    return {t.tool_name: t for t in resolved}
 
 
 def _make_session(
@@ -207,8 +212,8 @@ class TestSessionTools:
     def test_long_chunk_text_is_clipped_for_the_agent(self):
         session, _ = _make_session(vector={"q": [_hit("a", "x" * 2000)]})
         out = _tools(session)["vector_search"](query="q")
-        assert "x" * agent_search.CHUNK_PREVIEW_CHARS + "…" in out
-        assert "x" * (agent_search.CHUNK_PREVIEW_CHARS + 1) not in out
+        assert "x" * agent_tools.CHUNK_PREVIEW_CHARS + "…" in out
+        assert "x" * (agent_tools.CHUNK_PREVIEW_CHARS + 1) not in out
 
 
 class _ScriptedSearch(AgentVaultSearch):
@@ -225,6 +230,10 @@ class _ScriptedSearch(AgentVaultSearch):
         self.max_iterations = kwargs.get("max_iterations", 3)
         self.search_limit = 8
         self.rename_fields = {}
+        self.chat_model = "a-model"
+        self.chat_source = "a-source"
+        self.system_prompt = agent_search.RETRIEVAL_SYSTEM_PROMPT
+        self.tool_names = agent_tools.parse_tool_names(kwargs.get("tools"))
         self.told: list[str] = []
         self.tell = self.told.append
         self._extract_keywords = lambda question: f'"{question}"'
@@ -243,6 +252,45 @@ class _ScriptedSearch(AgentVaultSearch):
     def run_agent(self, session: AgentSearchSession, query: str) -> str:
         self._script(_tools(session))
         return self._stop_reason
+
+
+class TestAgentIsAnLLMAgent:
+    """The agent is talkpipe-agents' llmAgent segment configured by this
+    module, not a Strands agent assembled here."""
+
+    def test_make_agent_configures_llmagent_from_the_segment(self):
+        from talkpipe_agents import LLMAgent
+
+        segment = _ScriptedSearch(lambda _tools: None, max_iterations=5)
+        agent = segment.make_agent(segment.make_session())
+
+        assert isinstance(agent, LLMAgent)
+        assert agent.model == "a-model"
+        assert agent.source == "a-source"
+        assert agent.system_prompt == agent_search.RETRIEVAL_SYSTEM_PROMPT
+        # The iteration cap is the library's turn limit, not a second loop.
+        assert agent.max_turns == 5
+        assert {t.tool_name for t in agent.tools} == set(
+            agent_tools.vault_agent_tool_names()
+        )
+
+    def test_the_tools_parameter_selects_what_the_agent_gets(self):
+        segment = _ScriptedSearch(lambda _tools: None, tools="vector_search,think")
+        agent = segment.make_agent(segment.make_session())
+        assert {t.tool_name for t in agent.tools} == {"vector_search", "think"}
+
+    def test_the_system_prompt_is_replaceable(self):
+        segment = _ScriptedSearch(lambda _tools: None)
+        segment.system_prompt = "Be brief."
+        assert segment.make_agent(segment.make_session()).system_prompt == "Be brief."
+
+    def test_progress_reaches_the_session_trace(self):
+        """llmAgent's own progress lines land in the trace the pages show."""
+        segment = _ScriptedSearch(lambda _tools: None)
+        session = segment.make_session()
+        segment.make_agent(session).tell("agent → vector_search({'query': 'q'})")
+        assert session.trace == ["agent → vector_search({'query': 'q'})"]
+        assert segment.told == ["agent → vector_search({'query': 'q'})"]
 
 
 class TestAgentVaultSearch:
@@ -396,43 +444,81 @@ class TestAgentVaultChat:
         assert segment.answered == []
 
 
-class _Event:
-    def __init__(self, name: str, **args: Any) -> None:
-        self.tool_use = {"name": name, "input": args}
-        self.cancel_tool: str | bool = False
+class TestToolsRefuseOnceTheRunIsOver:
+    """The stopping rule is enforced by the tools themselves, so it holds
+    behind any agent rather than depending on a hook wired into one."""
 
-
-class TestSessionHooks:
-    def test_calls_after_the_agent_says_it_has_enough_are_cancelled(self):
+    def test_tools_refuse_after_the_agent_says_it_has_enough(self):
         session, told = _make_session(vector={"q": [_hit("a", "one")]}, max_chunks=5)
-        hooks = agent_search._SessionHooks(session)
+        tools = _tools(session)
 
-        event = _Event("vector_search", query="q")
-        hooks._before_tool(event)  # type: ignore[arg-type]
-        assert event.cancel_tool is False
-        assert told[-1] == "agent → vector_search(query='q')"
+        tools["vector_search"](query="q")
+        tools["keep_chunk"](chunk_id="c1")
+        tools["enough_information"](reason="that covers it")
 
-        _tools(session)["vector_search"](query="q")
-        _tools(session)["keep_chunk"](chunk_id="c1")
-        _tools(session)["enough_information"](reason="that covers it")
-        event = _Event("vector_search", query="more")
-        hooks._before_tool(event)  # type: ignore[arg-type]
-        assert isinstance(event.cancel_tool, str)
-        assert "you already said you had enough" in event.cancel_tool
-        assert "done" in event.cancel_tool
-        assert "cancelled: you already said you had enough" in told[-1]
+        out = tools["vector_search"](query="more")
+        assert "you already said you had enough" in out
+        assert "done" in out
+        assert "refused: you already said you had enough" in told[-1]
+        # ...and the refused call really did nothing.
+        assert session.queries_run == [("vector", "q")]
 
-    def test_calls_after_the_chunk_ceiling_are_cancelled(self):
+    def test_tools_refuse_once_the_chunk_ceiling_is_full(self):
         session, told = _make_session(vector={"q": [_hit("a", "one")]}, max_chunks=1)
-        hooks = agent_search._SessionHooks(session)
+        tools = _tools(session)
 
-        _tools(session)["vector_search"](query="q")
-        _tools(session)["keep_chunk"](chunk_id="c1")
-        event = _Event("vector_search", query="more")
-        hooks._before_tool(event)  # type: ignore[arg-type]
-        assert isinstance(event.cancel_tool, str)
-        assert "1-chunk maximum is reached" in event.cancel_tool
-        assert "cancelled: the 1-chunk maximum is reached" in told[-1]
+        tools["vector_search"](query="q")
+        tools["keep_chunk"](chunk_id="c1")
+
+        out = tools["vector_search"](query="more")
+        assert "1-chunk maximum is reached" in out
+        assert "refused: the 1-chunk maximum is reached" in told[-1]
+        assert session.queries_run == [("vector", "q")]
+
+
+class TestToolSelection:
+    """Tools are picked by name, so a pipeline can add or drop one without
+    touching the tool pack or the segment."""
+
+    def test_the_default_pack_is_the_six_vault_tools(self):
+        session, _ = _make_session()
+        assert set(_tools(session)) == {
+            "vector_search",
+            "keyword_search",
+            "extract_keywords",
+            "keep_chunk",
+            "ignore_chunk",
+            "enough_information",
+        }
+        assert (
+            agent_tools.parse_tool_names(None) == agent_tools.vault_agent_tool_names()
+        )
+
+    @pytest.mark.parametrize(
+        "spec", ["vector_search,keep_chunk", ["vector_search", "keep_chunk"]]
+    )
+    def test_a_named_subset_binds_only_those_tools(self, spec):
+        session, _ = _make_session()
+        assert set(_tools(session, spec)) == {"vector_search", "keep_chunk"}
+
+    def test_a_generic_talkpipe_agents_tool_can_be_mixed_in(self):
+        """Names the vault does not own fall through to the shared registry."""
+        session, _ = _make_session()
+        tools = _tools(session, "vector_search,think")
+        assert set(tools) == {"vector_search", "think"}
+
+    def test_an_unknown_tool_name_is_refused_with_both_registries_listed(self):
+        session, _ = _make_session()
+        with pytest.raises(ValueError) as excinfo:
+            build_tools(session, ["vector_search", "no_such_tool"])
+        message = str(excinfo.value)
+        assert "no_such_tool" in message
+        assert "vault retrieval tools" in message
+        assert "enough_information" in message
+
+    def test_a_blank_spec_falls_back_to_the_full_pack(self):
+        assert agent_tools.parse_tool_names("") == agent_tools.vault_agent_tool_names()
+        assert agent_tools.parse_tool_names([]) == agent_tools.vault_agent_tool_names()
 
 
 @pytest.mark.parametrize("bad", [0, -3])

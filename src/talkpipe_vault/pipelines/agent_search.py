@@ -1,33 +1,34 @@
 """Agent-driven retrieval for the Search and Ask pages.
 
 Instead of showing (or answering from) the top-k vector hits, an agent
-(talkpipe-agents on top of Strands) searches the vault iteratively and decides
-chunk by chunk what is worth having. ``vaultAgentSearch`` shows the chunks it
-kept; ``vaultAgentChat`` answers the question from them. It has six tools,
-all bound to one ``AgentSearchSession`` per query:
+searches the vault iteratively and decides chunk by chunk what is worth
+having. ``vaultAgentSearch`` shows the chunks it kept; ``vaultAgentChat``
+answers the question from them.
 
-- ``vector_search`` and ``keyword_search`` — the vault's semantic and Whoosh
-  searches, callable any number of times with any query, so the agent can
-  refine its searches with terms it learns from earlier hits;
-- ``extract_keywords`` — asks an LLM to distill a question or phrase into a
-  keyword query for the full-text search engine, so the agent does not have
-  to guess Whoosh syntax itself (the same ``extractSearchKeywords`` the Ask
-  page's keyword boost uses);
-- ``keep_chunk`` / ``ignore_chunk`` — the decisions. Kept chunks, in the
-  order they were kept, are the results (and, for Ask, the RAG context);
-- ``enough_information`` — how a run is meant to end: the agent calls it when
-  it judges that what it has kept would answer the question well.
+**How it is put together.** The agent itself is talkpipe-agents' ``llmAgent``
+segment, driven with a tool list resolved by name from ``agent_tools``:
 
-**The stopping criterion is that judgement, not a result count.** The agent
+    llmAgent[model=…, source=…, system_prompt=…,
+             tools=[vector_search, keyword_search, extract_keywords,
+                    keep_chunk, ignore_chunk, enough_information]]
+
+so the segments here own the *vault* concerns — opening the vault, wiring
+the searches the tools call, running the RAG prompt over what the agent kept
+— and nothing about running a model. Which tools an agent gets is a
+parameter (``tools="vector_search,keep_chunk,…"``, a name list that also
+accepts generic talkpipe-agents tools such as ``think``), and so is its
+``system_prompt``, so tools and agents mix and match without editing this
+file. What each tool does lives in ``agent_tools``; see its docstring.
+
+**The stopping criterion is the agent's judgement, not a result count.** It
 searches, keeps what the answer needs, and asks itself after each search what
 the question still lacks; it stops when it can answer, whether that took one
 chunk or eight. ``max_chunks`` (Settings → Agent Chunk Limit) is a ceiling on
 how much context one run may collect, not a goal, and ``max_iterations``
-(Settings → Agent Search Iterations) caps the agent turns — both exist only to
-bound a run that never reaches the judgement. Once the agent has said it has
-enough, or the ceiling is full, further tool calls are cancelled so the model
-stops. The outcome's note says which of the four endings happened, because
-each means something different about how complete the selection is.
+(Settings → Agent Search Iterations) caps the agent turns — both exist only
+to bound a run that never reaches the judgement. The outcome's note says
+which of the four endings happened, because each means something different
+about how complete the selection is.
 
 Every tool call and its outcome is reported through ``progress`` (stdout by
 default, so the agent's behavior can be watched from the server console) and
@@ -36,29 +37,22 @@ collected in the outcome's ``trace`` for the results page.
 
 from __future__ import annotations
 
-import json
 import logging
 import os
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Annotated, Any
 
-from strands import Agent
-from strands import tool as strands_tool
-from strands.hooks import (
-    AfterToolCallEvent,
-    BeforeToolCallEvent,
-    HookProvider,
-    HookRegistry,
-)
 from talkpipe.chatterlang import register_segment
 from talkpipe.llm.chat import LLMPrompt
 from talkpipe.pipe.basic import AbstractFieldSegment
 from talkpipe.pipelines.basic_rag import AppendRAGSources, ConstructRAGPrompt
 from talkpipe.search.abstract import SearchResult
 from talkpipe.util.config import parse_key_value_str
-from talkpipe_agents import build_agent_model
+from talkpipe_agents import LLMAgent, build_agent_model
+from talkpipe_agents.replies import ask_and_clean
 
+from .agent_tools import AgentSearchSession, build_tools, parse_tool_names
 from .config import (
     RAG_PROMPT_DIRECTIVE,
     RAG_SYSTEM_PROMPT,
@@ -71,7 +65,6 @@ from .searching_and_prompting import (
     ExtractSearchKeywords,
     VaultSearch,
     VaultTextSearch,
-    normalize_search_result,
 )
 
 logger = logging.getLogger(__name__)
@@ -85,12 +78,8 @@ DEFAULT_MAX_ITERATIONS = 8
 DEFAULT_SEARCH_LIMIT = 8
 # Terms in a keyword query built by the extract_keywords tool.
 DEFAULT_MAX_KEYWORDS = 8
-CHUNK_PREVIEW_CHARS = 500
-_ARGS_CHARS = 160
 
-SearchFn = Callable[[str], Iterable[Any]]
-
-SYSTEM_PROMPT = """You gather the text chunks from a personal document vault that are needed to answer a user's question well. You do not answer the question yourself; you decide which chunks the answer will be built from.
+RETRIEVAL_SYSTEM_PROMPT = """You gather the text chunks from a personal document vault that are needed to answer a user's question well. You do not answer the question yourself; you decide which chunks the answer will be built from.
 
 Work iteratively:
 1. Search with vector_search (natural-language, conceptual queries) and keyword_search (exact terms, names, identifiers; Whoosh syntax: terms are ANDed, use OR for alternatives and double quotes for phrases).
@@ -121,374 +110,27 @@ class AgentChatOutcome(AgentSearchOutcome):
     response: str = ""
 
 
-@dataclass
-class _Chunk:
-    id: str
-    result: SearchResult
-    key: str
-
-
-class AgentSearchSession:
-    """One query's worth of agent state: the chunks discovered so far, the
-    keep/ignore decisions, whether the agent has declared it has enough to
-    answer, and the tools bound to all of it.
-
-    The search callables are injected so the session can be exercised without
-    a vault or an LLM: ``vector_search``/``keyword_search`` take a query and
-    return search hits (SearchResult objects or dicts with
-    doc_id/score/document); ``keyword_index_exists`` says whether keyword
-    search can run at all; ``extract_keywords`` asks an LLM to turn a
-    question into a keyword query (None when no model is available).
-    """
-
-    def __init__(
-        self,
-        *,
-        vector_search: SearchFn,
-        keyword_search: SearchFn,
-        keyword_index_exists: Callable[[], bool],
-        extract_keywords: Callable[[str], str] | None,
-        max_chunks: int,
-        tell: Callable[[str], None],
-        rename_fields: dict[str, str] | None = None,
-    ) -> None:
-        self._vector_search = vector_search
-        self._keyword_search = keyword_search
-        self._keyword_index_exists = keyword_index_exists
-        self._extract_keywords = extract_keywords
-        self.max_chunks = max(1, max_chunks)
-        self._tell = tell
-        self._rename_fields = rename_fields or {}
-        self._chunks: dict[str, _Chunk] = {}
-        self._by_key: dict[str, str] = {}
-        self.kept: list[str] = []
-        self.ignored: set[str] = set()
-        self.trace: list[str] = []
-        self.queries_run: list[tuple[str, str]] = []
-        # Set by the enough_information tool: the agent's own judgement that
-        # what it has kept would answer the question well. This, not the
-        # number of chunks, is the run's stopping criterion.
-        self.enough = False
-        self.enough_reason = ""
-
-    # -- bookkeeping ---------------------------------------------------------
-
-    def tell(self, message: str) -> None:
-        self.trace.append(message)
-        self._tell(message)
-
-    @property
-    def at_capacity(self) -> bool:
-        """True once the run has collected as much context as it may.
-
-        A backstop, not a goal: it bounds a run whose agent never decides it
-        has enough (or keeps collecting past the point of usefulness).
-        """
-        return len(self.kept) >= self.max_chunks
-
-    @property
-    def should_stop(self) -> bool:
-        return self.enough or self.at_capacity
-
-    @property
-    def results(self) -> list[SearchResult]:
-        return [self._chunks[cid].result for cid in self.kept]
-
-    def _register(self, entry: Any) -> _Chunk | None:
-        result = normalize_search_result(entry, self._rename_fields)
-        if result is None:
-            return None
-        key = result.doc_id or json.dumps(result.document, sort_keys=True, default=str)
-        existing = self._by_key.get(key)
-        if existing is not None:
-            return self._chunks[existing]
-        chunk = _Chunk(id=f"c{len(self._chunks) + 1}", result=result, key=key)
-        self._chunks[chunk.id] = chunk
-        self._by_key[key] = chunk.id
-        return chunk
-
-    def _describe(self, chunk: _Chunk) -> str:
-        doc = chunk.result.document or {}
-        title = str(
-            doc.get("title") or doc.get("filename") or doc.get("source") or ""
-        ).strip()
-        text = str(doc.get("content") or doc.get("shingle") or "").strip()
-        text = " ".join(text.split())
-        if len(text) > CHUNK_PREVIEW_CHARS:
-            text = text[:CHUNK_PREVIEW_CHARS] + "…"
-        status = ""
-        if chunk.id in self.kept:
-            status = " (already kept)"
-        elif chunk.id in self.ignored:
-            status = " (already ignored)"
-        head = f"[{chunk.id}]{status}"
-        if title:
-            head += f" {title}"
-        return f"{head}\n{text}"
-
-    def _status_line(self) -> str:
-        return f"Kept {len(self.kept)} chunk(s), at most {self.max_chunks}."
-
-    def _run_search(self, kind: str, query: str, search: SearchFn) -> str:
-        query = query.strip()
-        if not query:
-            return "The query is empty."
-        if (kind, query) in self.queries_run:
-            return f"You already ran this {kind} query; try a different one."
-        self.queries_run.append((kind, query))
-        try:
-            hits = list(search(query) or [])
-        except Exception as exc:
-            logger.warning("Agent %s search failed", kind, exc_info=True)
-            self.tell(f"agent ← {kind}_search failed: {exc}")
-            return f"The {kind} search failed: {exc}"
-        chunks: list[_Chunk] = []
-        new = 0
-        for hit in hits:
-            chunk = self._register(hit)
-            if chunk is None:
-                continue
-            if chunk.id not in {c.id for c in chunks}:
-                if chunk.id not in self.kept and chunk.id not in self.ignored:
-                    new += 1
-                chunks.append(chunk)
-        self.tell(
-            f"agent ← {kind}_search: {len(chunks)} hit(s), {new} undecided. "
-            + self._status_line()
-        )
-        if not chunks:
-            return f"No {kind} results for {query!r}. Try different terms."
-        body = "\n\n".join(self._describe(c) for c in chunks)
-        return (
-            f"{len(chunks)} result(s) for {query!r}. Decide on each undecided "
-            f"chunk with keep_chunk or ignore_chunk, then judge what the "
-            f"question still needs. {self._status_line()}\n\n{body}"
-        )
-
-    def extract_keywords(self, question: str) -> str:
-        """Ask the LLM keyword extractor for a keyword query for *question*.
-
-        The extractor itself already falls back to the raw question when the
-        model fails or returns nothing usable, so the agent always gets
-        something it can search with.
-        """
-        question = question.strip()
-        if not question:
-            return "The question is empty."
-        if self._extract_keywords is None:
-            return (
-                "Keyword extraction is unavailable here; write the keyword "
-                "query yourself."
-            )
-        try:
-            query = self._extract_keywords(question)
-        except Exception as exc:
-            logger.warning("Agent keyword extraction failed", exc_info=True)
-            self.tell(f"agent ← extract_keywords failed: {exc}")
-            return (
-                f"Keyword extraction failed: {exc}. Write the keyword query yourself."
-            )
-        query = str(query).strip()
-        if not query:
-            self.tell("agent ← extract_keywords: no keywords found")
-            return "No keywords could be extracted; write the keyword query yourself."
-        self.tell(f"agent ← extract_keywords: {query}")
-        return (
-            f"Keyword query: {query}\nPass it to keyword_search, editing it if "
-            "you want different terms."
-        )
-
-    def _decide(self, chunk_id: str, reason: str, keep: bool) -> str:
-        chunk_id = chunk_id.strip()
-        chunk = self._chunks.get(chunk_id)
-        if chunk is None:
-            return f"Unknown chunk id {chunk_id!r}; use an id from a search result."
-        verb = "keep" if keep else "ignore"
-        if chunk_id in self.kept:
-            return f"{chunk_id} is already kept."
-        if chunk_id in self.ignored:
-            if not keep:
-                return f"{chunk_id} is already ignored."
-            self.ignored.discard(chunk_id)
-        if keep:
-            self.kept.append(chunk_id)
-        else:
-            self.ignored.add(chunk_id)
-        reason = reason.strip().rstrip(".")
-        why = f" — {reason}" if reason else ""
-        self.tell(f"agent · {verb} {chunk_id}{why}. {self._status_line()}")
-        if self.at_capacity:
-            return (
-                f"{verb.capitalize()} {chunk_id}. You have kept the maximum of "
-                f"{self.max_chunks} chunks for this run. Stop calling tools and "
-                "reply: done"
-            )
-        return (
-            f"{verb.capitalize()} {chunk_id}. {self._status_line()} Call "
-            "enough_information once what you have kept would answer the "
-            "question well."
-        )
-
-    def declare_enough(self, reason: str) -> str:
-        """Record the agent's judgement that it can answer the question.
-
-        Refused while nothing has been kept: an answer needs context, and a
-        run that stops with none produces no answer at all, so the agent is
-        told to keep searching instead.
-        """
-        reason = reason.strip().rstrip(".")
-        if not self.kept:
-            self.tell("agent ✗ enough_information refused: nothing kept yet")
-            return (
-                "You have not kept any chunk yet, so there is nothing to answer "
-                "from. Keep searching, and keep the chunks the answer needs."
-            )
-        self.enough = True
-        self.enough_reason = reason
-        why = f" — {reason}" if reason else ""
-        self.tell(f"agent · enough information{why}. {self._status_line()}")
-        return (
-            f"Noted: {len(self.kept)} chunk(s) kept. Stop calling tools and reply: done"
-        )
-
-    # -- tools ---------------------------------------------------------------
-
-    def tools(self) -> list[Any]:
-        """The six Strands tools, bound to this session."""
-        session = self
-
-        @strands_tool
-        def vector_search(query: str) -> str:
-            """Semantic search over the vault: finds chunks whose meaning is
-            close to the query, even when the words differ. Best with a
-            full question or descriptive phrase. Each result carries a chunk
-            id to pass to keep_chunk or ignore_chunk.
-
-            Args:
-                query: A natural-language question or descriptive phrase.
-            """
-            return session._run_search("vector", query, session._vector_search)
-
-        @strands_tool
-        def keyword_search(query: str) -> str:
-            """Exact-term search over the vault's full-text index: finds
-            chunks containing the given words. Best for names, identifiers,
-            and specific terms. Whoosh syntax: terms are ANDed, use OR for
-            alternatives and double quotes for phrases. Reports when no
-            keyword index exists yet.
-
-            Args:
-                query: The keyword query, in Whoosh syntax.
-            """
-            if not session._keyword_index_exists():
-                session.tell("agent ← keyword_search: no keyword index exists")
-                return (
-                    "This vault has no full-text index, so keyword search is "
-                    "unavailable; use vector_search instead."
-                )
-            return session._run_search("keyword", query, session._keyword_search)
-
-        @strands_tool
-        def extract_keywords(question: str) -> str:
-            """Ask a language model to turn a question or topic into a
-            keyword query for keyword_search. Use it when you want good
-            search-engine terms for a plain-language question instead of
-            writing the query yourself. Returns the query; pass it to
-            keyword_search (edit it first if you want).
-
-            Args:
-                question: The question or topic, in plain language.
-            """
-            return session.extract_keywords(question)
-
-        @strands_tool
-        def keep_chunk(chunk_id: str, reason: str = "") -> str:
-            """Keep a chunk: it contributes information the answer needs.
-            Kept chunks are what the question will be answered from.
-
-            Args:
-                chunk_id: The id shown with the chunk, e.g. c3.
-                reason: One short phrase saying what it contributes.
-            """
-            return session._decide(chunk_id, reason, keep=True)
-
-        @strands_tool
-        def ignore_chunk(chunk_id: str, reason: str = "") -> str:
-            """Ignore a chunk: it is not relevant to the question and must
-            not be shown to the user.
-
-            Args:
-                chunk_id: The id shown with the chunk, e.g. c3.
-                reason: One short phrase saying why it is irrelevant.
-            """
-            return session._decide(chunk_id, reason, keep=False)
-
-        @strands_tool
-        def enough_information(reason: str = "") -> str:
-            """Declare that the chunks you have kept would let you answer the
-            question well, and end the search. This is how a run should end:
-            call it as soon as that is true, however many chunks that took.
-            Call it also when repeated searches find nothing new and the
-            question still cannot be fully answered, saying what is missing.
-
-            Args:
-                reason: One short phrase saying what the kept chunks cover,
-                    or what is still missing.
-            """
-            return session.declare_enough(reason)
-
-        return [
-            vector_search,
-            keyword_search,
-            extract_keywords,
-            keep_chunk,
-            ignore_chunk,
-            enough_information,
-        ]
-
-
-class _SessionHooks(HookProvider):
-    """Report every tool call before it runs, and cancel any call made after
-    the run should have stopped — once the agent has said it has enough, or
-    once it has collected as much context as the run allows — so a model that
-    keeps going anyway is brought to a halt."""
-
-    def __init__(self, session: AgentSearchSession) -> None:
-        self._session = session
-
-    def register_hooks(self, registry: HookRegistry, **kwargs: Any) -> None:
-        registry.add_callback(BeforeToolCallEvent, self._before_tool)
-        registry.add_callback(AfterToolCallEvent, self._after_tool)
-
-    def _before_tool(self, event: BeforeToolCallEvent) -> None:
-        session = self._session
-        name = event.tool_use.get("name")
-        args = event.tool_use.get("input", {})
-        shown = ", ".join(f"{k}={v!r}" for k, v in dict(args).items())
-        if len(shown) > _ARGS_CHARS:
-            shown = shown[:_ARGS_CHARS] + "…"
-        if session.should_stop:
-            why = (
-                "you already said you had enough"
-                if session.enough
-                else f"the {session.max_chunks}-chunk maximum is reached"
-            )
-            session.tell(f"agent ✗ {name}({shown}) cancelled: {why}")
-            event.cancel_tool = (
-                f"The search is over — {why}. Stop calling tools and reply: done"
-            )
-            return
-        session.tell(f"agent → {name}({shown})")
-
-    def _after_tool(self, event: AfterToolCallEvent) -> None:
-        if event.exception is not None:
-            self._session.tell(
-                f"agent ← {event.tool_use.get('name')} raised: {event.exception}"
-            )
-
-
 def _print_progress(message: str) -> None:
     print(message, flush=True)
+
+
+class RetrievalAgent(LLMAgent):
+    """``llmAgent`` that also remembers why the agent loop ended.
+
+    The base segment yields only the answer, but the note the pages show has
+    to tell a run stopped by the turn cap from one the agent ended itself, so
+    the stop reason is kept here. Everything else — model resolution, tool
+    dispatch, progress reporting, reply cleanup — is the library's.
+    """
+
+    stop_reason: str = ""
+
+    def _ask(self, agent: Any, prompt: str) -> str:
+        result, answer = ask_and_clean(
+            agent, prompt, max_turns=self.max_turns, tell=self.tell
+        )
+        self.stop_reason = str(result.stop_reason)
+        return str(answer)
 
 
 @register_segment("vaultAgentSearch")
@@ -537,6 +179,15 @@ class AgentVaultSearch(AbstractFieldSegment):
             str | None,
             "Source/provider of the agent's model. If None, uses TalkPipe config or default.",
         ] = None,
+        tools: Annotated[
+            str | list | None,
+            "Tools the agent gets, by name ('vector_search,keep_chunk,…' or a "
+            "list). Vault tools come from agent_tools; any other name is "
+            "resolved in talkpipe-agents' registry. None = the whole vault pack.",
+        ] = None,
+        system_prompt: Annotated[
+            str | None, "The agent's system prompt. If None, uses the retrieval prompt."
+        ] = None,
         max_chunks: Annotated[
             int,
             "Ceiling on chunks kept per run. Not a target: the agent stops "
@@ -562,6 +213,8 @@ class AgentVaultSearch(AbstractFieldSegment):
         self.vault_path = vault_path
         self.chat_model = chat_model if chat_model is not None else get_chat_model()
         self.chat_source = chat_source if chat_source is not None else get_chat_source()
+        self.tool_names = parse_tool_names(tools)
+        self.system_prompt = system_prompt or RETRIEVAL_SYSTEM_PROMPT
         self.max_chunks = max(1, max_chunks)
         self.max_iterations = max(1, max_iterations)
         self.search_limit = max(1, search_limit)
@@ -583,9 +236,11 @@ class AgentVaultSearch(AbstractFieldSegment):
             chat_source=self.chat_source,
             max_keywords=max(1, max_keywords),
         ).as_function(single_in=True, single_out=True)
-        # Fail on a bad model configuration when the segment is built, not
-        # mid-search, so the app can fall back to plain search up front.
-        self._model = build_agent_model(self.chat_source, self.chat_model)
+        # Resolve the tool names and the model when the segment is built, not
+        # mid-search, so an unknown tool or a bad model configuration surfaces
+        # up front and the app can fall back to plain search.
+        build_tools(self.make_session(), self.tool_names)
+        build_agent_model(self.chat_source, self.chat_model)
 
     # -- search bindings (overridable for tests) -----------------------------
 
@@ -600,7 +255,7 @@ class AgentVaultSearch(AbstractFieldSegment):
 
     def keyword_search(self, query: str) -> list[Any]:
         # Built per call: the index may not have existed when the segment was
-        # constructed (the agent can create it mid-run).
+        # constructed (it can be built between two questions).
         search = VaultTextSearch(vault_path=self.vault_path, limit=self.search_limit)
         return list(search.process_value(query))
 
@@ -618,24 +273,30 @@ class AgentVaultSearch(AbstractFieldSegment):
             rename_fields=self.rename_fields,
         )
 
+    def make_agent(self, session: AgentSearchSession) -> RetrievalAgent:
+        """The llmAgent for one query, with this segment's tools bound to
+        *session*. Built per query because the tools carry that query's
+        state; the model behind it is cheap to resolve."""
+        return RetrievalAgent(
+            model=self.chat_model,
+            source=self.chat_source,
+            system_prompt=self.system_prompt,
+            tools=build_tools(session, self.tool_names),
+            max_turns=self.max_iterations,
+            progress=session.tell,
+        )
+
     def run_agent(self, session: AgentSearchSession, query: str) -> str:
         """Drive the agent over *session* for *query*; returns the stop reason."""
-        agent = Agent(
-            model=self._model,
-            tools=session.tools(),
-            system_prompt=SYSTEM_PROMPT,
-            # the default handler prints to stdout — never in a pipeline
-            callback_handler=None,
-            hooks=[_SessionHooks(session)],
-        )
+        agent = self.make_agent(session)
         prompt = (
             f"Question: {query}\n"
             "Nothing has been searched yet. Search, keep the chunks the answer "
             "needs, and call enough_information once they would answer this "
             f"question well. You may keep at most {session.max_chunks} chunks."
         )
-        result = agent(prompt, limits={"turns": self.max_iterations})
-        return str(result.stop_reason)
+        agent.as_function(single_in=True, single_out=True)(prompt)
+        return agent.stop_reason
 
     def select_chunks(self, value: str) -> AgentSearchOutcome:
         """Run one agent-driven selection for *value* and report the outcome.
@@ -739,6 +400,16 @@ class AgentVaultChat(AgentVaultSearch):
             str | None,
             "Source/provider of the agent's model. If None, uses TalkPipe config or default.",
         ] = None,
+        tools: Annotated[
+            str | list | None,
+            "Tools the agent gets, by name ('vector_search,keep_chunk,…' or a "
+            "list). Vault tools come from agent_tools; any other name is "
+            "resolved in talkpipe-agents' registry. None = the whole vault pack.",
+        ] = None,
+        system_prompt: Annotated[
+            str | None,
+            "The retrieval agent's system prompt. If None, uses the retrieval prompt.",
+        ] = None,
         max_chunks: Annotated[
             int,
             "Ceiling on chunks kept per run. Not a target: the agent stops "
@@ -769,6 +440,8 @@ class AgentVaultChat(AgentVaultSearch):
             embedding_source=embedding_source,
             chat_model=chat_model,
             chat_source=chat_source,
+            tools=tools,
+            system_prompt=system_prompt,
             max_chunks=max_chunks,
             max_iterations=max_iterations,
             search_limit=search_limit,
@@ -816,3 +489,22 @@ class AgentVaultChat(AgentVaultSearch):
             outcome.trace,
             self.answer(value, outcome.results),
         )
+
+
+# Re-exported so callers (and tests) that think in terms of "the agent search
+# module" still find the session and the tool registry, which now live with
+# the tools they belong to.
+__all__ = [
+    "DEFAULT_MAX_CHUNKS",
+    "DEFAULT_MAX_ITERATIONS",
+    "NO_CONTEXT_ANSWER",
+    "RETRIEVAL_SYSTEM_PROMPT",
+    "AgentChatOutcome",
+    "AgentSearchOutcome",
+    "AgentSearchSession",
+    "AgentVaultChat",
+    "AgentVaultSearch",
+    "RetrievalAgent",
+    "build_tools",
+    "parse_tool_names",
+]

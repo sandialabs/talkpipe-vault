@@ -515,6 +515,8 @@ talkpipe-vault/
 │       ├── pipelines/
 │       │   ├── building_and_watching.py    # Experimental watcher pipelines
 │       │   ├── searching_and_prompting.py  # Search and RAG segments
+│       │   ├── agent_tools.py              # Agent tool pack (what the tools do)
+│       │   ├── agent_search.py             # Agent retrieval segments (llmAgent)
 │       │   ├── config.py                   # Config resolution + vault layout
 │       │   └── cli.py                      # Experimental watcher CLI helpers
 │       ├── apps/

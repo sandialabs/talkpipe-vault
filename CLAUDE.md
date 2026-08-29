@@ -51,7 +51,8 @@ src/talkpipe_vault/
     ├── cli.py                  # Experimental watcher CLI helpers (not installed as scripts)
     ├── building_and_watching.py # Experimental watch/batch vector DB pipelines
     ├── searching_and_prompting.py # VaultSearch / VaultChat / VaultTextSearch segments
-    └── agent_search.py         # AgentVaultSearch: agent-driven result selection (talkpipe-agents)
+    ├── agent_tools.py          # The vault's agent tool pack (session + bound-tool factories)
+    └── agent_search.py         # vaultAgentSearch / vaultAgentChat, built on llmAgent
 ```
 
 ## The Web Application (primary user path)
@@ -157,21 +158,46 @@ Segments: `buildVectorDBFromPaths`, `vaultSearch`, `vaultChat`, `vaultTextSearch
 `searchLance`, `extractSearchKeywords`, `mergeSearchResults`, `filterSearchResults`,
 `vaultAgentSearch`, `vaultAgentChat`.
 
-**Agent retrieval** (`pipelines/agent_search.py`): `vaultAgentSearch` runs a Strands agent
-(via talkpipe-agents' `build_agent_model`, using the vault's chat source/model) with six
-tools bound to one `AgentSearchSession` per query — `vector_search`, `keyword_search`,
-`extract_keywords`, `keep_chunk`, `ignore_chunk`, `enough_information`. Hits are assigned
-short ids (`c1`, `c2`, …; deduped by doc_id across searches) and the agent is told to
-decide on each and to refine its queries from what it finds.
+**Agent retrieval** is split in two, deliberately: `pipelines/agent_tools.py` owns *what
+the tools do*, `pipelines/agent_search.py` owns *the pipeline that runs them*. Nothing in
+the tool module knows about agents, models, or prompts, so the pack is what would move out
+if these tools were ever pulled into a generic package.
+
+`agent_tools.py` — six tools, all needing per-query state, so each is a **factory**
+returning a tool bound to one `AgentSearchSession` (the pattern talkpipe-agents documents
+for stateful packs): `vector_search`, `keyword_search`, `extract_keywords`, `keep_chunk`,
+`ignore_chunk`, `enough_information`. `@vault_agent_tool("name")` registers a factory in
+`TOOL_FACTORIES`, mirroring talkpipe-agents' own name registry; `build_tools(session,
+names)` resolves a name list against it and **falls through to `resolve_agent_tools` for
+anything it does not own**, so a pipeline can mix in generic tools (`think`, `calculator`,
+…) by name with no code change here. An unknown name raises at construction — compile time
+for a ChatterLang script. That fall-through is a developer/ChatterLang escape hatch: the
+interfaces only ever request the default pack, so a generic file-reading tool cannot turn
+up behind a checkbox and sidestep the path fences. Hits are assigned short ids (`c1`,
+`c2`, …; deduped by doc_id across searches) and the agent decides on each.
+
+`agent_search.py` — `vaultAgentSearch` **does not build a Strands agent**; it configures
+talkpipe-agents' `llmAgent` segment (`RetrievalAgent`, a two-line subclass that keeps
+`result.stop_reason`, which the base segment discards). Model resolution, tool dispatch,
+progress reporting and reply cleanup are all the library's. Both the tool list
+(`tools="vector_search,keep_chunk,…"`, a string or a list) and the `system_prompt` are
+segment parameters, so tools and agents mix and match without editing the module; the
+default is the whole vault pack with `RETRIEVAL_SYSTEM_PROMPT`. `make_session` /
+`make_agent` / `run_agent` / `select_chunks` and the `vector_search` / `keyword_search` /
+`extract_keywords` bindings are the overridable seams; tests drive the tools with scripted
+callables and no LLM.
 
 **The stopping criterion is the agent's own judgement that it could answer the question
 well from what it kept, not a result count** — it says so by calling `enough_information`
 (refused while nothing is kept: an answer needs context), which sets `session.enough` and
 its reason. `max_chunks` (Settings → Agent Chunk Limit, default `DEFAULT_MAX_CHUNKS`) is a
 *ceiling* on collected context and `max_iterations` (Settings → Agent Search Iterations)
-caps agent turns; both only bound a run that never reaches that judgement. A `_SessionHooks`
-`BeforeToolCallEvent` callback cancels further tool calls once `session.should_stop`
-(`enough or at_capacity`), naming which. The note distinguishes all four endings — judged
+is passed straight through as `llmAgent`'s `max_turns`; both only bound a run that never
+reaches that judgement. **The stop is enforced by the tools, not by an agent hook**: every
+tool starts with `_guard`, which refuses once `session.should_stop` (`enough or
+at_capacity`) and says which — so the rule holds behind any agent, and there is no
+`BeforeToolCallEvent` callback of ours to keep in step with the library's. The note
+distinguishes all four endings — judged
 it had enough (with the reason), filled the chunk maximum, hit the iteration cap, or
 stopped without saying it had enough — because each means something different about how
 complete the selection is; the last is what weaker tool-calling models do. The outcome is an
@@ -184,9 +210,6 @@ pass to `keyword_search`, rather than having to write Whoosh syntax itself. The 
 never builds the full-text index — when a vault has none, `keyword_search` says so and
 the agent falls back to `vector_search`; building the index stays a user action on the
 Keyword Search page. `AgentVaultSearch.vector_search` / `keyword_search` /
-`extract_keywords` / `run_agent` / `select_chunks` are overridable seams; tests drive the
-tools with scripted callables and no LLM.
-
 `vaultAgentChat` (`AgentVaultChat`) subclasses it for Ask: it calls `select_chunks` and
 feeds the kept chunks to the same `ConstructRAGPrompt` → `LLMPrompt` → `AppendRAGSources`
 stages `vaultChat` ends with, so an agent-gathered answer is worded and cited exactly like
