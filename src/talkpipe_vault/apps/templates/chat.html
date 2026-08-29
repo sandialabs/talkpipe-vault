@@ -22,6 +22,9 @@
 {% if citations %}
 <script id="server-citations" type="application/json">{{ citations | tojson }}</script>
 {% endif %}
+{% if agent_trace %}
+<script id="server-agent-trace" type="application/json">{{ agent_trace | tojson }}</script>
+{% endif %}
 
 <div class="ask-container">
     <div class="ask-header">
@@ -39,6 +42,12 @@
                 <span>Boost retrieval with keyword search</span>
             </label>
             {% endif %}
+            {% if agent_chat_available %}
+            <label class="keyword-toggle" title="An agent runs its own semantic and keyword searches, decides chunk by chunk what is relevant, and the answer is built from just those chunks. Slower than a single retrieval.">
+                <input type="checkbox" id="use-agent" name="use_agent" value="on"{% if use_agent %} checked{% endif %}>
+                <span>Use Agent (let an agent gather the context; slower)</span>
+            </label>
+            {% endif %}
             <button type="submit" id="ask-btn">Ask</button>
         </form>
         <p class="ask-hint">Press Enter to ask, or Shift+Enter for a new line.</p>
@@ -51,6 +60,10 @@
         </div>
         <div class="answer-content markdown-content" id="answer-content"></div>
         <div class="answer-meta" id="answer-meta" style="display: none;"></div>
+        <details class="agent-trace" id="agent-trace-section" style="display: none;">
+            <summary id="agent-trace-summary">Agent tool calls</summary>
+            <pre id="agent-trace-body"></pre>
+        </details>
         <div class="sources-section" id="sources-section" style="display: none;">
             <h3>Source Chunks</h3>
             <div id="sources-list"></div>
@@ -59,7 +72,7 @@
 
     <div class="loading-section" id="loading-section" style="display: none;">
         <div class="spinner"></div>
-        <span>Searching vault and generating answer...</span>
+        <span id="loading-label">Searching vault and generating answer...</span>
     </div>
 </div>
 
@@ -303,10 +316,14 @@ document.addEventListener('DOMContentLoaded', function() {
     const answerSection = document.getElementById('answer-section');
     const answerContent = document.getElementById('answer-content');
     const loadingSection = document.getElementById('loading-section');
+    const loadingLabel = document.getElementById('loading-label');
     const copyBtn = document.getElementById('copy-btn');
     const sourcesSection = document.getElementById('sources-section');
     const sourcesList = document.getElementById('sources-list');
     const answerMeta = document.getElementById('answer-meta');
+    const agentTraceSection = document.getElementById('agent-trace-section');
+    const agentTraceSummary = document.getElementById('agent-trace-summary');
+    const agentTraceBody = document.getElementById('agent-trace-body');
 
     let currentAnswer = '';
 
@@ -361,6 +378,13 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 
     function showLoading() {
+        const agentToggle = document.getElementById('use-agent');
+        // An agent run is several searches and several model turns; say so,
+        // because it takes far longer than the single retrieval this message
+        // normally describes.
+        loadingLabel.textContent = agentToggle && agentToggle.checked
+            ? 'Agent is searching the vault and choosing chunks, then answering. This takes a while...'
+            : 'Searching vault and generating answer...';
         loadingSection.style.display = 'flex';
         answerSection.style.display = 'none';
     }
@@ -444,19 +468,30 @@ document.addEventListener('DOMContentLoaded', function() {
         sourcesSection.style.display = 'block';
     }
 
-    function getServerCitations(doc) {
-        const citationsScript = doc.getElementById('server-citations');
-        if (!citationsScript) {
+    function getServerJson(doc, id) {
+        const script = doc.getElementById(id);
+        if (!script) {
             return [];
         }
         try {
-            return JSON.parse(citationsScript.textContent || '[]');
+            return JSON.parse(script.textContent || '[]');
         } catch (err) {
             return [];
         }
     }
 
-    function showAnswer(content, isError = false, citations = [], answeredBy = '') {
+    function renderAgentTrace(trace) {
+        if (!trace || !trace.length) {
+            agentTraceSection.style.display = 'none';
+            agentTraceBody.textContent = '';
+            return;
+        }
+        agentTraceSummary.textContent = 'Agent tool calls (' + trace.length + ')';
+        agentTraceBody.textContent = trace.join('\n');
+        agentTraceSection.style.display = 'block';
+    }
+
+    function showAnswer(content, isError = false, citations = [], answeredBy = '', agentTrace = []) {
         currentAnswer = content;
         answerContent.classList.toggle('error', isError);
 
@@ -474,6 +509,7 @@ document.addEventListener('DOMContentLoaded', function() {
             answerMeta.style.display = 'none';
         }
 
+        renderAgentTrace(isError ? [] : agentTrace);
         renderSources(isError ? [] : citations);
         answerSection.style.display = 'block';
     }
@@ -500,6 +536,10 @@ document.addEventListener('DOMContentLoaded', function() {
             if (keywordToggle && keywordToggle.checked) {
                 formData.append('use_keyword_search', 'on');
             }
+            const agentToggle = document.getElementById('use-agent');
+            if (agentToggle && agentToggle.checked) {
+                formData.append('use_agent', 'on');
+            }
 
             const response = await fetch('/chat', {
                 method: 'POST',
@@ -523,7 +563,8 @@ document.addEventListener('DOMContentLoaded', function() {
             // Look for server response in hidden elements
             const serverResponse = doc.getElementById('server-response');
             const serverError = doc.getElementById('server-error');
-            const serverCitations = getServerCitations(doc);
+            const serverCitations = getServerJson(doc, 'server-citations');
+            const serverAgentTrace = getServerJson(doc, 'server-agent-trace');
             const serverAnsweredBy = doc.getElementById('server-answered-by');
             const answeredBy = serverAnsweredBy ? serverAnsweredBy.getAttribute('data-content') : '';
 
@@ -532,7 +573,7 @@ document.addEventListener('DOMContentLoaded', function() {
             if (serverError) {
                 showAnswer('Error: ' + serverError.getAttribute('data-content'), true);
             } else if (serverResponse) {
-                showAnswer(serverResponse.getAttribute('data-content'), false, serverCitations, answeredBy);
+                showAnswer(serverResponse.getAttribute('data-content'), false, serverCitations, answeredBy, serverAgentTrace);
             } else {
                 console.warn('No server-response or server-error found in HTML');
                 showAnswer('No response from server.', true);

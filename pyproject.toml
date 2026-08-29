@@ -249,6 +249,7 @@ filterSearchResults = "talkpipe_vault.pipelines.searching_and_prompting:SearchRe
 mergeSearchResults = "talkpipe_vault.pipelines.searching_and_prompting:MergeSearchResults"
 searchLance = "talkpipe_vault.pipelines.searching_and_prompting:searchLance"
 vaultChat = "talkpipe_vault.pipelines.searching_and_prompting:VaultChat"
+vaultAgentChat = "talkpipe_vault.pipelines.agent_search:AgentVaultChat"
 vaultAgentSearch = "talkpipe_vault.pipelines.agent_search:AgentVaultSearch"
 vaultSearch = "talkpipe_vault.pipelines.searching_and_prompting:VaultSearch"
 vaultTextSearch = "talkpipe_vault.pipelines.searching_and_prompting:VaultTextSearch"

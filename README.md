@@ -128,7 +128,8 @@ A compose service and instructions for deriving your own customized image
 ## The terminal interface (`vault-tui`)
 
 Everything above is also available without a browser — in an SSH session, a
-tmux window, or on a headless machine — through `vault-tui`, installed
+tmux window, or on a headless machine — through `vault-tui` (the **Use Agent**
+options on Search and Ask included), installed
 alongside `vault-server`. It is new and not yet in a PyPI release, so install
 it from source — either straight from the repository:
 
@@ -165,10 +166,10 @@ between the two freely. Tabs mirror the web pages:
 | Key | Tab | What you can do |
 |-----|-----|-----------------|
 | `F2` | Vault | Open/create a vault, browse to a documents folder, index it (with progress), open or delete recent vaults, edit the retrieval filter |
-| `F3` | Search | Semantic search; the detail pane follows the highlighted result — `Enter` loads the full chunk, `o` shows/opens the source document, `c` copies the chunk, Copy All copies every result |
+| `F3` | Search | Semantic search; the detail pane follows the highlighted result — `Enter` loads the full chunk, `o` shows/opens the source document, `c` copies the chunk, Copy All copies every result. **Use Agent** hands the search to the agent, as in the browser |
 | `F4` | Keywords | Full-text search (Whoosh syntax), and building/rebuilding the full-text index |
-| `F5` | Ask | Question answering with the answer, its "Answered by" line and the source chunks it used; optional keyword boost |
-| `F6` | Settings | Configuration status (Re-test), embedding/chat model settings, connections & credentials |
+| `F5` | Ask | Question answering with the answer, its "Answered by" line and the source chunks it used; optional keyword boost, or **Use Agent** to let the agent gather the context it answers from |
+| `F6` | Settings | Configuration status (Re-test), embedding/chat model settings (including the agent's result count and iteration cap), connections & credentials |
 | `F1` / `Ctrl+R` / `Ctrl+Q` | | Help / reload the vault and settings (after indexing or editing `~/.talkpipe.toml` outside the app) / quit (`Ctrl+C` only reminds you of `Ctrl+Q`; while an indexing run is in progress `Ctrl+Q` asks first, because quitting abandons it) |
 
 `--show-source-paths` shows file paths in results, as for `vault-server`.
@@ -216,8 +217,8 @@ script syntax is in the Advanced Guide under
   submit; with one open, the same form adds documents to it. Recent vaults
   are remembered for one-click reopening, and indexing shows live progress.
 - **Settings** — choose embedding and chat providers/models (the chat model
-  also drives the agent search; the Agent search section sets its result
-  count and iteration cap), with a live
+  also drives the agent on the Search and Ask pages; the Agent retrieval
+  section sets its result count and iteration cap), with a live
   **Configuration status** panel that tests your selection (and can download
   an uncached embedding model via Re-test), plus **Connections &
   credentials** for API keys and the Ollama URL — no environment variables
@@ -242,7 +243,14 @@ script syntax is in the Advanced Guide under
   and the combined context is used to answer. The "Answered by" line under
   the answer confirms whether the boost ran and how many keyword hits were
   merged (keyword hits that duplicate vector results are combined, so the
-  boost can be active even when the source list looks unchanged).
+  boost can be active even when the source list looks unchanged). A
+  **Use Agent** checkbox appears whenever the chat model can be run as an
+  agent: instead of one retrieval, the agent gathers the context the same
+  way it does on the Semantic Search page — searching, reading, keeping and
+  discarding chunks — and the answer is built from just the chunks it kept,
+  which are also the citations. Its tool calls are listed under the answer.
+  It takes considerably longer than a plain question, and it supersedes the
+  keyword boost (the agent already has keyword search as one of its tools).
 
 Every search result and Ask citation has an **Open** link that fetches the
 original document from the server — PDFs, images, and plain text open right

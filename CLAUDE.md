@@ -155,9 +155,9 @@ non-authoritative `indexed_via_url` breadcrumb).
 Sources: `fileWatcher`, `watchIntoVectorDB`, `listIntoVectorDB` (watcher ones experimental).
 Segments: `buildVectorDBFromPaths`, `vaultSearch`, `vaultChat`, `vaultTextSearch`,
 `searchLance`, `extractSearchKeywords`, `mergeSearchResults`, `filterSearchResults`,
-`vaultAgentSearch`.
+`vaultAgentSearch`, `vaultAgentChat`.
 
-**Agent search** (`pipelines/agent_search.py`): `vaultAgentSearch` runs a Strands agent
+**Agent retrieval** (`pipelines/agent_search.py`): `vaultAgentSearch` runs a Strands agent
 (via talkpipe-agents' `build_agent_model`, using the vault's chat source/model) with five
 tools bound to one `AgentSearchSession` per query — `vector_search`, `keyword_search`,
 `extract_keywords`, `keep_chunk`, `ignore_chunk`. Hits are assigned short ids (`c1`,
@@ -167,18 +167,35 @@ refine its queries from what it finds. The run ends when kept chunks reach `targ
 `max_iterations` agent turns (Settings → Agent Search Iterations). The outcome is an
 `AgentSearchOutcome(results, note, trace)`: kept chunks as `SearchResult` in keep order, a
 note on how it ended, and the tool-call trace, which is also printed (`progress`, stdout
-by default) so the agent's behavior is visible on the server console. The Search page
-shows a **Let an agent select the results** checkbox when `_state.agent_search_pipeline`
-exists — `_refresh_agent_search_pipeline` builds the model eagerly and leaves the option
-off on failure — and renders the trace under the results. `extract_keywords` is the LLM
+by default) so the agent's behavior is visible on the server console. `extract_keywords` is the LLM
 keyword distillation the Ask page's keyword boost uses (the `ExtractSearchKeywords`
 segment): the agent hands it a plain-language question and gets back a Whoosh query to
 pass to `keyword_search`, rather than having to write Whoosh syntax itself. The agent
 never builds the full-text index — when a vault has none, `keyword_search` says so and
 the agent falls back to `vector_search`; building the index stays a user action on the
 Keyword Search page. `AgentVaultSearch.vector_search` / `keyword_search` /
-`extract_keywords` / `run_agent` are overridable seams; tests drive the tools with
-scripted callables and no LLM.
+`extract_keywords` / `run_agent` / `select_chunks` are overridable seams; tests drive the
+tools with scripted callables and no LLM.
+
+`vaultAgentChat` (`AgentVaultChat`) subclasses it for Ask: it calls `select_chunks` and
+feeds the kept chunks to the same `ConstructRAGPrompt` → `LLMPrompt` → `AppendRAGSources`
+stages `vaultChat` ends with, so an agent-gathered answer is worded and cited exactly like
+a plain one — only the retrieval in front differs. It emits an `AgentChatOutcome` (an
+`AgentSearchOutcome` plus `response`); when the agent kept nothing, no prompt is sent and
+`NO_CONTEXT_ANSWER` is returned instead of asking a model to answer from an empty context.
+
+**Both pages are driven by one segment.** `_refresh_agent_pipelines` builds a single
+`AgentVaultChat` per refresh and sets `_state.agent_search_pipeline = segment.select_chunks`
+and `_state.agent_chat_pipeline = segment.as_function(...)` — one embedder and one agent
+model, not two. The model is resolved eagerly, so a bad chat configuration leaves *both*
+unset and both checkboxes hidden (Search: **Let an agent select the results**; Ask:
+**Use Agent**), in the web interface and in the TUI (`#search-agent` / `#ask-agent`, shown
+from `status()["agent_search_available"]` / `["agent_chat_available"]`). Both interfaces
+render the trace in an "Agent tool calls" panel. Ask's **Use Agent** takes precedence over
+the keyword boost (the agent already has keyword search as a tool), and a requested-but-
+unavailable agent is reported in the "Answered by" line rather than silently ignored.
+The vault's retrieval filter is *not* applied to an agent run — the agent searches through
+its own tools, which the filter never sees — and both pages say so when a filter is active.
 
 **Keyword-augmented Ask** (issue #11): `vaultChat[keyword_search=True]` composes the
 reusable pipeline prompt → `extractSearchKeywords` (LLM distills the question into a

@@ -164,20 +164,21 @@
             </p>
         </fieldset>
         <fieldset>
-            <legend>Agent search &mdash; Search page option</legend>
+            <legend>Agent retrieval &mdash; Search and Ask page option</legend>
             <label for="agent-search-result-count">Agent Result Count</label>
             <input type="number" name="agent_search_result_count" id="agent-search-result-count" min="1"
                    value="{{ models.agent_search_result_count }}">
             <p class="field-hint">
-                When "Let an agent select the results" is checked on the Search page, the agent
-                stops once it has kept this many relevant chunks.
+                When "Let an agent select the results" is checked on the Search page, or
+                "Use Agent" on the Ask page, the agent stops once it has kept this many
+                relevant chunks. On Ask, those chunks are the context the answer is built from.
             </p>
             <label for="agent-search-iterations">Agent Search Iterations</label>
             <input type="number" name="agent_search_iterations" id="agent-search-iterations" min="1"
                    value="{{ models.agent_search_iterations }}">
             <p class="field-hint">
-                Maximum number of reasoning turns the agent may take per search before it is
-                stopped, whether or not it has reached the result count.
+                Maximum number of reasoning turns the agent may take per search or question
+                before it is stopped, whether or not it has reached the result count.
             </p>
         </fieldset>
         <button type="submit">Save Settings</button>

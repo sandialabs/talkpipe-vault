@@ -13,6 +13,7 @@ import pytest
 from textual.widgets import (
     Button,
     Checkbox,
+    Collapsible,
     Input,
     Markdown,
     OptionList,
@@ -754,6 +755,123 @@ async def test_ask_tab_hints_at_keyword_boost_until_index_exists(tmp_path):
         assert not app.query_one("#ask-keyword-hint", Static).has_class("hidden")
         assert app.query_one("#ask-keyword", Checkbox).has_class("hidden")
         assert "F4" in _text(app.query_one("#ask-keyword-hint", Static))
+
+
+def _agent_chat_outcome(message):
+    from talkpipe.search.abstract import SearchResult
+
+    from talkpipe_vault.pipelines.agent_search import AgentChatOutcome
+
+    return AgentChatOutcome(
+        results=[
+            SearchResult(score=0.9, doc_id="row-1", document={"content": "kept chunk"})
+        ],
+        note="Agent reached its target: kept 1 of 1 chunks after 2 searches, ignored 3.",
+        trace=["agent → vector_search(query='x')", "agent · keep c1 — on topic"],
+        response=f"Agent answer to {message}",
+    )
+
+
+async def test_ask_use_agent_checkbox_answers_through_the_agent(
+    sample_vault, monkeypatch
+):
+    app = VaultApp(VaultService(), vault_path=sample_vault)
+    async with app.run_test(size=SIZE) as pilot:
+        await _wait_workers(app, pilot)
+        monkeypatch.setattr(
+            app.service.state, "chat_pipeline", lambda q: "Plain answer."
+        )
+        monkeypatch.setattr(
+            app.service.state, "agent_chat_pipeline", _agent_chat_outcome
+        )
+        monkeypatch.setattr(app.service.state, "last_refresh_time", float("inf"))
+        app.refresh_status()
+        await _settle(pilot)
+
+        agent_box = app.query_one("#ask-agent", Checkbox)
+        assert not agent_box.has_class("hidden")
+        # The tool-call panel stays hidden until an agent run produces one.
+        assert app.query_one("#ask-trace", Collapsible).has_class("hidden")
+
+        agent_box.value = True
+        app.query_one("#question", TextArea).load_text("What is this?")
+        app.query_one("#ask-go", Button).press()
+        await _wait_workers(app, pilot)
+        await _settle(pilot)
+
+        assert "Agent answer to What is this?" in _answer_source(app)
+        assert "Agent reached its target" in _text(
+            app.query_one("#answer-meta", Static)
+        )
+        assert len(app.query_one("#citations", ResultsPane).results) == 1
+        trace = app.query_one("#ask-trace", Collapsible)
+        assert not trace.has_class("hidden")
+        assert "Agent tool calls (2)" in str(trace.title)
+        assert "keep c1" in _text(app.query_one("#ask-trace-body", Static))
+
+
+async def test_ask_agent_checkbox_is_hidden_without_the_pipeline(
+    sample_vault, monkeypatch
+):
+    app = VaultApp(VaultService(), vault_path=sample_vault)
+    async with app.run_test(size=SIZE) as pilot:
+        await _wait_workers(app, pilot)
+        monkeypatch.setattr(app.service.state, "agent_chat_pipeline", None)
+        monkeypatch.setattr(app.service.state, "agent_search_pipeline", None)
+        app.refresh_status()
+        await _settle(pilot)
+        assert app.query_one("#ask-agent", Checkbox).has_class("hidden")
+        assert app.query_one("#search-agent", Checkbox).has_class("hidden")
+
+
+async def test_search_use_agent_checkbox_shows_the_agents_results(
+    sample_vault, monkeypatch
+):
+    from talkpipe_vault.pipelines.agent_search import AgentSearchOutcome
+
+    app = VaultApp(VaultService(), vault_path=sample_vault)
+    async with app.run_test(size=SIZE) as pilot:
+        await _wait_workers(app, pilot)
+        outcome = _agent_chat_outcome("q")
+        monkeypatch.setattr(
+            app.service.state,
+            "agent_search_pipeline",
+            lambda text: AgentSearchOutcome(
+                outcome.results, outcome.note, outcome.trace
+            ),
+        )
+        monkeypatch.setattr(app.service.state, "last_refresh_time", float("inf"))
+        app.refresh_status()
+        await _settle(pilot)
+
+        app.query_one("#search-agent", Checkbox).value = True
+        app.query_one("#search-query", Input).value = "heading"
+        app.query_one("#search-go", Button).press()
+        await _wait_workers(app, pilot)
+        await _settle(pilot)
+
+        assert len(app.query_one("#search-results", ResultsPane).results) == 1
+        assert "Agent reached its target" in _text(
+            app.query_one("#search-note", Static)
+        )
+        trace = app.query_one("#search-trace", Collapsible)
+        assert not trace.has_class("hidden")
+        assert "Agent tool calls (2)" in str(trace.title)
+
+
+async def test_settings_tab_saves_the_agent_counts(sample_vault):
+    app = VaultApp(VaultService(), vault_path=sample_vault)
+    async with app.run_test(size=SIZE) as pilot:
+        await _wait_workers(app, pilot)
+        await pilot.press("f6")
+        await _settle(pilot)
+        app.query_one("#agent-result-count", Input).value = "4"
+        app.query_one("#agent-iterations", Input).value = "6"
+        app.query_one("#settings-save", Button).press()
+        await _wait_workers(app, pilot)
+        await _settle(pilot)
+        assert app.service.state.agent_search_result_count == 4
+        assert app.service.state.agent_search_iterations == 6
 
 
 async def test_help_dialog_scrolls_and_enter_closes(sample_vault):

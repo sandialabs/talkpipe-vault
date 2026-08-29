@@ -210,9 +210,13 @@
 
 ### Features
 
-#### Agent-Selected Search Results
+#### Agent-Selected Search Results and Answers
+- **Ask** gained a **Use Agent** checkbox, in the web interface and in the terminal interface alike. With it ticked, the agent gathers the context the same way it does on the Semantic Search page — searching, reading, keeping and discarding chunks — and the answer is built from just the chunks it kept, which are also the citations shown beneath it. The agent's tool calls are listed under the answer as they are under search results. It supersedes the keyword boost, since the agent already has keyword search as one of its tools, and an agent that could not be set up is reported in the "Answered by" line rather than quietly falling back.
+- The terminal interface gained the **Use Agent** option on its Search tab too, and the Agent result count and Agent search iterations settings on its Settings tab, so it matches what the web interface offers.
+- Added the `vaultAgentChat` segment: the same selection loop followed by the RAG prompt and completion `vaultChat` uses, so an agent-gathered answer is worded and cited exactly like a plain one. When the agent keeps nothing, no prompt is sent and the answer says so instead of a model inventing one from an empty context.
+- An active per-vault retrieval filter is never applied to an agent run — the agent searches through its own tools, which the filter never sees — and Search and Ask now say so when both are switched on, instead of ignoring the filter silently.
 - The Semantic Search page gained a **Let an agent select the results** option. Instead of showing the top vector hits, an agent (built on the new `talkpipe-agents` dependency) searches the vault iteratively: it runs semantic and keyword searches as tools, reads the chunks that come back, keeps the relevant ones and ignores the rest, and rewrites its queries from what it learns — new terms, names, and phrasings from useful chunks — until it has kept the configured number of chunks or used its iteration budget. It can also ask the chat model to distill a question into keyword-search terms rather than composing a keyword query itself.
-- Two new settings control it: **Agent Result Count** (stop once this many chunks are kept) and **Agent Search Iterations** (cap on agent turns per search).
+- Two new settings control it, on Search and on Ask: **Agent Result Count** (stop once this many chunks are kept) and **Agent Search Iterations** (cap on agent turns per search or question).
 - Every tool call and decision is printed to the server console as it happens and listed under the results in a collapsible "Agent tool calls" panel, and the results note says how the run ended (target reached, iteration cap, stopped on its own, or error) and how many chunks were kept and ignored. The option is hidden when the chat model cannot be set up as an agent model; plain search is unaffected.
 - Added the `vaultAgentSearch` segment (`pipelines/agent_search.py`), which exposes the same loop to TalkPipe pipelines and yields the kept chunks with the trace.
 

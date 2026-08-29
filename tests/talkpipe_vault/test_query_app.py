@@ -8,7 +8,11 @@ import pytest
 from fastapi.testclient import TestClient
 
 from talkpipe_vault.apps import query, user_settings
-from talkpipe_vault.pipelines import retrieval_filter, searching_and_prompting
+from talkpipe_vault.pipelines import (
+    agent_search,
+    retrieval_filter,
+    searching_and_prompting,
+)
 from talkpipe_vault.pipelines.searching_and_prompting import VaultTextSearch
 
 
@@ -75,6 +79,7 @@ def reset_app_state(tmp_path, monkeypatch):
     query._state.filtered_search_pipeline = None
     query._state.filtered_keyword_search_pipeline = None
     query._state.agent_search_pipeline = None
+    query._state.agent_chat_pipeline = None
     query._state.agent_search_iterations = None
     query._state.agent_search_result_count = None
     return
@@ -136,6 +141,187 @@ def test_search_post_uses_agent_and_shows_trace(monkeypatch):
     response = client.post("/search", data={"query": "podman"})
     assert plain_calls == ["podman"]
     assert "Agent tool calls" not in response.text
+
+
+def _agent_chat_outcome(message):
+    from talkpipe.search.abstract import SearchResult
+
+    from talkpipe_vault.pipelines.agent_search import AgentChatOutcome
+
+    return AgentChatOutcome(
+        results=[
+            SearchResult(
+                score=0.9,
+                doc_id="row-1",
+                document={"title": "Notes.md", "content": f"About {message}"},
+            )
+        ],
+        note="Agent reached its target: kept 1 of 1 chunks after 2 searches, ignored 3.",
+        trace=["agent → vector_search(query='x')", "agent · keep c1 — on topic"],
+        response=f"Agent answer about {message}.",
+    )
+
+
+def test_chat_page_offers_agent_option_only_when_pipeline_exists(monkeypatch):
+    monkeypatch.setattr(query, "_refresh_pipelines", lambda force=False: None)
+    monkeypatch.setattr(query, "_update_document_counts", lambda vault_path: None)
+    client = TestClient(query.app)
+
+    assert 'id="use-agent"' not in client.get("/chat").text
+
+    query._state.agent_chat_pipeline = _agent_chat_outcome
+    response = client.get("/chat")
+    assert 'id="use-agent"' in response.text
+    assert "Use Agent" in response.text
+
+
+def test_chat_uses_agent_pipeline_when_requested(monkeypatch):
+    """Checking Use Agent must answer from the agent's selection, and show it."""
+    monkeypatch.setattr(query, "_refresh_pipelines", lambda force=False: None)
+    monkeypatch.setattr(query, "_update_document_counts", lambda vault_path: None)
+    plain_calls = []
+
+    def plain(message):
+        plain_calls.append(message)
+        return "Plain answer."
+
+    query._state.chat_pipeline = plain
+    query._state.search_pipeline = lambda _message: []
+    query._state.agent_chat_pipeline = _agent_chat_outcome
+    client = TestClient(query.app)
+
+    response = client.post("/chat", data={"message": "podman", "use_agent": "on"})
+
+    assert response.status_code == 200
+    assert plain_calls == []
+    assert "Agent answer about podman." in response.text
+    # The kept chunks are the citations, and the run is inspectable.
+    assert "Notes.md" in response.text
+    assert "Agent reached its target" in response.text
+    assert "keep c1" in response.text
+
+    # Unchecked, the plain pipeline answers and no trace is embedded.
+    response = client.post("/chat", data={"message": "podman"})
+    assert plain_calls == ["podman"]
+    assert "Plain answer." in response.text
+    assert 'id="server-agent-trace"' not in response.text
+
+
+def test_chat_agent_takes_precedence_over_the_keyword_boost(monkeypatch):
+    """The agent already searches keywords as a tool; it must not run both."""
+    monkeypatch.setattr(query, "_refresh_pipelines", lambda force=False: None)
+    monkeypatch.setattr(query, "_update_document_counts", lambda vault_path: None)
+    query._state.chat_pipeline = lambda _message: "Plain answer."
+    query._state.keyword_chat_pipeline = lambda _message: {
+        "response": "Keyword-augmented answer.",
+        "background": [],
+        "keyword_hits": 2,
+    }
+    query._state.keyword_search_enabled = True
+    query._state.agent_chat_pipeline = _agent_chat_outcome
+    client = TestClient(query.app)
+
+    response = client.post(
+        "/chat",
+        data={"message": "podman", "use_agent": "on", "use_keyword_search": "on"},
+    )
+
+    assert "Agent answer about podman." in response.text
+    assert "Keyword-augmented answer." not in response.text
+
+
+def test_chat_falls_back_to_plain_pipeline_without_agent_pipeline(monkeypatch):
+    """Requesting the agent must degrade gracefully — and say so."""
+    monkeypatch.setattr(query, "_refresh_pipelines", lambda force=False: None)
+    monkeypatch.setattr(query, "_update_document_counts", lambda vault_path: None)
+    query._state.chat_pipeline = lambda _message: "Plain answer."
+    query._state.search_pipeline = lambda _message: []
+    query._state.agent_chat_pipeline = None
+    client = TestClient(query.app)
+
+    response = client.post("/chat", data={"message": "podman", "use_agent": "on"})
+
+    assert response.status_code == 200
+    assert "Plain answer." in response.text
+    assert "the agent is unavailable right now" in response.text
+
+
+def test_chat_agent_answer_says_the_retrieval_filter_did_not_run(monkeypatch):
+    """An active filter never sees the agent's own searches; say so (issue #22)."""
+    monkeypatch.setattr(query, "_refresh_pipelines", lambda force=False: None)
+    monkeypatch.setattr(query, "_update_document_counts", lambda vault_path: None)
+    query._state.chat_pipeline = lambda _message: "Plain answer."
+    query._state.agent_chat_pipeline = _agent_chat_outcome
+    query._state.result_filter_active = True
+    client = TestClient(query.app)
+
+    response = client.post("/chat", data={"message": "podman", "use_agent": "on"})
+
+    assert "does not apply to the agent&#39;s selection" in response.text
+    assert "retrieval filter was applied" not in response.text
+
+
+def test_search_agent_says_the_custom_transform_did_not_run(monkeypatch):
+    """Both boxes checked: the ignored one must not be ignored silently."""
+    monkeypatch.setattr(query, "_refresh_pipelines", lambda force=False: None)
+    monkeypatch.setattr(query, "_update_document_counts", lambda vault_path: None)
+    query._state.search_pipeline = lambda _query: []
+    query._state.agent_search_pipeline = _agent_outcome
+    query._state.result_filter_active = True
+    query._state.filtered_search_pipeline = lambda _query: ([], None)
+    client = TestClient(query.app)
+
+    response = client.post(
+        "/search", data={"query": "podman", "use_agent": "1", "apply_filter": "1"}
+    )
+
+    assert "Agent reached its target" in response.text
+    assert "The custom transform does not apply to the agent&#39;s selection" in (
+        response.text
+    )
+
+
+def test_refresh_agent_pipelines_builds_both_from_one_segment(monkeypatch):
+    """Search and Ask share one AgentVaultChat, so the embedder is built once."""
+    built = []
+
+    class _FakeAgentChat:
+        def __init__(self, **kwargs):
+            built.append(kwargs)
+
+        def select_chunks(self, value):
+            return value
+
+        def as_function(self, **_kwargs):
+            return lambda value: value
+
+    monkeypatch.setattr(agent_search, "AgentVaultChat", _FakeAgentChat)
+    query._state.agent_search_result_count = 3
+    query._state.agent_search_iterations = 4
+
+    query._refresh_agent_pipelines("/tmp/vault")
+
+    assert len(built) == 1
+    assert built[0]["target_count"] == 3
+    assert built[0]["max_iterations"] == 4
+    assert query._state.agent_search_pipeline is not None
+    assert query._state.agent_chat_pipeline is not None
+
+
+def test_refresh_agent_pipelines_clears_both_on_a_bad_model(monkeypatch):
+    """A chat model that cannot be built hides the option on both pages."""
+
+    def _boom(**_kwargs):
+        raise RuntimeError("no such model")
+
+    monkeypatch.setattr(agent_search, "AgentVaultChat", _boom)
+    query._state.agent_search_pipeline = lambda _q: None
+    query._state.agent_chat_pipeline = lambda _q: None
+
+    query._refresh_agent_pipelines("/tmp/vault")
+
+    assert query._state.agent_search_pipeline is None
+    assert query._state.agent_chat_pipeline is None
 
 
 def test_keyword_search_page_is_disabled_without_whoosh():

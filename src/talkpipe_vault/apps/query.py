@@ -112,14 +112,18 @@ class AppState:
     chat_pipeline: Callable[[str], str | dict[str, Any]] | None = None
     keyword_chat_pipeline: Callable[[str], dict[str, Any]] | None = None
     keyword_search_pipeline: Callable[[str], list[Any]] | None = None
-    # Agent-driven result selection on the Search page: an agent runs the
-    # vector and keyword searches as tools and keeps/ignores chunks until it
-    # has agent_search_result_count of them or agent_search_iterations turns
-    # are used. None when the agent's model cannot be built; the page then
-    # offers plain search only.
+    # Agent-driven retrieval, offered on both search-style pages: an agent
+    # runs the vector and keyword searches as tools and keeps/ignores chunks
+    # until it has agent_search_result_count of them or agent_search_iterations
+    # turns are used. The Search page shows the chunks it kept; Ask answers
+    # from them. Both come from one AgentVaultChat segment (built once, so the
+    # embedder and the agent model are not set up twice), and both are None
+    # when the agent's model cannot be built — the pages then offer their
+    # plain pipelines only.
     agent_search_pipeline: Callable[[str], agent_search.AgentSearchOutcome] | None = (
         None
     )
+    agent_chat_pipeline: Callable[[str], agent_search.AgentChatOutcome] | None = None
     # Retrieval filter (issue #22): the open vault's script, whether it is
     # active (present + enabled + compiles), and the search-page pipelines
     # that apply it on demand. Each filtered pipeline returns
@@ -178,6 +182,7 @@ def _template_context(
         "show_source_paths": state.show_source_paths,
         "result_filter_active": state.result_filter_active,
         "agent_search_available": state.agent_search_pipeline is not None,
+        "agent_chat_available": state.agent_chat_pipeline is not None,
     }
     context.update(extra)
     return context
@@ -531,19 +536,23 @@ def _refresh_pipelines(force: bool = False) -> None:
         _state.keyword_search_pipeline = None
         _state.keyword_chat_pipeline = None
     _refresh_filtered_search_pipelines(vault_path, filter_script)
-    _refresh_agent_search_pipeline(vault_path)
+    _refresh_agent_pipelines(vault_path)
     _state.last_refresh_time = current_time
 
 
-def _refresh_agent_search_pipeline(vault_path: str) -> None:
-    """(Re)build the agent-driven Search page pipeline.
+def _refresh_agent_pipelines(vault_path: str) -> None:
+    """(Re)build the agent-driven Search and Ask pipelines.
+
+    One AgentVaultChat backs both: its chunk selection is what the Search page
+    shows, and answering from that selection is what Ask uses, so the embedder
+    and the agent model are built once per refresh rather than twice.
 
     Building it resolves the agent's model eagerly, which fails on a bad chat
-    configuration; Search must keep working without the option, so failure
-    leaves the pipeline unset and the checkbox hidden.
+    configuration; Search and Ask must keep working without the option, so
+    failure leaves both pipelines unset and the checkboxes hidden.
     """
     try:
-        _state.agent_search_pipeline = agent_search.AgentVaultSearch(
+        segment = agent_search.AgentVaultChat(
             vault_path=vault_path,
             embedding_model=_state.embedding_model,
             embedding_source=_state.embedding_source,
@@ -553,10 +562,14 @@ def _refresh_agent_search_pipeline(vault_path: str) -> None:
             or DEFAULT_AGENT_SEARCH_RESULT_COUNT,
             max_iterations=_state.agent_search_iterations
             or DEFAULT_AGENT_SEARCH_ITERATIONS,
-        ).as_function(single_in=True, single_out=True)
+        )
     except Exception:
-        logger.warning("Could not build the agent search pipeline", exc_info=True)
+        logger.warning("Could not build the agent pipelines", exc_info=True)
         _state.agent_search_pipeline = None
+        _state.agent_chat_pipeline = None
+        return
+    _state.agent_search_pipeline = segment.select_chunks
+    _state.agent_chat_pipeline = segment.as_function(single_in=True, single_out=True)
 
 
 def _refresh_filtered_search_pipelines(
@@ -2481,10 +2494,18 @@ async def search_results(
             _update_document_counts(state.vault_path)
             # Perform search with refreshed pipeline
             if use_agent and state.agent_search_pipeline:
-                outcome = state.agent_search_pipeline(query)
-                results = _process_semantic_results(outcome.results)
-                filter_note = outcome.note
-                agent_trace = outcome.trace
+                agent_outcome = state.agent_search_pipeline(query)
+                results = _process_semantic_results(agent_outcome.results)
+                filter_note = agent_outcome.note
+                agent_trace = agent_outcome.trace
+                if apply_filter and state.filtered_search_pipeline:
+                    # The agent picks chunks itself through its search tools,
+                    # which the filter never sees. Both boxes are checked, so
+                    # say which one won instead of ignoring one silently.
+                    filter_note += (
+                        " The custom transform does not apply to the agent's "
+                        "selection and was not run."
+                    )
             elif apply_filter and state.filtered_search_pipeline:
                 raw_results, filter_error = state.filtered_search_pipeline(query)
                 results = _process_semantic_results(raw_results)
@@ -2761,6 +2782,7 @@ async def chat_response(
     request: Request,
     message: Annotated[str, Form()] = "",
     use_keyword_search: Annotated[str, Form()] = "",
+    use_agent: Annotated[str, Form()] = "",
     state: AppState = Depends(get_state),
 ) -> HTMLResponse:
     """
@@ -2770,12 +2792,21 @@ async def chat_response(
         - message: str - The user's question
         - use_keyword_search: str - If truthy, augment retrieval with
           LLM-extracted keyword search over the full-text index
+        - use_agent: str - If truthy, let the agent gather the context it
+          answers from (only honored while the agent pipeline is available;
+          takes precedence over use_keyword_search, whose keyword search the
+          agent already has as a tool)
 
     Returns HTML page with the question and AI-generated answer.
     """
     messages: list[dict[str, str]] = []
     citations: list[dict[str, Any]] = []
     error: str | None = None
+    # The agent's tool calls, shown under the answer the way the Search page
+    # shows them: an agent run takes far longer than a plain one and picks its
+    # own queries, so what it actually did has to be inspectable.
+    agent_trace: list[str] = []
+    answered_by_agent = False
     # Whether keyword boost was actually applied is invisible in the answer
     # itself (keyword hits are merged and deduplicated against the vector
     # retrieval), which reads as "it ignored my checkbox" (issue #19). The
@@ -2795,7 +2826,17 @@ async def chat_response(
             # Update document counts to reflect latest state
             _update_document_counts(state.vault_path)
             result: str | dict[str, Any]
-            if use_keyword_search and state.keyword_chat_pipeline:
+            if use_agent and state.agent_chat_pipeline:
+                # The agent searches with its own queries and keeps only the
+                # chunks it judged relevant, so the answer is built from that
+                # selection and the citations are exactly what it kept.
+                outcome = state.agent_chat_pipeline(message)
+                response = outcome.response
+                citations = _process_semantic_results(outcome.results)
+                agent_trace = outcome.trace
+                answered_by_agent = True
+                retrieval_note = outcome.note
+            elif use_keyword_search and state.keyword_chat_pipeline:
                 # The keyword-augmented pipeline reports the merged
                 # vector+keyword retrieval it actually prompted with, so the
                 # displayed chunks match what the model saw instead of a
@@ -2832,6 +2873,15 @@ async def chat_response(
                 else:
                     response = result
                     citations = _chat_citations(state, message)
+            if use_agent and not answered_by_agent:
+                # Asked for but not built (bad chat configuration): say so
+                # rather than quietly returning a plain retrieval answer.
+                unavailable = "the agent is unavailable right now — answered without it"
+                retrieval_note = (
+                    f"{unavailable} · {retrieval_note}"
+                    if retrieval_note
+                    else unavailable
+                )
             if not state.show_source_paths:
                 # The RAG answer text ends with a "Sources:" list of absolute
                 # paths; hide them unless --show-source-paths was given, to
@@ -2868,7 +2918,13 @@ async def chat_response(
         answered_by = f"{answered_by} · {retrieval_note}"
     filter_note = ""
     if state.result_filter_active:
-        if filter_error:
+        if answered_by_agent:
+            # The agent picks chunks itself through its search tools, which the
+            # filter never sees; claiming it was applied would be wrong.
+            filter_note = (
+                "the vault's retrieval filter does not apply to the agent's selection"
+            )
+        elif filter_error:
             filter_note = (
                 f"the vault's retrieval filter failed and was skipped ({filter_error})"
             )
@@ -2891,6 +2947,8 @@ async def chat_response(
             citations=citations,
             error=error,
             answered_by=answered_by,
+            use_agent=bool(use_agent),
+            agent_trace=agent_trace,
         ),
     )
 
@@ -2967,6 +3025,7 @@ def run_app(
             _state.filtered_search_pipeline = None
             _state.filtered_keyword_search_pipeline = None
             _state.agent_search_pipeline = None
+            _state.agent_chat_pipeline = None
         user_settings.remember_vault(vault_path)
     if open_browser:
         _launch_browser_when_ready(host, port)

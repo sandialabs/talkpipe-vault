@@ -221,6 +221,18 @@ Checkbox {
     min-height: 4;
 }
 
+/* Agent tool-call panels (Search and Ask). Collapsed they are one row; open
+   they take what they need up to a third of the screen and scroll. */
+#search-trace, #ask-trace {
+    height: auto;
+    max-height: 34%;
+    background: $panel;
+}
+
+#search-trace-body, #ask-trace-body {
+    color: $text-muted;
+}
+
 /* ---- Settings ------------------------------------------------------------------ */
 
 #settings-scroll {

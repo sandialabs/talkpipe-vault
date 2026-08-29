@@ -148,6 +148,114 @@ def test_ask_uses_chat_pipeline_and_citations(sample_vault, monkeypatch):
     assert "/" in outcome["answered_by"]
 
 
+def _agent_chat_outcome(message):
+    from talkpipe.search.abstract import SearchResult
+
+    from talkpipe_vault.pipelines.agent_search import AgentChatOutcome
+
+    return AgentChatOutcome(
+        results=[
+            SearchResult(score=0.9, doc_id="row-1", document={"content": "kept chunk"})
+        ],
+        note="Agent reached its target: kept 1 of 1 chunks after 2 searches, ignored 3.",
+        trace=["agent → vector_search(query='x')", "agent · keep c1 — on topic"],
+        response=f"Agent answer to {message}",
+    )
+
+
+def test_ask_with_the_agent_answers_from_its_selection(sample_vault, monkeypatch):
+    service = VaultService()
+    assert service.startup(sample_vault)["ok"]
+    monkeypatch.setattr(service.state, "chat_pipeline", lambda q: "Plain answer.")
+    monkeypatch.setattr(service.state, "agent_chat_pipeline", _agent_chat_outcome)
+    monkeypatch.setattr(service.state, "last_refresh_time", float("inf"))
+
+    outcome = service.ask("What is it?", use_agent=True)
+
+    assert outcome["ok"], outcome
+    assert outcome["answer"] == "Agent answer to What is it?"
+    assert [c["snippet"] for c in outcome["citations"]] == ["kept chunk"]
+    assert "Agent reached its target" in outcome["answered_by"]
+    assert outcome["trace"][-1].endswith("on topic")
+
+
+def test_ask_says_when_the_agent_is_unavailable(sample_vault, monkeypatch):
+    service = VaultService()
+    assert service.startup(sample_vault)["ok"]
+    monkeypatch.setattr(service.state, "chat_pipeline", lambda q: "Plain answer.")
+    monkeypatch.setattr(service.state, "agent_chat_pipeline", None)
+    monkeypatch.setattr(service.state, "last_refresh_time", float("inf"))
+
+    outcome = service.ask("What is it?", use_agent=True)
+
+    assert outcome["ok"], outcome
+    assert outcome["answer"] == "Plain answer."
+    assert "the agent is unavailable right now" in outcome["answered_by"]
+    assert outcome["trace"] == []
+
+
+def test_semantic_search_with_the_agent_reports_its_trace(sample_vault, monkeypatch):
+    from talkpipe_vault.pipelines.agent_search import AgentSearchOutcome
+
+    service = VaultService()
+    assert service.startup(sample_vault)["ok"]
+    plain_calls = []
+
+    def select(text):
+        return AgentSearchOutcome(
+            results=_agent_chat_outcome(text).results,
+            note="Agent stopped on its own: kept 1 of 5 chunks after 1 search, ignored 2.",
+            trace=["agent → vector_search(query='x')"],
+        )
+
+    monkeypatch.setattr(
+        service.state, "search_pipeline", lambda t: plain_calls.append(t) or []
+    )
+    monkeypatch.setattr(service.state, "agent_search_pipeline", select)
+    monkeypatch.setattr(service.state, "last_refresh_time", float("inf"))
+
+    outcome = service.semantic_search("heading", use_agent=True)
+
+    assert outcome["ok"], outcome
+    assert plain_calls == []
+    assert [r["snippet"] for r in outcome["results"]] == ["kept chunk"]
+    assert outcome["note"].startswith("Agent stopped on its own")
+    assert outcome["trace"] == ["agent → vector_search(query='x')"]
+
+
+def test_status_reports_agent_availability(sample_vault, monkeypatch):
+    service = VaultService()
+    assert service.startup(sample_vault)["ok"]
+    monkeypatch.setattr(service.state, "agent_search_pipeline", None)
+    monkeypatch.setattr(service.state, "agent_chat_pipeline", None)
+    assert service.status()["agent_search_available"] is False
+    assert service.status()["agent_chat_available"] is False
+
+    monkeypatch.setattr(service.state, "agent_search_pipeline", lambda t: None)
+    monkeypatch.setattr(service.state, "agent_chat_pipeline", lambda t: None)
+    assert service.status()["agent_search_available"] is True
+    assert service.status()["agent_chat_available"] is True
+
+
+def test_save_settings_persists_the_agent_counts(sample_vault, monkeypatch):
+    service = VaultService()
+    assert service.startup(sample_vault)["ok"]
+    monkeypatch.setattr(query, "_refresh_pipelines", lambda force=False: None)
+
+    assert service.save_settings(
+        agent_search_result_count="4", agent_search_iterations="6"
+    )["ok"]
+    assert service.state.agent_search_result_count == 4
+    assert service.state.agent_search_iterations == 6
+    view = service.settings_view()
+    assert view["overrides"]["agent_search_result_count"] == 4
+    assert view["models"]["agent_search_iterations"] == 6
+
+    outcome = service.save_settings(agent_search_result_count="0")
+    assert not outcome["ok"]
+    assert "Agent result count must be at least 1." in outcome["error"]
+
+
 def test_ask_error_adds_connection_tip(sample_vault, monkeypatch):
     service = VaultService()
     assert service.startup(sample_vault)["ok"]

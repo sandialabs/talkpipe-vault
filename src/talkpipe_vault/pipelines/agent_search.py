@@ -1,9 +1,10 @@
-"""Agent-driven result selection for the Search page.
+"""Agent-driven retrieval for the Search and Ask pages.
 
-Instead of showing the top-k vector hits, an agent (talkpipe-agents on top of
-Strands) searches the vault iteratively and decides chunk by chunk what the
-user gets to see. It has five tools, all bound to one ``AgentSearchSession``
-per query:
+Instead of showing (or answering from) the top-k vector hits, an agent
+(talkpipe-agents on top of Strands) searches the vault iteratively and decides
+chunk by chunk what is worth having. ``vaultAgentSearch`` shows the chunks it
+kept; ``vaultAgentChat`` answers the question from them. It has five tools,
+all bound to one ``AgentSearchSession`` per query:
 
 - ``vector_search`` and ``keyword_search`` — the vault's semantic and Whoosh
   searches, callable any number of times with any query, so the agent can
@@ -13,7 +14,7 @@ per query:
   to guess Whoosh syntax itself (the same ``extractSearchKeywords`` the Ask
   page's keyword boost uses);
 - ``keep_chunk`` / ``ignore_chunk`` — the decisions. Kept chunks, in the
-  order they were kept, are the search results.
+  order they were kept, are the results (and, for Ask, the RAG context).
 
 The loop runs for at most ``max_iterations`` agent turns or until the number
 of kept chunks reaches ``target_count`` (both from the Settings page); once
@@ -41,12 +42,16 @@ from strands.hooks import (
     HookRegistry,
 )
 from talkpipe.chatterlang import register_segment
+from talkpipe.llm.chat import LLMPrompt
 from talkpipe.pipe.basic import AbstractFieldSegment
+from talkpipe.pipelines.basic_rag import AppendRAGSources, ConstructRAGPrompt
 from talkpipe.search.abstract import SearchResult
 from talkpipe.util.config import parse_key_value_str
 from talkpipe_agents import build_agent_model
 
 from .config import (
+    RAG_PROMPT_DIRECTIVE,
+    RAG_SYSTEM_PROMPT,
     get_chat_model,
     get_chat_source,
     get_whoosh_index_path,
@@ -91,6 +96,15 @@ class AgentSearchOutcome:
     results: list[SearchResult]
     note: str
     trace: list[str] = field(default_factory=list)
+
+
+@dataclass
+class AgentChatOutcome(AgentSearchOutcome):
+    """An agent-retrieved answer. Everything an AgentSearchOutcome carries —
+    the kept chunks are the citations and the RAG context the answer was
+    built from — plus the answer itself."""
+
+    response: str = ""
 
 
 @dataclass
@@ -539,7 +553,13 @@ class AgentVaultSearch(AbstractFieldSegment):
         result = agent(prompt, limits={"turns": self.max_iterations})
         return str(result.stop_reason)
 
-    def process_value(self, value: str) -> AgentSearchOutcome:
+    def select_chunks(self, value: str) -> AgentSearchOutcome:
+        """Run one agent-driven selection for *value* and report the outcome.
+
+        Kept separate from ``process_value`` so the Ask variant below — and
+        the app, which builds one segment and drives both pages from it — can
+        reuse the selection without the segment's emission behavior.
+        """
         session = self.make_session()
         session.tell(
             f"agent search: {value!r} (target {session.target_count}, "
@@ -567,3 +587,137 @@ class AgentVaultSearch(AbstractFieldSegment):
         )
         session.tell(note)
         return AgentSearchOutcome(session.results, note, session.trace)
+
+    def process_value(self, value: str) -> AgentSearchOutcome:
+        return self.select_chunks(value)
+
+
+# Shown instead of an answer when the agent kept nothing: the RAG prompt would
+# have no context at all, and a model asked to answer from nothing invents one.
+NO_CONTEXT_ANSWER = (
+    "The agent did not find any chunk in this vault that answers the "
+    "question, so there was nothing to answer from. Try rephrasing the "
+    "question, indexing more documents, or asking without the agent."
+)
+
+
+@register_segment("vaultAgentChat")
+class AgentVaultChat(AgentVaultSearch):
+    """
+    Segment that answers a question from chunks an agent selected.
+
+    Expects input items containing a question string (either as the full item
+    or in a specified field). The agent gathers the context exactly as
+    vaultAgentSearch does — iterative vector and keyword search with a
+    keep/ignore decision on every chunk it sees — and the chunks it kept
+    become the background of a RAG prompt answered by the chat model, with
+    the cited sources appended. When it kept nothing, no prompt is sent.
+
+    Emits an AgentChatOutcome: the answer, the kept chunks as SearchResult
+    objects (in keep order), a note describing how the selection ended, and
+    the trace of tool calls that was also reported through the progress
+    callable.
+    """
+
+    def __init__(
+        self,
+        vault_path: Annotated[str, "Path to LanceDB created by makevectordatabase"],
+        field: Annotated[
+            str | None, "The field to extract. If none, use full item."
+        ] = None,
+        set_as: Annotated[str | None, "The field to set/append the result as."] = None,
+        multi_emit: Annotated[
+            bool,
+            "Whether this class potentially emits multiple results per item."
+            "Should be set by the subclass constructor call or the field_segment decorator, not by the user.",
+        ] = False,
+        embedding_model: Annotated[
+            str | None,
+            "Model name for generating embeddings. If None, uses TalkPipe config or default.",
+        ] = None,
+        embedding_source: Annotated[
+            str | None,
+            "Source/provider for the embedding model. If None, uses TalkPipe config or default.",
+        ] = None,
+        chat_model: Annotated[
+            str | None,
+            "Model the agent reasons and answers with. If None, uses TalkPipe config or default.",
+        ] = None,
+        chat_source: Annotated[
+            str | None,
+            "Source/provider of the agent's model. If None, uses TalkPipe config or default.",
+        ] = None,
+        target_count: Annotated[
+            int, "Stop once this many chunks have been kept."
+        ] = DEFAULT_TARGET_COUNT,
+        max_iterations: Annotated[
+            int, "Cap on agent turns per question."
+        ] = DEFAULT_MAX_ITERATIONS,
+        search_limit: Annotated[
+            int, "Hits returned to the agent per search call."
+        ] = DEFAULT_SEARCH_LIMIT,
+        rename_fields: Annotated[
+            str | None,
+            "Document fields to rename during normalization, as 'old:new,old:new'.",
+        ] = SEARCH_RESULT_RENAMES,
+        max_keywords: Annotated[
+            int, "Maximum terms in a query built by the extract_keywords tool."
+        ] = DEFAULT_MAX_KEYWORDS,
+        progress: Callable[[str], None] | None = None,
+    ) -> None:
+        super().__init__(
+            vault_path=vault_path,
+            field=field,
+            set_as=set_as,
+            multi_emit=multi_emit,
+            embedding_model=embedding_model,
+            embedding_source=embedding_source,
+            chat_model=chat_model,
+            chat_source=chat_source,
+            target_count=target_count,
+            max_iterations=max_iterations,
+            search_limit=search_limit,
+            rename_fields=rename_fields,
+            max_keywords=max_keywords,
+            progress=progress,
+        )
+        # The same RAG prompt -> completion -> sources stages vaultChat ends
+        # with, so an agent-gathered answer is worded and cited identically;
+        # only the retrieval in front of them differs.
+        self._answer = (
+            ConstructRAGPrompt(
+                prompt_directive=RAG_PROMPT_DIRECTIVE,
+                background_field="_background",
+                content_field="query",
+                set_as="_ragprompt",
+            )
+            | LLMPrompt(
+                model=self.chat_model,
+                source=self.chat_source,
+                system_prompt=RAG_SYSTEM_PROMPT,
+                field="_ragprompt",
+                set_as="_partial_rag_response",
+            )
+            | AppendRAGSources(
+                partial_answer_field="_partial_rag_response",
+                set_as="chat_response",
+            )
+        ).as_function(single_in=True, single_out=True)
+
+    def answer(self, question: str, background: list[SearchResult]) -> str:
+        """Answer *question* from *background* with the RAG prompt."""
+        result = self._answer({"query": question, "_background": background})
+        return str(result.get("chat_response", ""))
+
+    def process_value(self, value: str) -> AgentChatOutcome:
+        outcome = self.select_chunks(value)
+        if not outcome.results:
+            return AgentChatOutcome(
+                outcome.results, outcome.note, outcome.trace, NO_CONTEXT_ANSWER
+            )
+        return AgentChatOutcome(
+            outcome.results,
+            outcome.note,
+            outcome.trace,
+            self.answer(value, outcome.results),
+        )

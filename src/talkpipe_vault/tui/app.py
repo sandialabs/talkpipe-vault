@@ -29,6 +29,7 @@ from textual.screen import ModalScreen, ScreenResultType
 from textual.widgets import (
     Button,
     Checkbox,
+    Collapsible,
     Footer,
     Input,
     Label,
@@ -900,8 +901,16 @@ class VaultApp(App[None]):
             yield Checkbox(
                 "Apply retrieval filter", False, id="search-filter", classes="hidden"
             )
+            yield Checkbox("Use Agent", False, id="search-agent", classes="hidden")
             yield Button("Copy All", id="search-copy-all")
             yield Static("", id="search-note", classes="status-line")
+        yield Collapsible(
+            Static("", id="search-trace-body", markup=False),
+            title="Agent tool calls",
+            id="search-trace",
+            classes="hidden",
+            collapsed=True,
+        )
         yield ResultsPane(
             id="search-results",
             empty_text=(
@@ -936,12 +945,20 @@ class VaultApp(App[None]):
             yield Checkbox(
                 "Boost with keyword search", False, id="ask-keyword", classes="hidden"
             )
+            yield Checkbox("Use Agent", False, id="ask-agent", classes="hidden")
             yield Static(
                 "Keyword boost: build a full-text index on Keywords (F4)",
                 id="ask-keyword-hint",
                 classes="muted",
             )
             yield Button("Copy answer", id="ask-copy")
+        yield Collapsible(
+            Static("", id="ask-trace-body", markup=False),
+            title="Agent tool calls",
+            id="ask-trace",
+            classes="hidden",
+            collapsed=True,
+        )
         with VerticalScroll(id="answer-pane"):
             yield Static("", id="answer-meta")
             # Answers are LLM output and usually Markdown (tables, headings,
@@ -996,6 +1013,15 @@ class VaultApp(App[None]):
                 with Vertical(classes="form-col"):
                     yield Label("Ask result count", classes="field-label")
                     yield Input(id="rag-result-limit", type="integer", valid_empty=True)
+            with Horizontal(classes="form-row"):
+                with Vertical(classes="form-col"):
+                    yield Label("Agent result count", classes="field-label")
+                    yield Input(
+                        id="agent-result-count", type="integer", valid_empty=True
+                    )
+                with Vertical(classes="form-col"):
+                    yield Label("Agent search iterations", classes="field-label")
+                    yield Input(id="agent-iterations", type="integer", valid_empty=True)
             with Horizontal(classes="button-row"):
                 yield Button("Save settings", variant="primary", id="settings-save")
             yield Label("Connections & credentials", classes="section-heading")
@@ -1144,6 +1170,15 @@ class VaultApp(App[None]):
         self.query_one("#kw-filter", Checkbox).set_class(not filter_on, "hidden")
         self.query_one("#ask-keyword", Checkbox).set_class(
             not status["keyword_search_enabled"], "hidden"
+        )
+        # Hidden when the agent's model could not be built, exactly as the web
+        # pages hide their checkboxes: the option is not merely disabled, it
+        # cannot run at all.
+        self.query_one("#search-agent", Checkbox).set_class(
+            not status["agent_search_available"], "hidden"
+        )
+        self.query_one("#ask-agent", Checkbox).set_class(
+            not status["agent_chat_available"], "hidden"
         )
         self.query_one("#ask-keyword-hint", Static).set_class(
             status["keyword_search_enabled"] or not has_vault, "hidden"
@@ -1519,12 +1554,21 @@ class VaultApp(App[None]):
         if not text:
             self.query_one("#search-note", Static).update("Enter a query first.")
             return
-        self.query_one("#search-note", Static).update("Searching…")
-        self._search_worker(text, self.query_one("#search-filter", Checkbox).value)
+        use_agent = self.query_one("#search-agent", Checkbox).value
+        self.query_one("#search-note", Static).update(
+            "Agent is searching and choosing chunks; this takes a while…"
+            if use_agent
+            else "Searching…"
+        )
+        self._search_worker(
+            text, self.query_one("#search-filter", Checkbox).value, use_agent
+        )
 
     @work(thread=True, exclusive=True, group="search")
-    def _search_worker(self, text: str, apply_filter: bool) -> None:
-        outcome = self.service.semantic_search(text, apply_filter=apply_filter)
+    def _search_worker(self, text: str, apply_filter: bool, use_agent: bool) -> None:
+        outcome = self.service.semantic_search(
+            text, apply_filter=apply_filter, use_agent=use_agent
+        )
         self.call_from_thread(self._show_search, "search", outcome, text)
 
     @on(Input.Submitted, "#kw-query")
@@ -1542,10 +1586,28 @@ class VaultApp(App[None]):
         outcome = self.service.keyword_search(text, apply_filter=apply_filter)
         self.call_from_thread(self._show_search, "kw", outcome, text)
 
+    def _show_trace(self, widget_id: str, trace: list[str]) -> None:
+        """Fill (and reveal) an "Agent tool calls" panel, or hide it.
+
+        The agent chooses its own queries and can run for a minute, so what it
+        actually did is inspectable here the way it is on the web pages —
+        collapsed by default, since a plain run has nothing to show.
+        """
+        panel = self.query_one(f"#{widget_id}", Collapsible)
+        panel.set_class(not trace, "hidden")
+        if not trace:
+            panel.collapsed = True
+            return
+        panel.title = f"Agent tool calls ({len(trace)})"
+        self.query_one(f"#{widget_id}-body", Static).update("\n".join(trace))
+
     def _show_search(self, prefix: str, outcome: dict[str, Any], text: str) -> None:
         note = self.query_one(f"#{prefix}-note", Static)
         pane = self.query_one(f"#{prefix}-results", ResultsPane)
         self.refresh_status()
+        if prefix == "search":
+            # Keyword search has no agent option, so no panel to fill.
+            self._show_trace("search-trace", list(outcome.get("trace") or []))
         if not outcome["ok"]:
             note.update(f"Error: {outcome['error']}")
             note.set_classes("status-line error")
@@ -1621,13 +1683,20 @@ class VaultApp(App[None]):
         if not question:
             self.notify("Enter a question.", severity="warning")
             return
-        self.query_one("#answer-meta", Static).update("Thinking… (Esc cancels)")
+        use_agent = self.query_one("#ask-agent", Checkbox).value
+        self.query_one("#answer-meta", Static).update(
+            "Agent is searching and choosing chunks, then answering… (Esc cancels)"
+            if use_agent
+            else "Thinking… (Esc cancels)"
+        )
         self._answer_text = ""
         self.query_one("#answer", Markdown).update("")
+        self._show_trace("ask-trace", [])
         self._ask_generation += 1
         self._ask_worker(
             question,
             self.query_one("#ask-keyword", Checkbox).value,
+            use_agent,
             self._ask_generation,
         )
 
@@ -1674,8 +1743,12 @@ class VaultApp(App[None]):
         self._ask_pressed()
 
     @work(thread=True, exclusive=True, group="ask")
-    def _ask_worker(self, question: str, keyword: bool, generation: int) -> None:
-        outcome = self.service.ask(question, use_keyword_search=keyword)
+    def _ask_worker(
+        self, question: str, keyword: bool, agent: bool, generation: int
+    ) -> None:
+        outcome = self.service.ask(
+            question, use_keyword_search=keyword, use_agent=agent
+        )
         self.call_from_thread(self._show_answer, outcome, generation)
 
     def _show_answer(self, outcome: dict[str, Any], generation: int = -1) -> None:
@@ -1685,6 +1758,7 @@ class VaultApp(App[None]):
         answer = self.query_one("#answer", Markdown)
         citations = self.query_one("#citations", ResultsPane)
         self.refresh_status()
+        self._show_trace("ask-trace", list(outcome.get("trace") or []))
         if not outcome["ok"]:
             meta.update("Error")
             self._answer_text = ""
@@ -1779,6 +1853,8 @@ class VaultApp(App[None]):
             ("shingle_size", "#shingle-size"),
             ("shingle_overlap", "#shingle-overlap"),
             ("rag_result_limit", "#rag-result-limit"),
+            ("agent_search_result_count", "#agent-result-count"),
+            ("agent_search_iterations", "#agent-iterations"),
         ):
             field = self.query_one(widget_id, Input)
             field.value = "" if overrides[key] is None else str(overrides[key])
@@ -1817,6 +1893,10 @@ class VaultApp(App[None]):
             shingle_size=self.query_one("#shingle-size", Input).value,
             shingle_overlap=self.query_one("#shingle-overlap", Input).value,
             rag_result_limit=self.query_one("#rag-result-limit", Input).value,
+            agent_search_result_count=self.query_one(
+                "#agent-result-count", Input
+            ).value,
+            agent_search_iterations=self.query_one("#agent-iterations", Input).value,
         )
         self._notify_outcome(outcome)
         if outcome["ok"]:

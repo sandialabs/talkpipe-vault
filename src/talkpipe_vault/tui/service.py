@@ -262,6 +262,8 @@ class VaultService:
         state.result_filter_active = False
         state.filtered_search_pipeline = None
         state.filtered_keyword_search_pipeline = None
+        state.agent_search_pipeline = None
+        state.agent_chat_pipeline = None
         state.shingled_chunks_count = 0
         state.keyword_search_enabled = False
 
@@ -282,6 +284,8 @@ class VaultService:
             "filter_active": state.result_filter_active,
             "filter_error": state.result_filter_error,
             "show_source_paths": state.show_source_paths,
+            "agent_search_available": state.agent_search_pipeline is not None,
+            "agent_chat_available": state.agent_chat_pipeline is not None,
             "models": query._effective_models(state),
         }
 
@@ -555,13 +559,13 @@ class VaultService:
     # -- search -------------------------------------------------------------------
 
     def semantic_search(
-        self, text: str, *, apply_filter: bool = False
+        self, text: str, *, apply_filter: bool = False, use_agent: bool = False
     ) -> dict[str, Any]:
         state = self.state
         if not state.vault_path:
             return _fail("Open a vault first.")
         if not text.strip():
-            return _ok(results=[], note="")
+            return _ok(results=[], note="", trace=[])
         if not state.search_pipeline:
             return _fail("The search pipeline is not available; check Settings.")
         if gone := self.vault_gone_note():
@@ -570,15 +574,28 @@ class VaultService:
             query._refresh_pipelines()
             query._update_document_counts(state.vault_path)
             note = ""
-            if apply_filter and state.filtered_search_pipeline:
+            trace: list[str] = []
+            if use_agent and state.agent_search_pipeline:
+                outcome = state.agent_search_pipeline(text)
+                results = query._process_semantic_results(outcome.results)
+                note = outcome.note
+                trace = outcome.trace
+                if apply_filter and state.filtered_search_pipeline:
+                    note += (
+                        " The retrieval filter does not apply to the agent's "
+                        "selection and was not run."
+                    )
+            elif apply_filter and state.filtered_search_pipeline:
                 raw, filter_error = state.filtered_search_pipeline(text)
                 results = query._process_semantic_results(raw)
                 note = query._filter_outcome_note(len(results), filter_error)
             else:
+                if use_agent:
+                    note = "the agent is unavailable right now — plain search was run"
                 results = query._process_semantic_results(state.search_pipeline(text))
         except Exception as exc:
             return _fail(str(exc))
-        return _ok(results=results, note=note)
+        return _ok(results=results, note=note, trace=trace)
 
     def keyword_search(
         self, text: str, *, apply_filter: bool = False
@@ -657,8 +674,19 @@ class VaultService:
 
     # -- ask ----------------------------------------------------------------------
 
-    def ask(self, message: str, *, use_keyword_search: bool = False) -> dict[str, Any]:
-        """Answer a question with citations (``POST /chat``)."""
+    def ask(
+        self,
+        message: str,
+        *,
+        use_keyword_search: bool = False,
+        use_agent: bool = False,
+    ) -> dict[str, Any]:
+        """Answer a question with citations (``POST /chat``).
+
+        With ``use_agent``, the agent gathers the context it answers from
+        instead of a single retrieval; the tool calls it made come back as
+        ``trace`` so the terminal can show them the way the web page does.
+        """
         state = self.state
         if not state.vault_path:
             return _fail("Open a vault first.")
@@ -671,11 +699,20 @@ class VaultService:
         citations: list[dict[str, Any]] = []
         retrieval_note = ""
         filter_error: str | None = None
+        trace: list[str] = []
+        answered_by_agent = False
         try:
             query._refresh_pipelines()
             query._update_document_counts(state.vault_path)
             result: str | dict[str, Any]
-            if use_keyword_search and state.keyword_chat_pipeline:
+            if use_agent and state.agent_chat_pipeline:
+                outcome = state.agent_chat_pipeline(message)
+                response = outcome.response
+                citations = query._process_semantic_results(outcome.results)
+                trace = outcome.trace
+                retrieval_note = outcome.note
+                answered_by_agent = True
+            elif use_keyword_search and state.keyword_chat_pipeline:
                 result = state.keyword_chat_pipeline(message)
                 response = result["response"]
                 citations = query._process_semantic_results(result["background"])
@@ -705,6 +742,13 @@ class VaultService:
                 else:
                     response = result
                     citations = query._chat_citations(state, message)
+            if use_agent and not answered_by_agent:
+                unavailable = "the agent is unavailable right now — answered without it"
+                retrieval_note = (
+                    f"{unavailable} · {retrieval_note}"
+                    if retrieval_note
+                    else unavailable
+                )
             if not state.show_source_paths:
                 response = query._strip_answer_source_paths(response)
         except Exception as exc:
@@ -744,16 +788,26 @@ class VaultService:
         if retrieval_note:
             answered_by = f"{answered_by} · {retrieval_note}"
         if state.result_filter_active:
-            answered_by += (
-                f" · the vault's retrieval filter failed and was skipped ({filter_error})"
-                if filter_error
-                else " · the vault's retrieval filter was applied"
-            )
+            if answered_by_agent:
+                # The agent searches through its own tools, which the filter
+                # never sees; saying it was applied would be wrong.
+                answered_by += (
+                    " · the vault's retrieval filter does not apply to the "
+                    "agent's selection"
+                )
+            else:
+                answered_by += (
+                    f" · the vault's retrieval filter failed and was skipped ({filter_error})"
+                    if filter_error
+                    else " · the vault's retrieval filter was applied"
+                )
         elif state.result_filter_error:
             answered_by += (
                 " · the vault's retrieval filter does not compile and was not applied"
             )
-        return _ok(answer=response, citations=citations, answered_by=answered_by)
+        return _ok(
+            answer=response, citations=citations, answered_by=answered_by, trace=trace
+        )
 
     # -- settings -----------------------------------------------------------------
 
@@ -770,6 +824,8 @@ class VaultService:
                 "shingle_size": state.shingle_size,
                 "shingle_overlap": state.shingle_overlap,
                 "rag_result_limit": state.rag_result_limit,
+                "agent_search_result_count": state.agent_search_result_count,
+                "agent_search_iterations": state.agent_search_iterations,
             },
             "embedding_sources": list(getEmbeddingSources()),
             "chat_sources": list(getPromptSources()),
@@ -789,6 +845,8 @@ class VaultService:
         shingle_size: str = "",
         shingle_overlap: str = "",
         rag_result_limit: str = "",
+        agent_search_result_count: str = "",
+        agent_search_iterations: str = "",
     ) -> dict[str, Any]:
         state = self.state
         previous = query._effective_models(state)
@@ -806,6 +864,16 @@ class VaultService:
             limit = query._parse_int_setting(
                 rag_result_limit, "Ask result count", minimums["rag_result_limit"]
             )
+            agent_count = query._parse_int_setting(
+                agent_search_result_count,
+                "Agent result count",
+                minimums["agent_search_result_count"],
+            )
+            agent_iterations = query._parse_int_setting(
+                agent_search_iterations,
+                "Agent search iterations",
+                minimums["agent_search_iterations"],
+            )
         except ValueError as exc:
             return _fail(str(exc))
         if shingle is not None and overlap is not None and overlap >= shingle:
@@ -819,6 +887,8 @@ class VaultService:
             shingle_size=shingle,
             shingle_overlap=overlap,
             rag_result_limit=limit,
+            agent_search_result_count=agent_count,
+            agent_search_iterations=agent_iterations,
         )
         query.load_saved_model_overrides()
         if state.vault_path:

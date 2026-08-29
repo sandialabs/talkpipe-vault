@@ -259,6 +259,81 @@ class TestAgentVaultSearch:
         assert [r.doc_id for r in fn("q").results] == ["a"]
 
 
+class _ScriptedChat(_ScriptedSearch, agent_search.AgentVaultChat):
+    """The scripted agent loop with the RAG answering stage stubbed out, so
+    the Ask variant is exercised without a vault, an embedder, or an LLM."""
+
+    def __init__(self, script, **kwargs):  # type: ignore[no-untyped-def]
+        _ScriptedSearch.__init__(self, script, **kwargs)
+        self.answered: list[tuple[str, list[Any]]] = []
+
+    def answer(self, question: str, background: list[Any]) -> str:
+        self.answered.append((question, background))
+        return f"Answer to {question} from {len(background)} chunk(s)."
+
+
+class TestAgentVaultChat:
+    def test_answer_is_built_from_the_chunks_the_agent_kept(self):
+        def script(tools: dict[str, Any]) -> None:
+            tools["vector_search"](query="what is one?")
+            tools["keep_chunk"](chunk_id="c1")
+            tools["ignore_chunk"](chunk_id="c2")
+            tools["keep_chunk"](chunk_id="c3")
+
+        segment = _ScriptedChat(script, target_count=2)
+        outcome = segment.process_value("what is one?")
+
+        assert isinstance(outcome, agent_search.AgentChatOutcome)
+        assert outcome.response == "Answer to what is one? from 2 chunk(s)."
+        # The citations are exactly the kept chunks, in keep order.
+        assert [r.doc_id for r in outcome.results] == ["a", "c"]
+        assert outcome.note.startswith("Agent reached its target")
+        assert outcome.trace == segment.told
+        # The RAG prompt saw those same chunks, not a separate retrieval.
+        question, background = segment.answered[0]
+        assert question == "what is one?"
+        assert [r.doc_id for r in background] == ["a", "c"]
+
+    def test_nothing_kept_means_no_prompt_is_sent(self):
+        def script(tools: dict[str, Any]) -> None:
+            tools["vector_search"](query="q")
+            tools["ignore_chunk"](chunk_id="c1")
+
+        segment = _ScriptedChat(script)
+        outcome = segment.process_value("q")
+
+        assert segment.answered == []
+        assert outcome.results == []
+        assert outcome.response == agent_search.NO_CONTEXT_ANSWER
+
+    def test_as_function_yields_the_outcome(self):
+        def script(tools: dict[str, Any]) -> None:
+            tools["vector_search"](query="q")
+            tools["keep_chunk"](chunk_id="c1")
+
+        fn = _ScriptedChat(script, target_count=1).as_function(
+            single_in=True, single_out=True
+        )
+        outcome = fn("q")
+        assert outcome.response.startswith("Answer to q")
+        assert [r.doc_id for r in outcome.results] == ["a"]
+
+    def test_select_chunks_answers_nothing(self):
+        """The Search page drives the same segment through select_chunks."""
+
+        def script(tools: dict[str, Any]) -> None:
+            tools["vector_search"](query="q")
+            tools["keep_chunk"](chunk_id="c1")
+
+        segment = _ScriptedChat(script, target_count=1)
+        outcome = segment.select_chunks("q")
+
+        assert isinstance(outcome, AgentSearchOutcome)
+        assert not isinstance(outcome, agent_search.AgentChatOutcome)
+        assert [r.doc_id for r in outcome.results] == ["a"]
+        assert segment.answered == []
+
+
 class TestSessionHooks:
     def test_calls_after_target_are_cancelled(self):
         session, told = _make_session(vector={"q": [_hit("a", "one")]}, target=1)
