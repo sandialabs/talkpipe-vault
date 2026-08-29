@@ -143,9 +143,9 @@ A compose service and instructions for deriving your own customized image
   **Let an agent select the results** checkbox hands the search to an agent
   instead: it runs semantic and keyword searches as tools, reads what comes
   back, keeps the relevant chunks and discards the rest, and rewrites its
-  queries from what it learns (it can also build the keyword index if the
-  vault has none) until it has kept the number of chunks set on the
-  Settings page or used up its iteration budget. Every tool call is printed
+  queries from what it learns (it can also ask the model to turn a question
+  into keyword-search terms) until it has kept the number of chunks set on
+  the Settings page or used up its iteration budget. Every tool call is printed
   to the server console and listed under the results, so you can see what
   it did. Slower than plain search, and needs a chat model that supports
   tool calling.

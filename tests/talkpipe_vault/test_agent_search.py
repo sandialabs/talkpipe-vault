@@ -33,7 +33,7 @@ def _make_session(
     vector: dict[str, list[Any]] | None = None,
     keyword: dict[str, list[Any]] | None = None,
     index_exists: bool = True,
-    create_index: Any = None,
+    extract_keywords: Any = None,
     target: int = 2,
 ) -> tuple[AgentSearchSession, list[str]]:
     told: list[str] = []
@@ -43,7 +43,7 @@ def _make_session(
         vector_search=lambda q: vector.get(q, []),
         keyword_search=lambda q: keyword.get(q, []),
         keyword_index_exists=lambda: index_exists,
-        create_keyword_index=create_index,
+        extract_keywords=extract_keywords,
         target_count=target,
         tell=told.append,
     )
@@ -83,7 +83,7 @@ class TestSessionTools:
             vector_search=lambda q: [],
             keyword_search=boom,
             keyword_index_exists=lambda: True,
-            create_keyword_index=None,
+            extract_keywords=None,
             target_count=1,
             tell=lambda _m: None,
         )
@@ -132,39 +132,42 @@ class TestSessionTools:
         tools["keep_chunk"](chunk_id="c1")
         assert "[c1] (already kept)" in tools["vector_search"](query="r")
 
-    def test_keyword_search_without_index_points_at_create_tool(self):
-        built: list[bool] = []
-        state = {"exists": False}
-        session = AgentSearchSession(
-            vector_search=lambda q: [],
-            keyword_search=lambda q: [_hit("a", "found")],
-            keyword_index_exists=lambda: state["exists"],
-            create_keyword_index=lambda: (
-                built.append(True),
-                state.update(exists=True),
-            ),
-            target_count=1,
-            tell=lambda _m: None,
+    def test_keyword_search_without_an_index_says_so(self):
+        session, _ = _make_session(index_exists=False)
+        out = _tools(session)["keyword_search"](query="x")
+        assert "no full-text index" in out
+        assert "vector_search" in out
+
+    def test_extract_keywords_returns_the_llm_query(self):
+        asked: list[str] = []
+        session, told = _make_session(
+            extract_keywords=lambda q: (asked.append(q), '"alpha" OR "beta"')[1],
         )
+        out = _tools(session)["extract_keywords"](question="What about alpha?")
+        assert asked == ["What about alpha?"]
+        assert '"alpha" OR "beta"' in out
+        assert "keyword_search" in out
+        assert any('extract_keywords: "alpha" OR "beta"' in line for line in told)
+
+    def test_extract_keywords_without_a_model(self):
+        session, _ = _make_session(extract_keywords=None)
+        assert "unavailable" in _tools(session)["extract_keywords"](question="q")
+
+    def test_extract_keywords_failure_is_reported(self):
+        def boom(_question: str) -> str:
+            raise RuntimeError("model down")
+
+        session, _ = _make_session(extract_keywords=boom)
+        out = _tools(session)["extract_keywords"](question="q")
+        assert "model down" in out
+        assert "yourself" in out
+
+    @pytest.mark.parametrize("value", ["", "   "])
+    def test_extract_keywords_handles_empty_input_and_output(self, value):
+        session, _ = _make_session(extract_keywords=lambda q: value)
         tools = _tools(session)
-        assert "create_keyword_index" in tools["keyword_search"](query="x")
-        assert "built" in tools["create_keyword_index"]()
-        assert built == [True]
-        assert "already exists" in tools["create_keyword_index"]()
-        assert "[c1]\nfound" in tools["keyword_search"](query="x")
-
-    def test_keyword_search_without_index_or_builder(self):
-        session, _ = _make_session(index_exists=False, create_index=None)
-        tools = _tools(session)
-        assert "cannot be created" in tools["keyword_search"](query="x")
-        assert "cannot be created" in tools["create_keyword_index"]()
-
-    def test_create_index_failure_is_reported(self):
-        def fail() -> None:
-            raise OSError("disk full")
-
-        session, _ = _make_session(index_exists=False, create_index=fail)
-        assert "disk full" in _tools(session)["create_keyword_index"]()
+        assert "empty" in tools["extract_keywords"](question="  ")
+        assert "No keywords" in tools["extract_keywords"](question="q")
 
     def test_long_chunk_text_is_clipped_for_the_agent(self):
         session, _ = _make_session(vector={"q": [_hit("a", "x" * 2000)]})
@@ -187,9 +190,9 @@ class _ScriptedSearch(AgentVaultSearch):
         self.max_iterations = kwargs.get("max_iterations", 3)
         self.search_limit = 8
         self.rename_fields = {}
-        self.create_keyword_index = None
         self.told: list[str] = []
         self.tell = self.told.append
+        self._extract_keywords = lambda question: f'"{question}"'
         self._script = script
         self._stop_reason = kwargs.get("stop_reason", "end_turn")
 

@@ -135,7 +135,7 @@ Segments: `buildVectorDBFromPaths`, `vaultSearch`, `vaultChat`, `vaultTextSearch
 **Agent search** (`pipelines/agent_search.py`): `vaultAgentSearch` runs a Strands agent
 (via talkpipe-agents' `build_agent_model`, using the vault's chat source/model) with five
 tools bound to one `AgentSearchSession` per query — `vector_search`, `keyword_search`,
-`create_keyword_index`, `keep_chunk`, `ignore_chunk`. Hits are assigned short ids (`c1`,
+`extract_keywords`, `keep_chunk`, `ignore_chunk`. Hits are assigned short ids (`c1`,
 `c2`, …; deduped by doc_id across searches) and the agent is told to decide on each and to
 refine its queries from what it finds. The run ends when kept chunks reach `target_count`
 (Settings → Agent Result Count; a hook cancels any further tool call) or after
@@ -145,11 +145,15 @@ note on how it ended, and the tool-call trace, which is also printed (`progress`
 by default) so the agent's behavior is visible on the server console. The Search page
 shows a **Let an agent select the results** checkbox when `_state.agent_search_pipeline`
 exists — `_refresh_agent_search_pipeline` builds the model eagerly and leaves the option
-off on failure — and renders the trace under the results. `create_keyword_index` is
-injected by the app (`_build_keyword_index_now`, synchronous, refused while the page-driven
-background build is running). `AgentVaultSearch.vector_search` / `keyword_search` /
-`run_agent` are overridable seams; tests drive the tools with scripted callables and no
-LLM.
+off on failure — and renders the trace under the results. `extract_keywords` is the LLM
+keyword distillation the Ask page's keyword boost uses (the `ExtractSearchKeywords`
+segment): the agent hands it a plain-language question and gets back a Whoosh query to
+pass to `keyword_search`, rather than having to write Whoosh syntax itself. The agent
+never builds the full-text index — when a vault has none, `keyword_search` says so and
+the agent falls back to `vector_search`; building the index stays a user action on the
+Keyword Search page. `AgentVaultSearch.vector_search` / `keyword_search` /
+`extract_keywords` / `run_agent` are overridable seams; tests drive the tools with
+scripted callables and no LLM.
 
 **Keyword-augmented Ask** (issue #11): `vaultChat[keyword_search=True]` composes the
 reusable pipeline prompt → `extractSearchKeywords` (LLM distills the question into a

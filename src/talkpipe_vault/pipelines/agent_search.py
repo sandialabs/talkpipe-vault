@@ -8,8 +8,10 @@ per query:
 - ``vector_search`` and ``keyword_search`` — the vault's semantic and Whoosh
   searches, callable any number of times with any query, so the agent can
   refine its searches with terms it learns from earlier hits;
-- ``create_keyword_index`` — builds the vault's full-text index when the
-  keyword tool reports that none exists (the app injects the builder);
+- ``extract_keywords`` — asks an LLM to distill a question or phrase into a
+  keyword query for the full-text search engine, so the agent does not have
+  to guess Whoosh syntax itself (the same ``extractSearchKeywords`` the Ask
+  page's keyword boost uses);
 - ``keep_chunk`` / ``ignore_chunk`` — the decisions. Kept chunks, in the
   order they were kept, are the search results.
 
@@ -51,6 +53,7 @@ from .config import (
 )
 from .searching_and_prompting import (
     SEARCH_RESULT_RENAMES,
+    ExtractSearchKeywords,
     VaultSearch,
     VaultTextSearch,
     normalize_search_result,
@@ -62,6 +65,8 @@ DEFAULT_TARGET_COUNT = 5
 DEFAULT_MAX_ITERATIONS = 8
 # Hits returned per search call, and how much of each chunk the agent sees.
 DEFAULT_SEARCH_LIMIT = 8
+# Terms in a keyword query built by the extract_keywords tool.
+DEFAULT_MAX_KEYWORDS = 8
 CHUNK_PREVIEW_CHARS = 500
 _ARGS_CHARS = 160
 
@@ -73,7 +78,7 @@ Work iteratively:
 1. Search with vector_search (natural-language, conceptual queries) and keyword_search (exact terms, names, identifiers; Whoosh syntax: terms are ANDed, use OR for alternatives and double quotes for phrases).
 2. Read the chunks each search returns. Call keep_chunk only for a chunk that actually contains information answering the question, and ignore_chunk for every other chunk, so that each chunk you have seen carries a decision. Be strict: a chunk that merely shares words with the question is not relevant, and it is better to keep fewer chunks than to keep a wrong one. If a search returned nothing useful, ignore all of its chunks and search differently.
 3. Refine: use what you learned from useful chunks - specific terms, names, phrasings, related topics - to run new, more precise searches, and change your keyword or vector queries whenever a search turned up little of use. Do not repeat a query you already ran.
-If keyword_search reports that no keyword index exists, you may call create_keyword_index once and then search again.
+Use extract_keywords when you want a keyword query built for you: give it the question or a topic in plain language and it returns a keyword query to pass to keyword_search. You may also write keyword queries yourself.
 Stop as soon as you have kept the target number of chunks, or when further searching is unlikely to find anything new. When you stop, reply with the single word: done."""
 
 
@@ -100,10 +105,11 @@ class AgentSearchSession:
     keep/ignore decisions, and the tools bound to them.
 
     The search callables are injected so the session can be exercised without
-    a vault: ``vector_search``/``keyword_search`` take a query and return
-    search hits (SearchResult objects or dicts with doc_id/score/document);
-    ``keyword_index_exists`` says whether keyword search can run at all;
-    ``create_keyword_index`` builds it (None when the host cannot).
+    a vault or an LLM: ``vector_search``/``keyword_search`` take a query and
+    return search hits (SearchResult objects or dicts with
+    doc_id/score/document); ``keyword_index_exists`` says whether keyword
+    search can run at all; ``extract_keywords`` asks an LLM to turn a
+    question into a keyword query (None when no model is available).
     """
 
     def __init__(
@@ -112,7 +118,7 @@ class AgentSearchSession:
         vector_search: SearchFn,
         keyword_search: SearchFn,
         keyword_index_exists: Callable[[], bool],
-        create_keyword_index: Callable[[], None] | None,
+        extract_keywords: Callable[[str], str] | None,
         target_count: int,
         tell: Callable[[str], None],
         rename_fields: dict[str, str] | None = None,
@@ -120,7 +126,7 @@ class AgentSearchSession:
         self._vector_search = vector_search
         self._keyword_search = keyword_search
         self._keyword_index_exists = keyword_index_exists
-        self._create_keyword_index = create_keyword_index
+        self._extract_keywords = extract_keywords
         self.target_count = max(1, target_count)
         self._tell = tell
         self._rename_fields = rename_fields or {}
@@ -215,6 +221,39 @@ class AgentSearchSession:
             f"chunk with keep_chunk or ignore_chunk. {self._status_line()}\n\n{body}"
         )
 
+    def extract_keywords(self, question: str) -> str:
+        """Ask the LLM keyword extractor for a keyword query for *question*.
+
+        The extractor itself already falls back to the raw question when the
+        model fails or returns nothing usable, so the agent always gets
+        something it can search with.
+        """
+        question = question.strip()
+        if not question:
+            return "The question is empty."
+        if self._extract_keywords is None:
+            return (
+                "Keyword extraction is unavailable here; write the keyword "
+                "query yourself."
+            )
+        try:
+            query = self._extract_keywords(question)
+        except Exception as exc:
+            logger.warning("Agent keyword extraction failed", exc_info=True)
+            self.tell(f"agent ← extract_keywords failed: {exc}")
+            return (
+                f"Keyword extraction failed: {exc}. Write the keyword query yourself."
+            )
+        query = str(query).strip()
+        if not query:
+            self.tell("agent ← extract_keywords: no keywords found")
+            return "No keywords could be extracted; write the keyword query yourself."
+        self.tell(f"agent ← extract_keywords: {query}")
+        return (
+            f"Keyword query: {query}\nPass it to keyword_search, editing it if "
+            "you want different terms."
+        )
+
     def _decide(self, chunk_id: str, reason: str, keep: bool) -> str:
         chunk_id = chunk_id.strip()
         chunk = self._chunks.get(chunk_id)
@@ -272,33 +311,24 @@ class AgentSearchSession:
             """
             if not session._keyword_index_exists():
                 session.tell("agent ← keyword_search: no keyword index exists")
-                if session._create_keyword_index is None:
-                    return (
-                        "No keyword index exists for this vault and it cannot be "
-                        "created here; use vector_search instead."
-                    )
                 return (
-                    "No keyword index exists for this vault yet. Call "
-                    "create_keyword_index to build one, then search again."
+                    "This vault has no full-text index, so keyword search is "
+                    "unavailable; use vector_search instead."
                 )
             return session._run_search("keyword", query, session._keyword_search)
 
         @strands_tool
-        def create_keyword_index() -> str:
-            """Build the vault's full-text (keyword) index so keyword_search
-            can be used. Only needed when keyword_search reports that no
-            index exists. Takes a moment on large vaults."""
-            if session._create_keyword_index is None:
-                return "The keyword index cannot be created here."
-            if session._keyword_index_exists():
-                return "A keyword index already exists; call keyword_search."
-            try:
-                session._create_keyword_index()
-            except Exception as exc:
-                logger.warning("Agent keyword index build failed", exc_info=True)
-                return f"Building the keyword index failed: {exc}"
-            session.tell("agent ← create_keyword_index: index built")
-            return "Keyword index built. You can now call keyword_search."
+        def extract_keywords(question: str) -> str:
+            """Ask a language model to turn a question or topic into a
+            keyword query for keyword_search. Use it when you want good
+            search-engine terms for a plain-language question instead of
+            writing the query yourself. Returns the query; pass it to
+            keyword_search (edit it first if you want).
+
+            Args:
+                question: The question or topic, in plain language.
+            """
+            return session.extract_keywords(question)
 
         @strands_tool
         def keep_chunk(chunk_id: str, reason: str = "") -> str:
@@ -325,7 +355,7 @@ class AgentSearchSession:
         return [
             vector_search,
             keyword_search,
-            create_keyword_index,
+            extract_keywords,
             keep_chunk,
             ignore_chunk,
         ]
@@ -375,7 +405,8 @@ class AgentVaultSearch(AbstractFieldSegment):
 
     Expects input items containing a search query string (either as the full
     item or in a specified field). For each query an agent runs the vault's
-    vector and keyword searches as tools, refining its queries from what it
+    vector and keyword searches as tools — with an LLM keyword extractor it
+    can call to build a keyword query — refining its queries from what it
     finds, and keeps or ignores every chunk it sees until it has kept the
     target number of chunks or the iteration cap is hit.
 
@@ -425,7 +456,9 @@ class AgentVaultSearch(AbstractFieldSegment):
             str | None,
             "Document fields to rename during normalization, as 'old:new,old:new'.",
         ] = SEARCH_RESULT_RENAMES,
-        create_keyword_index: Callable[[], None] | None = None,
+        max_keywords: Annotated[
+            int, "Maximum terms in a query built by the extract_keywords tool."
+        ] = DEFAULT_MAX_KEYWORDS,
         progress: Callable[[str], None] | None = None,
     ) -> None:
         super().__init__(field=field, set_as=set_as, multi_emit=multi_emit)
@@ -440,13 +473,18 @@ class AgentVaultSearch(AbstractFieldSegment):
             if rename_fields
             else {}
         )
-        self.create_keyword_index = create_keyword_index
         self.tell = progress or _print_progress
         self._vector_search = VaultSearch(
             vault_path=vault_path,
             embedding_model=embedding_model,
             embedding_source=embedding_source,
             limit=self.search_limit,
+        ).as_function(single_in=True, single_out=True)
+        # Same LLM keyword distillation the Ask page's keyword boost uses.
+        self._extract_keywords = ExtractSearchKeywords(
+            chat_model=self.chat_model,
+            chat_source=self.chat_source,
+            max_keywords=max(1, max_keywords),
         ).as_function(single_in=True, single_out=True)
         # Fail on a bad model configuration when the segment is built, not
         # mid-search, so the app can fall back to plain search up front.
@@ -469,12 +507,15 @@ class AgentVaultSearch(AbstractFieldSegment):
         search = VaultTextSearch(vault_path=self.vault_path, limit=self.search_limit)
         return list(search.process_value(query))
 
+    def extract_keywords(self, question: str) -> str:
+        return str(self._extract_keywords(question))
+
     def make_session(self) -> AgentSearchSession:
         return AgentSearchSession(
             vector_search=self.vector_search,
             keyword_search=self.keyword_search,
             keyword_index_exists=self.keyword_index_exists,
-            create_keyword_index=self.create_keyword_index,
+            extract_keywords=self.extract_keywords,
             target_count=self.target_count,
             tell=self.tell,
             rename_fields=self.rename_fields,

@@ -535,21 +535,6 @@ def _refresh_pipelines(force: bool = False) -> None:
     _state.last_refresh_time = current_time
 
 
-def _build_keyword_index_now(vault_path: str) -> None:
-    """Synchronous full-text index build for the agent's create_keyword_index
-    tool; refuses while the page-driven background build is running."""
-    with _fulltext_index_job_lock:
-        if _fulltext_index_job.running:
-            raise RuntimeError("a full-text index build is already in progress")
-    documents = _iter_lancedb_docs_for_whoosh(vault_path)
-    print(
-        f"Building full-text index: {len(documents)} document(s) from {vault_path}",
-        flush=True,
-    )
-    _build_whoosh_index(vault_path, documents)
-    _state.keyword_search_enabled = _keyword_search_enabled(vault_path)
-
-
 def _refresh_agent_search_pipeline(vault_path: str) -> None:
     """(Re)build the agent-driven Search page pipeline.
 
@@ -568,7 +553,6 @@ def _refresh_agent_search_pipeline(vault_path: str) -> None:
             or DEFAULT_AGENT_SEARCH_RESULT_COUNT,
             max_iterations=_state.agent_search_iterations
             or DEFAULT_AGENT_SEARCH_ITERATIONS,
-            create_keyword_index=lambda: _build_keyword_index_now(vault_path),
         ).as_function(single_in=True, single_out=True)
     except Exception:
         logger.warning("Could not build the agent search pipeline", exc_info=True)
