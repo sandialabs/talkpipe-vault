@@ -36,8 +36,8 @@ classifiers = [
 dependencies = [
     "talkpipe[all]>=1.0.0b5",  # floor: first release shipping py.typed and typed decorators
     # Agent-driven result selection on the Search page (llmAgent + tool
-    # registry). Not yet on PyPI: developers resolve it from the source
-    # repository through [tool.uv.sources] below until the first release.
+    # registry). Not yet on PyPI: resolved from the self-hosted package
+    # registry through [tool.uv.index] below until the first release.
     "talkpipe-agents>=0.0.1a1",
     "fastapi[standard]>=0.109.1",  # security floor
     "uvicorn>=0.24.0",
@@ -177,11 +177,18 @@ known-first-party = ["talkpipe_vault"]
 [tool.ruff.format]
 docstring-code-format = true
 
-# talkpipe-agents has no PyPI release yet; until it does, the development
-# lock resolves it from its source repository. Remove this once it is
-# published so the lock resolves the way `pip install` does.
+# talkpipe-agents has no PyPI release yet; until it does, it is served from
+# the self-hosted Gitea's PyPI registry. `explicit = true` keeps every other
+# package resolving from PyPI alone. CI reaches the same index through the
+# PIP_EXTRA_INDEX_URL repository variable. Remove both once it is published
+# so the lock resolves the way `pip install` does.
+[[tool.uv.index]]
+name = "gitea"
+url = "http://<server>/api/packages/travis/pypi/simple"
+explicit = true
+
 [tool.uv.sources]
-talkpipe-agents = { git = "ssh://git@<server>/travis/talkpipe-agents.git" }
+talkpipe-agents = { index = "gitea" }
 
 [tool.mypy]
 # 3.12+ so mypy can parse modern dependency stubs (e.g. numpy uses `type`

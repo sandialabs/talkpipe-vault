@@ -20,9 +20,11 @@ built on the TalkPipe framework and demonstrates real-world usage of its composa
 - **Python**: 3.11.4+ required
 - **TalkPipe**: >=1.0.0b5 (`talkpipe[all]`; ships `py.typed`, so mypy checks against its real signatures)
 - **talkpipe-agents**: >=0.0.1a1 — the `llmAgent`/Strands layer behind agent search. Not on PyPI
-  yet: `[tool.uv.sources]` resolves it from its source repository for `uv sync`; a fresh pip
-  resolve (CI) fails until it is published. No `py.typed`, so it is in the mypy
-  `ignore_missing_imports` list.
+  yet: it is served from the self-hosted Gitea's PyPI registry — `[[tool.uv.index]]` (explicit)
+  + `[tool.uv.sources]` in `pyproject.toml` for `uv sync`, and the `PIP_EXTRA_INDEX_URL` /
+  `PIP_TRUSTED_HOST` repository Actions variables for CI's pip (mapped to env in the workflow;
+  empty on GitHub, where the build stays red until it is published). No `py.typed`, so it is in
+  the mypy `ignore_missing_imports` list.
 - **Status**: Alpha (active development)
 - **License**: Apache 2.0
 
