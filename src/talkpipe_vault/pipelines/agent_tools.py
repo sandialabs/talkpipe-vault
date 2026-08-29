@@ -51,22 +51,18 @@ logger = logging.getLogger(__name__)
 CHUNK_PREVIEW_CHARS = 500
 
 SearchFn = Callable[[str], Iterable[Any]]
+# A factory takes the session the tool will share and returns a Strands tool.
+ToolFactory = Callable[["AgentSearchSession"], Any]
 
 # Bound-tool factories, by the name a pipeline (or ChatterLang script) uses.
 # Populated by @vault_agent_tool below.
-TOOL_FACTORIES: dict[str, Callable[[AgentSearchSession], Any]] = {}
+TOOL_FACTORIES: dict[str, ToolFactory] = {}
 
 
-def vault_agent_tool(
-    name: str,
-) -> Callable[
-    [Callable[[AgentSearchSession], Any]], Callable[[AgentSearchSession], Any]
-]:
+def vault_agent_tool(name: str) -> Callable[[ToolFactory], ToolFactory]:
     """Register a session-bound tool factory under *name*."""
 
-    def register(
-        factory: Callable[[AgentSearchSession], Any],
-    ) -> Callable[[AgentSearchSession], Any]:
+    def register(factory: ToolFactory) -> ToolFactory:
         TOOL_FACTORIES[name] = factory
         return factory
 
@@ -188,10 +184,6 @@ class AgentSearchSession:
         return len(self.kept) >= self.max_chunks
 
     @property
-    def should_stop(self) -> bool:
-        return self.enough or self.at_capacity
-
-    @property
     def stop_note(self) -> str:
         """Why the run is over, phrased for the model. Empty while it runs."""
         if self.enough:
@@ -199,6 +191,10 @@ class AgentSearchSession:
         if self.at_capacity:
             return f"the {self.max_chunks}-chunk maximum is reached"
         return ""
+
+    @property
+    def should_stop(self) -> bool:
+        return bool(self.stop_note)
 
     @property
     def results(self) -> list[SearchResult]:
@@ -255,15 +251,16 @@ class AgentSearchSession:
             self.tell(f"agent ← {kind}_search failed: {exc}")
             return f"The {kind} search failed: {exc}"
         chunks: list[_Chunk] = []
+        seen: set[str] = set()
         new = 0
         for hit in hits:
             chunk = self._register(hit)
-            if chunk is None:
+            if chunk is None or chunk.id in seen:
                 continue
-            if chunk.id not in {c.id for c in chunks}:
-                if chunk.id not in self.kept and chunk.id not in self.ignored:
-                    new += 1
-                chunks.append(chunk)
+            seen.add(chunk.id)
+            chunks.append(chunk)
+            if chunk.id not in self.kept and chunk.id not in self.ignored:
+                new += 1
         self.tell(
             f"agent ← {kind}_search: {len(chunks)} hit(s), {new} undecided. "
             + self._status_line()
@@ -376,7 +373,7 @@ class AgentSearchSession:
         )
 
 
-def _guard(session: AgentSearchSession, name: str) -> str:
+def guard(session: AgentSearchSession, name: str) -> str:
     """The refusal a tool returns once the run is over, or "" while it runs.
 
     The stopping rule lives with the session that owns it rather than in an
@@ -403,7 +400,7 @@ def make_vector_search(session: AgentSearchSession) -> Any:
         Args:
             query: A natural-language question or descriptive phrase.
         """
-        return _guard(session, "vector_search") or session.vector_search(query)
+        return guard(session, "vector_search") or session.vector_search(query)
 
     return vector_search
 
@@ -421,7 +418,7 @@ def make_keyword_search(session: AgentSearchSession) -> Any:
         Args:
             query: The keyword query, in Whoosh syntax.
         """
-        return _guard(session, "keyword_search") or session.keyword_search(query)
+        return guard(session, "keyword_search") or session.keyword_search(query)
 
     return keyword_search
 
@@ -439,7 +436,7 @@ def make_extract_keywords(session: AgentSearchSession) -> Any:
         Args:
             question: The question or topic, in plain language.
         """
-        return _guard(session, "extract_keywords") or session.extract_keywords(question)
+        return guard(session, "extract_keywords") or session.extract_keywords(question)
 
     return extract_keywords
 
@@ -455,7 +452,7 @@ def make_keep_chunk(session: AgentSearchSession) -> Any:
             chunk_id: The id shown with the chunk, e.g. c3.
             reason: One short phrase saying what it contributes.
         """
-        return _guard(session, "keep_chunk") or session.decide(
+        return guard(session, "keep_chunk") or session.decide(
             chunk_id, reason, keep=True
         )
 
@@ -473,7 +470,7 @@ def make_ignore_chunk(session: AgentSearchSession) -> Any:
             chunk_id: The id shown with the chunk, e.g. c3.
             reason: One short phrase saying why it is irrelevant.
         """
-        return _guard(session, "ignore_chunk") or session.decide(
+        return guard(session, "ignore_chunk") or session.decide(
             chunk_id, reason, keep=False
         )
 
@@ -494,6 +491,6 @@ def make_enough_information(session: AgentSearchSession) -> Any:
             reason: One short phrase saying what the kept chunks cover,
                 or what is still missing.
         """
-        return _guard(session, "enough_information") or session.declare_enough(reason)
+        return guard(session, "enough_information") or session.declare_enough(reason)
 
     return enough_information

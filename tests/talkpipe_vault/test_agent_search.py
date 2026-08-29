@@ -15,12 +15,8 @@ import pytest
 from talkpipe.search.abstract import SearchResult
 
 from talkpipe_vault.pipelines import agent_search, agent_tools
-from talkpipe_vault.pipelines.agent_search import (
-    AgentSearchOutcome,
-    AgentSearchSession,
-    AgentVaultSearch,
-)
-from talkpipe_vault.pipelines.agent_tools import build_tools
+from talkpipe_vault.pipelines.agent_search import AgentSearchOutcome, AgentVaultSearch
+from talkpipe_vault.pipelines.agent_tools import AgentSearchSession, build_tools
 
 
 def _hit(doc_id: str, content: str, **doc: Any) -> SearchResult:
@@ -218,27 +214,29 @@ class TestSessionTools:
 
 class _ScriptedSearch(AgentVaultSearch):
     """AgentVaultSearch with the vault, embedder, and model replaced: the
-    agent loop is a script that calls the tools directly."""
+    agent loop is a script that calls the tools directly.
+
+    It runs the real constructor; only ``_bind_vault`` (the one step that
+    touches disk and models) and the agent loop are replaced, so a new
+    attribute on the segment cannot silently go missing here."""
 
     def __init__(self, script, **kwargs):  # type: ignore[no-untyped-def]
-        # Bypass the real constructor (it opens the vault and builds a model).
-        from talkpipe.pipe.basic import AbstractFieldSegment
-
-        AbstractFieldSegment.__init__(self, field=None, set_as=None, multi_emit=False)
-        self.vault_path = "unused"
-        self.max_chunks = kwargs.get("max_chunks", 2)
-        self.max_iterations = kwargs.get("max_iterations", 3)
-        self.search_limit = 8
-        self.rename_fields = {}
-        self.chat_model = "a-model"
-        self.chat_source = "a-source"
-        self.system_prompt = agent_search.RETRIEVAL_SYSTEM_PROMPT
-        self.tool_names = agent_tools.parse_tool_names(kwargs.get("tools"))
         self.told: list[str] = []
-        self.tell = self.told.append
-        self._extract_keywords = lambda question: f'"{question}"'
         self._script = script
-        self._stop_reason = kwargs.get("stop_reason", "end_turn")
+        self._stop_reason = kwargs.pop("stop_reason", "end_turn")
+        kwargs.setdefault("max_chunks", 2)
+        kwargs.setdefault("max_iterations", 3)
+        super().__init__(
+            vault_path="unused",
+            chat_model="a-model",
+            chat_source="a-source",
+            rename_fields=None,
+            progress=self.told.append,
+            **kwargs,
+        )
+
+    def _bind_vault(self) -> None:
+        self._extract_keywords = lambda question: f'"{question}"'
 
     def vector_search(self, query: str) -> list[Any]:
         return [_hit("a", "one"), _hit("b", "two"), _hit("c", "three")]

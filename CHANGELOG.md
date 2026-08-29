@@ -211,6 +211,7 @@
 ### Features
 
 #### Agent-Selected Search Results and Answers
+- Added `docs/AGENT_RETRIEVAL.md`, a developer's guide to the agent retrieval code: using the tools over another search backend or behind another agent, choosing tools and prompt, adding a tool to the pack, reading the four ways a run can end, and testing the loop without a model.
 - **The agent pipeline is now assembled from talkpipe and talkpipe-agents pieces rather than hand-built.** The retrieval segments configure talkpipe-agents' `llmAgent` — model resolution, tool dispatch, progress reporting and reply cleanup are the library's — instead of assembling a Strands agent themselves.
 - **Tools are chosen by name.** `vaultAgentSearch` and `vaultAgentChat` take `tools="vector_search,keep_chunk,…"` (a string or a list) and a replaceable `system_prompt`, so a pipeline adds or drops a tool without touching either module. Names the vault does not own fall through to talkpipe-agents' registry, so generic tools (`think`, `calculator`, …) mix in by name alone; an unknown name is refused when the pipeline is built, which for a ChatterLang script means at compile time.
 - **What the tools do now lives apart from the pipeline that runs them**, in `pipelines/agent_tools.py`: the six retrieval tools as session-bound factories in a name registry shaped like talkpipe-agents' own, knowing nothing about agents, models, or prompts. That is the piece that would move out if these tools were ever pulled into a generic package; `pipelines/agent_search.py` keeps only the vault concerns.

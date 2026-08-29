@@ -235,7 +235,9 @@ script syntax is in the Advanced Guide under
   gets there. The results note says which of those happened. Every tool call is
   printed to the server console and listed under the results, so you can see
   what it did. Slower than plain search, and needs a chat model that supports
-  tool calling.
+  tool calling. To use the agent's tools in your own application, or over
+  your own search backend, see the
+  [agent retrieval developer's guide](docs/AGENT_RETRIEVAL.md).
 - **Keyword Search** — boolean and phrase queries. Matching is
   case-insensitive but on exact word tokens (`apple` won't match `apples`);
   use semantic search for meaning-based lookups.

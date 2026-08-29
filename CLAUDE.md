@@ -161,7 +161,19 @@ Segments: `buildVectorDBFromPaths`, `vaultSearch`, `vaultChat`, `vaultTextSearch
 **Agent retrieval** is split in two, deliberately: `pipelines/agent_tools.py` owns *what
 the tools do*, `pipelines/agent_search.py` owns *the pipeline that runs them*. Nothing in
 the tool module knows about agents, models, or prompts, so the pack is what would move out
-if these tools were ever pulled into a generic package.
+if these tools were ever pulled into a generic package. `docs/AGENT_RETRIEVAL.md` is the
+developer's guide — using the tools over another search backend, behind another agent,
+adding a tool, reading the outcome; keep it current when either module changes.
+
+`AgentVaultSearch.__init__` does everything pure first (parse tools, defaults, validate
+tool names) and then calls `_bind_vault()`, the one step that touches the outside world
+(the vault, the embedder, the keyword-extraction model, and `build_agent_model` as the
+eager check that hides the checkboxes on a bad chat configuration). Tests subclass and
+override `_bind_vault` rather than bypassing the constructor, so a new attribute cannot go
+missing from the test double. `AgentVaultChat` adds no `__init__` at all — its RAG
+pipeline is a `cached_property` — so there is one parameter list, not two to keep in sync.
+The Ask route and `VaultService.ask` share `query._answer_with_agent` and the
+`AGENT_*_NOTE` constants; do not re-inline that branch in either.
 
 `agent_tools.py` — six tools, all needing per-query state, so each is a **factory**
 returning a tool bound to one `AgentSearchSession` (the pattern talkpipe-agents documents

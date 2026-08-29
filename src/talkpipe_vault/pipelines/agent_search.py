@@ -6,19 +6,19 @@ having. ``vaultAgentSearch`` shows the chunks it kept; ``vaultAgentChat``
 answers the question from them.
 
 **How it is put together.** The agent itself is talkpipe-agents' ``llmAgent``
-segment, driven with a tool list resolved by name from ``agent_tools``:
+segment, driven with a tool list resolved by name from ``agent_tools``. The
+segments here own the *vault* concerns — opening the vault, wiring the
+searches the tools call, running the RAG prompt over what the agent kept —
+and nothing about running a model. Which tools an agent gets is a parameter,
+and so is its system prompt, so tools and agents mix and match without
+editing this file::
 
-    llmAgent[model=…, source=…, system_prompt=…,
-             tools=[vector_search, keyword_search, extract_keywords,
-                    keep_chunk, ignore_chunk, enough_information]]
+    vaultAgentChat[vault_path="~/notes-vault",
+                   tools="vector_search,keep_chunk,ignore_chunk,enough_information,think"]
 
-so the segments here own the *vault* concerns — opening the vault, wiring
-the searches the tools call, running the RAG prompt over what the agent kept
-— and nothing about running a model. Which tools an agent gets is a
-parameter (``tools="vector_search,keep_chunk,…"``, a name list that also
-accepts generic talkpipe-agents tools such as ``think``), and so is its
-``system_prompt``, so tools and agents mix and match without editing this
-file. What each tool does lives in ``agent_tools``; see its docstring.
+Names the vault does not own (``think`` above) come from talkpipe-agents'
+own registry. What each tool does lives in ``agent_tools``; see its
+docstring, and ``docs/AGENT_RETRIEVAL.md`` for using the tools elsewhere.
 
 **The stopping criterion is the agent's judgement, not a result count.** It
 searches, keeps what the answer needs, and asks itself after each search what
@@ -41,6 +41,7 @@ import logging
 import os
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from functools import cached_property
 from typing import Annotated, Any
 
 from talkpipe.chatterlang import register_segment
@@ -88,6 +89,14 @@ Work iteratively:
 4. Stop by calling enough_information as soon as the chunks you have kept would let you answer the question well, saying in one short phrase what they cover. That judgement is the reason to stop - not the number of chunks you have collected. Keeping more chunks that add nothing is not better than stopping. If repeated searches keep turning up nothing new and the question still cannot be fully answered, call enough_information anyway and say what is missing.
 Use extract_keywords when you want a keyword query built for you: give it the question or a topic in plain language and it returns a keyword query to pass to keyword_search. You may also write keyword queries yourself.
 After calling enough_information, or once you are told to stop, reply with the single word: done."""
+
+# Shown instead of an answer when the agent kept nothing: the RAG prompt would
+# have no context at all, and a model asked to answer from nothing invents one.
+NO_CONTEXT_ANSWER = (
+    "The agent did not find any chunk in this vault that answers the "
+    "question, so there was nothing to answer from. Try rephrasing the "
+    "question, indexing more documents, or asking without the agent."
+)
 
 
 @dataclass
@@ -173,14 +182,14 @@ class AgentVaultSearch(AbstractFieldSegment):
         ] = None,
         chat_model: Annotated[
             str | None,
-            "Model the agent reasons with. If None, uses TalkPipe config or default.",
+            "Model the agent reasons (and, for vaultAgentChat, answers) with. If None, uses TalkPipe config or default.",
         ] = None,
         chat_source: Annotated[
             str | None,
             "Source/provider of the agent's model. If None, uses TalkPipe config or default.",
         ] = None,
         tools: Annotated[
-            str | list | None,
+            str | list[str] | None,
             "Tools the agent gets, by name ('vector_search,keep_chunk,…' or a "
             "list). Vault tools come from agent_tools; any other name is "
             "resolved in talkpipe-agents' registry. None = the whole vault pack.",
@@ -211,6 +220,8 @@ class AgentVaultSearch(AbstractFieldSegment):
     ) -> None:
         super().__init__(field=field, set_as=set_as, multi_emit=multi_emit)
         self.vault_path = vault_path
+        self.embedding_model = embedding_model
+        self.embedding_source = embedding_source
         self.chat_model = chat_model if chat_model is not None else get_chat_model()
         self.chat_source = chat_source if chat_source is not None else get_chat_source()
         self.tool_names = parse_tool_names(tools)
@@ -218,29 +229,41 @@ class AgentVaultSearch(AbstractFieldSegment):
         self.max_chunks = max(1, max_chunks)
         self.max_iterations = max(1, max_iterations)
         self.search_limit = max(1, search_limit)
+        self.max_keywords = max(1, max_keywords)
         self.rename_fields = (
             parse_key_value_str(rename_fields, require_value=True)
             if rename_fields
             else {}
         )
         self.tell = progress or _print_progress
+        # Resolve the tool names when the segment is built, not mid-search, so
+        # an unknown tool surfaces up front (compile time for ChatterLang).
+        build_tools(self.make_session(), self.tool_names)
+        self._bind_vault()
+
+    def _bind_vault(self) -> None:
+        """Open the vault and the models the search bindings below rely on.
+
+        The one step of construction that touches the outside world — the
+        vault on disk, the embedder, the keyword-extraction model, the agent
+        model — so a test double can replace just this and run the real
+        constructor otherwise. The agent model is resolved here rather than
+        per query so a bad chat configuration fails the build, where the app
+        can fall back to plain search, instead of failing mid-search.
+        """
+        build_agent_model(self.chat_source, self.chat_model)
         self._vector_search = VaultSearch(
-            vault_path=vault_path,
-            embedding_model=embedding_model,
-            embedding_source=embedding_source,
+            vault_path=self.vault_path,
+            embedding_model=self.embedding_model,
+            embedding_source=self.embedding_source,
             limit=self.search_limit,
         ).as_function(single_in=True, single_out=True)
         # Same LLM keyword distillation the Ask page's keyword boost uses.
         self._extract_keywords = ExtractSearchKeywords(
             chat_model=self.chat_model,
             chat_source=self.chat_source,
-            max_keywords=max(1, max_keywords),
+            max_keywords=self.max_keywords,
         ).as_function(single_in=True, single_out=True)
-        # Resolve the tool names and the model when the segment is built, not
-        # mid-search, so an unknown tool or a bad model configuration surfaces
-        # up front and the app can fall back to plain search.
-        build_tools(self.make_session(), self.tool_names)
-        build_agent_model(self.chat_source, self.chat_model)
 
     # -- search bindings (overridable for tests) -----------------------------
 
@@ -344,15 +367,6 @@ class AgentVaultSearch(AbstractFieldSegment):
         return self.select_chunks(value)
 
 
-# Shown instead of an answer when the agent kept nothing: the RAG prompt would
-# have no context at all, and a model asked to answer from nothing invents one.
-NO_CONTEXT_ANSWER = (
-    "The agent did not find any chunk in this vault that answers the "
-    "question, so there was nothing to answer from. Try rephrasing the "
-    "question, indexing more documents, or asking without the agent."
-)
-
-
 @register_segment("vaultAgentChat")
 class AgentVaultChat(AgentVaultSearch):
     """
@@ -366,93 +380,19 @@ class AgentVaultChat(AgentVaultSearch):
     the background of a RAG prompt answered by the chat model, with the cited
     sources appended. When it kept nothing, no prompt is sent.
 
-    Emits an AgentChatOutcome: the answer, the kept chunks as SearchResult
-    objects (in keep order), a note describing how the selection ended, and
-    the trace of tool calls that was also reported through the progress
-    callable.
+    Takes the same parameters as vaultAgentSearch. Emits an AgentChatOutcome:
+    the answer, the kept chunks as SearchResult objects (in keep order), a
+    note describing how the selection ended, and the trace of tool calls that
+    was also reported through the progress callable.
     """
 
-    def __init__(
-        self,
-        vault_path: Annotated[str, "Path to LanceDB created by makevectordatabase"],
-        field: Annotated[
-            str | None, "The field to extract. If none, use full item."
-        ] = None,
-        set_as: Annotated[str | None, "The field to set/append the result as."] = None,
-        multi_emit: Annotated[
-            bool,
-            "Whether this class potentially emits multiple results per item."
-            "Should be set by the subclass constructor call or the field_segment decorator, not by the user.",
-        ] = False,
-        embedding_model: Annotated[
-            str | None,
-            "Model name for generating embeddings. If None, uses TalkPipe config or default.",
-        ] = None,
-        embedding_source: Annotated[
-            str | None,
-            "Source/provider for the embedding model. If None, uses TalkPipe config or default.",
-        ] = None,
-        chat_model: Annotated[
-            str | None,
-            "Model the agent reasons and answers with. If None, uses TalkPipe config or default.",
-        ] = None,
-        chat_source: Annotated[
-            str | None,
-            "Source/provider of the agent's model. If None, uses TalkPipe config or default.",
-        ] = None,
-        tools: Annotated[
-            str | list | None,
-            "Tools the agent gets, by name ('vector_search,keep_chunk,…' or a "
-            "list). Vault tools come from agent_tools; any other name is "
-            "resolved in talkpipe-agents' registry. None = the whole vault pack.",
-        ] = None,
-        system_prompt: Annotated[
-            str | None,
-            "The retrieval agent's system prompt. If None, uses the retrieval prompt.",
-        ] = None,
-        max_chunks: Annotated[
-            int,
-            "Ceiling on chunks kept per run. Not a target: the agent stops "
-            "when it judges it can answer the question, and this only bounds "
-            "a run that never gets there.",
-        ] = DEFAULT_MAX_CHUNKS,
-        max_iterations: Annotated[
-            int, "Cap on agent turns per question."
-        ] = DEFAULT_MAX_ITERATIONS,
-        search_limit: Annotated[
-            int, "Hits returned to the agent per search call."
-        ] = DEFAULT_SEARCH_LIMIT,
-        rename_fields: Annotated[
-            str | None,
-            "Document fields to rename during normalization, as 'old:new,old:new'.",
-        ] = SEARCH_RESULT_RENAMES,
-        max_keywords: Annotated[
-            int, "Maximum terms in a query built by the extract_keywords tool."
-        ] = DEFAULT_MAX_KEYWORDS,
-        progress: Callable[[str], None] | None = None,
-    ) -> None:
-        super().__init__(
-            vault_path=vault_path,
-            field=field,
-            set_as=set_as,
-            multi_emit=multi_emit,
-            embedding_model=embedding_model,
-            embedding_source=embedding_source,
-            chat_model=chat_model,
-            chat_source=chat_source,
-            tools=tools,
-            system_prompt=system_prompt,
-            max_chunks=max_chunks,
-            max_iterations=max_iterations,
-            search_limit=search_limit,
-            rename_fields=rename_fields,
-            max_keywords=max_keywords,
-            progress=progress,
-        )
+    @cached_property
+    def _answer(self) -> Callable[[dict[str, Any]], Any]:
         # The same RAG prompt -> completion -> sources stages vaultChat ends
         # with, so an agent-gathered answer is worded and cited identically;
-        # only the retrieval in front of them differs.
-        self._answer = (
+        # only the retrieval in front of them differs. Built on first use:
+        # the chat model was already validated when the segment was built.
+        return (
             ConstructRAGPrompt(
                 prompt_directive=RAG_PROMPT_DIRECTIVE,
                 background_field="_background",
@@ -479,32 +419,9 @@ class AgentVaultChat(AgentVaultSearch):
 
     def process_value(self, value: str) -> AgentChatOutcome:
         outcome = self.select_chunks(value)
-        if not outcome.results:
-            return AgentChatOutcome(
-                outcome.results, outcome.note, outcome.trace, NO_CONTEXT_ANSWER
-            )
-        return AgentChatOutcome(
-            outcome.results,
-            outcome.note,
-            outcome.trace,
-            self.answer(value, outcome.results),
+        response = (
+            self.answer(value, outcome.results)
+            if outcome.results
+            else NO_CONTEXT_ANSWER
         )
-
-
-# Re-exported so callers (and tests) that think in terms of "the agent search
-# module" still find the session and the tool registry, which now live with
-# the tools they belong to.
-__all__ = [
-    "DEFAULT_MAX_CHUNKS",
-    "DEFAULT_MAX_ITERATIONS",
-    "NO_CONTEXT_ANSWER",
-    "RETRIEVAL_SYSTEM_PROMPT",
-    "AgentChatOutcome",
-    "AgentSearchOutcome",
-    "AgentSearchSession",
-    "AgentVaultChat",
-    "AgentVaultSearch",
-    "RetrievalAgent",
-    "build_tools",
-    "parse_tool_names",
-]
+        return AgentChatOutcome(outcome.results, outcome.note, outcome.trace, response)

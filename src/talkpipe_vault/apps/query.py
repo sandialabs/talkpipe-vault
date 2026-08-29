@@ -542,6 +542,45 @@ def _refresh_pipelines(force: bool = False) -> None:
     _state.last_refresh_time = current_time
 
 
+# Wording shared by the web Ask page and the terminal interface for the two
+# things an agent run cannot do: run when its model could not be built, and
+# apply the vault's retrieval filter (the agent searches through its own
+# tools, which the filter never sees). Kept here so both interfaces say the
+# same thing and neither silently ignores the request.
+AGENT_UNAVAILABLE_NOTE = "the agent is unavailable right now — answered without it"
+AGENT_FILTER_NOTE = (
+    "the vault's retrieval filter does not apply to the agent's selection"
+)
+AGENT_SEARCH_FILTER_NOTE = (
+    "The custom transform does not apply to the agent's selection and was not run."
+)
+
+
+def _answer_with_agent(
+    state: AppState, message: str
+) -> tuple[str, list[dict[str, Any]], list[str], str]:
+    """Answer *message* through the agent pipeline.
+
+    Returns (response, citations, trace, note): the answer, the chunks the
+    agent kept — exactly the RAG context, so they are the citations — the
+    tool-call trace, and the note on how the run ended. Both interfaces call
+    this so their agent branches cannot drift apart.
+    """
+    assert state.agent_chat_pipeline is not None  # callers check availability
+    outcome = state.agent_chat_pipeline(message)
+    return (
+        outcome.response,
+        _process_semantic_results(outcome.results),
+        outcome.trace,
+        outcome.note,
+    )
+
+
+def _prefix_note(note: str, prefix: str) -> str:
+    """Put *prefix* in front of a possibly empty "Answered by" note."""
+    return f"{prefix} · {note}" if note else prefix
+
+
 def _refresh_agent_pipelines(vault_path: str) -> None:
     """(Re)build the agent-driven Search and Ask pipelines.
 
@@ -2501,13 +2540,9 @@ async def search_results(
                 filter_note = agent_outcome.note
                 agent_trace = agent_outcome.trace
                 if apply_filter and state.filtered_search_pipeline:
-                    # The agent picks chunks itself through its search tools,
-                    # which the filter never sees. Both boxes are checked, so
-                    # say which one won instead of ignoring one silently.
-                    filter_note += (
-                        " The custom transform does not apply to the agent's "
-                        "selection and was not run."
-                    )
+                    # Both boxes are checked: say which one won instead of
+                    # ignoring one silently.
+                    filter_note += f" {AGENT_SEARCH_FILTER_NOTE}"
             elif apply_filter and state.filtered_search_pipeline:
                 raw_results, filter_error = state.filtered_search_pipeline(query)
                 results = _process_semantic_results(raw_results)
@@ -2829,15 +2864,10 @@ async def chat_response(
             _update_document_counts(state.vault_path)
             result: str | dict[str, Any]
             if use_agent and state.agent_chat_pipeline:
-                # The agent searches with its own queries and keeps only the
-                # chunks it judged relevant, so the answer is built from that
-                # selection and the citations are exactly what it kept.
-                outcome = state.agent_chat_pipeline(message)
-                response = outcome.response
-                citations = _process_semantic_results(outcome.results)
-                agent_trace = outcome.trace
+                response, citations, agent_trace, retrieval_note = _answer_with_agent(
+                    state, message
+                )
                 answered_by_agent = True
-                retrieval_note = outcome.note
             elif use_keyword_search and state.keyword_chat_pipeline:
                 # The keyword-augmented pipeline reports the merged
                 # vector+keyword retrieval it actually prompted with, so the
@@ -2878,12 +2908,7 @@ async def chat_response(
             if use_agent and not answered_by_agent:
                 # Asked for but not built (bad chat configuration): say so
                 # rather than quietly returning a plain retrieval answer.
-                unavailable = "the agent is unavailable right now — answered without it"
-                retrieval_note = (
-                    f"{unavailable} · {retrieval_note}"
-                    if retrieval_note
-                    else unavailable
-                )
+                retrieval_note = _prefix_note(retrieval_note, AGENT_UNAVAILABLE_NOTE)
             if not state.show_source_paths:
                 # The RAG answer text ends with a "Sources:" list of absolute
                 # paths; hide them unless --show-source-paths was given, to
@@ -2921,11 +2946,7 @@ async def chat_response(
     filter_note = ""
     if state.result_filter_active:
         if answered_by_agent:
-            # The agent picks chunks itself through its search tools, which the
-            # filter never sees; claiming it was applied would be wrong.
-            filter_note = (
-                "the vault's retrieval filter does not apply to the agent's selection"
-            )
+            filter_note = AGENT_FILTER_NOTE
         elif filter_error:
             filter_note = (
                 f"the vault's retrieval filter failed and was skipped ({filter_error})"

@@ -581,10 +581,7 @@ class VaultService:
                 note = outcome.note
                 trace = outcome.trace
                 if apply_filter and state.filtered_search_pipeline:
-                    note += (
-                        " The retrieval filter does not apply to the agent's "
-                        "selection and was not run."
-                    )
+                    note += f" {query.AGENT_SEARCH_FILTER_NOTE}"
             elif apply_filter and state.filtered_search_pipeline:
                 raw, filter_error = state.filtered_search_pipeline(text)
                 results = query._process_semantic_results(raw)
@@ -706,11 +703,9 @@ class VaultService:
             query._update_document_counts(state.vault_path)
             result: str | dict[str, Any]
             if use_agent and state.agent_chat_pipeline:
-                outcome = state.agent_chat_pipeline(message)
-                response = outcome.response
-                citations = query._process_semantic_results(outcome.results)
-                trace = outcome.trace
-                retrieval_note = outcome.note
+                response, citations, trace, retrieval_note = query._answer_with_agent(
+                    state, message
+                )
                 answered_by_agent = True
             elif use_keyword_search and state.keyword_chat_pipeline:
                 result = state.keyword_chat_pipeline(message)
@@ -743,11 +738,8 @@ class VaultService:
                     response = result
                     citations = query._chat_citations(state, message)
             if use_agent and not answered_by_agent:
-                unavailable = "the agent is unavailable right now — answered without it"
-                retrieval_note = (
-                    f"{unavailable} · {retrieval_note}"
-                    if retrieval_note
-                    else unavailable
+                retrieval_note = query._prefix_note(
+                    retrieval_note, query.AGENT_UNAVAILABLE_NOTE
                 )
             if not state.show_source_paths:
                 response = query._strip_answer_source_paths(response)
@@ -789,12 +781,7 @@ class VaultService:
             answered_by = f"{answered_by} · {retrieval_note}"
         if state.result_filter_active:
             if answered_by_agent:
-                # The agent searches through its own tools, which the filter
-                # never sees; saying it was applied would be wrong.
-                answered_by += (
-                    " · the vault's retrieval filter does not apply to the "
-                    "agent's selection"
-                )
+                answered_by += f" · {query.AGENT_FILTER_NOTE}"
             else:
                 answered_by += (
                     f" · the vault's retrieval filter failed and was skipped ({filter_error})"
