@@ -189,9 +189,9 @@ up behind a checkbox and sidestep the path fences. Hits are assigned short ids (
 `c2`, …; deduped by doc_id across searches) and the agent decides on each.
 
 `agent_search.py` — `vaultAgentSearch` **does not build a Strands agent**; it configures
-talkpipe-agents' `llmAgent` segment (`RetrievalAgent`, a two-line subclass that keeps
-`result.stop_reason`, which the base segment discards). Model resolution, tool dispatch,
-progress reporting and reply cleanup are all the library's. Both the tool list
+talkpipe-agents' `llmAgent` segment directly and reads how the run ended from
+`agent.last_result.stop_reason` (the Strands result the segment keeps). Model resolution,
+tool dispatch, progress reporting and reply cleanup are all the library's. Both the tool list
 (`tools="vector_search,keep_chunk,…"`, a string or a list) and the `system_prompt` are
 segment parameters, so tools and agents mix and match without editing the module; the
 default is the whole vault pack with `RETRIEVAL_SYSTEM_PROMPT`. `make_session` /

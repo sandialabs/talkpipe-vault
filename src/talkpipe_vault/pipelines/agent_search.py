@@ -51,7 +51,6 @@ from talkpipe.pipelines.basic_rag import AppendRAGSources, ConstructRAGPrompt
 from talkpipe.search.abstract import SearchResult
 from talkpipe.util.config import parse_key_value_str
 from talkpipe_agents import LLMAgent, build_agent_model
-from talkpipe_agents.replies import ask_and_clean
 
 from .agent_tools import AgentSearchSession, build_tools, parse_tool_names
 from .config import (
@@ -121,25 +120,6 @@ class AgentChatOutcome(AgentSearchOutcome):
 
 def _print_progress(message: str) -> None:
     print(message, flush=True)
-
-
-class RetrievalAgent(LLMAgent):
-    """``llmAgent`` that also remembers why the agent loop ended.
-
-    The base segment yields only the answer, but the note the pages show has
-    to tell a run stopped by the turn cap from one the agent ended itself, so
-    the stop reason is kept here. Everything else — model resolution, tool
-    dispatch, progress reporting, reply cleanup — is the library's.
-    """
-
-    stop_reason: str = ""
-
-    def _ask(self, agent: Any, prompt: str) -> str:
-        result, answer = ask_and_clean(
-            agent, prompt, max_turns=self.max_turns, tell=self.tell
-        )
-        self.stop_reason = str(result.stop_reason)
-        return str(answer)
 
 
 @register_segment("vaultAgentSearch")
@@ -296,11 +276,11 @@ class AgentVaultSearch(AbstractFieldSegment):
             rename_fields=self.rename_fields,
         )
 
-    def make_agent(self, session: AgentSearchSession) -> RetrievalAgent:
+    def make_agent(self, session: AgentSearchSession) -> LLMAgent:
         """The llmAgent for one query, with this segment's tools bound to
         *session*. Built per query because the tools carry that query's
         state; the model behind it is cheap to resolve."""
-        return RetrievalAgent(
+        return LLMAgent(
             model=self.chat_model,
             source=self.chat_source,
             system_prompt=self.system_prompt,
@@ -319,7 +299,9 @@ class AgentVaultSearch(AbstractFieldSegment):
             f"question well. You may keep at most {session.max_chunks} chunks."
         )
         agent.as_function(single_in=True, single_out=True)(prompt)
-        return agent.stop_reason
+        # The library keeps the Strands result of the last item; its stop
+        # reason tells a run the turn cap ended from one the agent ended.
+        return str(agent.last_result.stop_reason) if agent.last_result else ""
 
     def select_chunks(self, value: str) -> AgentSearchOutcome:
         """Run one agent-driven selection for *value* and report the outcome.
