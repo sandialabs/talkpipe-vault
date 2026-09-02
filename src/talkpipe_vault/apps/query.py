@@ -566,8 +566,13 @@ def _answer_with_agent(
     tool-call trace, and the note on how the run ended. Both interfaces call
     this so their agent branches cannot drift apart.
     """
-    assert state.agent_chat_pipeline is not None  # callers check availability
-    outcome = state.agent_chat_pipeline(message)
+    pipeline = state.agent_chat_pipeline
+    if pipeline is None:
+        # Callers check availability first; this is the type-narrowing guard,
+        # written as a real check rather than an assert so it survives -O and
+        # satisfies bandit (B101).
+        raise RuntimeError("the agent pipeline is not available")
+    outcome = pipeline(message)
     return (
         outcome.response,
         _process_semantic_results(outcome.results),
