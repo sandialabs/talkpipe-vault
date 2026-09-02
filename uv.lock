@@ -3906,15 +3906,15 @@ all = [
 
 [[package]]
 name = "talkpipe-agents"
-version = "0.0.1a1"
+version = "0.0.1a2"
 source = { registry = "http://<server>/api/packages/travis/pypi/simple" }
 dependencies = [
     { name = "strands-agents", extra = ["ollama"] },
     { name = "talkpipe" },
 ]
-sdist = { url = "http://<server>/api/packages/travis/pypi/files/talkpipe-agents/0.0.1a1/talkpipe_agents-0.0.1a1.tar.gz", hash = "sha256:b19b6c163a868c86dafe0347fe420e3d851ba78a47046817cc13ebcb21178987" }
+sdist = { url = "http://<server>/api/packages/travis/pypi/files/talkpipe-agents/0.0.1a2/talkpipe_agents-0.0.1a2.tar.gz", hash = "sha256:8278a05539bc317fd0485b4594da18149614afd7d4bbdae2ba3d540f8001136e" }
 wheels = [
-    { url = "http://<server>/api/packages/travis/pypi/files/talkpipe-agents/0.0.1a1/talkpipe_agents-0.0.1a1-py3-none-any.whl", hash = "sha256:7d3816e468f7181f3d4ff447ec12ffbbfd6f4bcf1dc0a7dbe524ff127f7f994c" },
+    { url = "http://<server>/api/packages/travis/pypi/files/talkpipe-agents/0.0.1a2/talkpipe_agents-0.0.1a2-py3-none-any.whl", hash = "sha256:d69f534d8a07768903cb2d882ae9c08a3a68b25b804effbe9b9f690437cdeb1f" },
 ]
 
 [[package]]
@@ -3977,7 +3977,7 @@ requires-dist = [
     { name = "safety", marker = "extra == 'dev'", specifier = ">=2.3.0" },
     { name = "safety", marker = "extra == 'security'", specifier = ">=2.3.0" },
     { name = "talkpipe", extras = ["all"], specifier = ">=1.0.0b5" },
-    { name = "talkpipe-agents", specifier = ">=0.0.1a1", index = "http://<server>/api/packages/travis/pypi/simple" },
+    { name = "talkpipe-agents", specifier = ">=0.0.1a2", index = "http://<server>/api/packages/travis/pypi/simple" },
     { name = "textual", specifier = ">=8.0.0" },
     { name = "uvicorn", specifier = ">=0.24.0" },
     { name = "watchdog", extras = ["watchmedo"] },

@@ -38,8 +38,8 @@ dependencies = [
     # Agent-driven result selection on the Search page (llmAgent + tool
     # registry). Not yet on PyPI: resolved from the self-hosted package
     # registry through [tool.uv.index] below until the first release.
-    # 0.0.2a1: llmAgent keeps last_result (its Strands AgentResult).
-    "talkpipe-agents>=0.0.2a1",
+    # 0.0.1a2: llmAgent keeps last_result (its Strands AgentResult).
+    "talkpipe-agents>=0.0.1a2",
     "fastapi[standard]>=0.109.1",  # security floor
     "uvicorn>=0.24.0",
     "jinja2>=3.1.6",  # security floor
