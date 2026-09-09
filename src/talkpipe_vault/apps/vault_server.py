@@ -4,16 +4,57 @@ CLI entry point for running the web interface.
 
 import argparse
 import sys
+import webbrowser
 from pathlib import Path
 
 from talkpipe.util.config import configure_logger
 
 from talkpipe_vault import memtune
 from talkpipe_vault.apps import access_control, user_settings
-from talkpipe_vault.apps.query import run_app
+from talkpipe_vault.apps.query import _port_in_use, _running_instance_url, run_app
 from talkpipe_vault.pipelines.config import ensure_supported_vault_layout
 
 configure_logger("root:ERROR")
+
+DEFAULT_PORT = 8002
+PORT_SEARCH_RANGE = 20
+"""How many ports above the default to try when the default is taken."""
+
+
+def _choose_port(host: str, requested: int | None) -> int:
+    """The port to bind: the requested one, or the default with fallback.
+
+    An explicit ``--port`` is honoured or fails loudly. With no explicit
+    port, the default is used when free; when another program holds it,
+    the next free port in a small range above it is used and announced, so
+    a launch from a desktop entry still comes up instead of dying with a bind
+    error.
+    """
+    if requested is not None:
+        if _port_in_use(host, requested):
+            print(
+                f"Error: cannot bind to {host}:{requested} — the address is "
+                "already in use.\nStop the other process using the port, "
+                "or start with --port <other-port>.",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+        return requested
+    if not _port_in_use(host, DEFAULT_PORT):
+        return DEFAULT_PORT
+    for candidate in range(DEFAULT_PORT + 1, DEFAULT_PORT + 1 + PORT_SEARCH_RANGE):
+        if not _port_in_use(host, candidate):
+            print(
+                f"Port {DEFAULT_PORT} is in use by another program; "
+                f"using port {candidate} instead."
+            )
+            return candidate
+    print(
+        f"Error: ports {DEFAULT_PORT}-{DEFAULT_PORT + PORT_SEARCH_RANGE} are all "
+        f"in use on {host}. Start with --port <other-port>.",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
 
 
 def _most_recent_usable_vault() -> str:
@@ -39,9 +80,6 @@ def _most_recent_usable_vault() -> str:
 
 def main() -> None:
     """CLI entry point for running the web interface only."""
-    # Before any worker threads exist: keep LanceDB ingestion memory flat
-    # (see talkpipe_vault.memtune).
-    memtune.limit_malloc_arenas()
     parser = argparse.ArgumentParser(
         description="Run the TalkPipe Vault web interface for searching and chat"
     )
@@ -61,7 +99,14 @@ def main() -> None:
         help="Host to bind web interface to (default: 127.0.0.1)",
     )
     parser.add_argument(
-        "--port", type=int, default=8002, help="Port to listen on (default: 8002)"
+        "--port",
+        type=int,
+        default=None,
+        help=(
+            f"Port to listen on (default: {DEFAULT_PORT}). Without this option, "
+            "the next free port above the default is used when another "
+            "program holds it."
+        ),
     )
     parser.add_argument(
         "--show-source-paths",
@@ -88,6 +133,23 @@ def main() -> None:
 
     args = parser.parse_args()
 
+    # A second launch (a launcher clicked again, say) should not
+    # fail: if this application already serves the port, just open it.
+    running = _running_instance_url(
+        args.host, args.port if args.port is not None else DEFAULT_PORT
+    )
+    if running:
+        print(f"TalkPipe Vault is already running at {running}")
+        if not args.no_browser:
+            print("Opening it in your web browser...")
+            webbrowser.open(running)
+        return
+    port = _choose_port(args.host, args.port)
+
+    # Before any worker threads exist: keep LanceDB ingestion memory flat
+    # (see talkpipe_vault.memtune).
+    memtune.limit_malloc_arenas()
+
     vault_path = ""
     resumed = False
     if args.resume:
@@ -112,7 +174,7 @@ def main() -> None:
     else:
         print("Vault storage: none selected yet — create or choose a vault")
         print("in the web interface after it starts.")
-    print(f"Web interface: http://{args.host}:{args.port}")
+    print(f"Web interface: http://{args.host}:{port}")
     if not args.no_browser:
         print("Opening in your web browser...")
     print()
@@ -123,7 +185,7 @@ def main() -> None:
         run_app(
             vault_path=vault_path,
             host=args.host,
-            port=args.port,
+            port=port,
             show_source_paths=args.show_source_paths,
             open_browser=not args.no_browser,
         )

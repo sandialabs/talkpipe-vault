@@ -62,7 +62,8 @@ break an existing vault, configuration key, or command-line flag.
    `python -c "from importlib.metadata import version; print(version('talkpipe-vault'))"`,
    then `vault-server --no-browser` starts and the home page loads on
    http://127.0.0.1:8002. Pull the published container image and check it
-   starts the same way.
+   starts the same way, and `curl http://127.0.0.1:8002/api/health` reports
+   the release version once started.
 
 Nothing is bumped afterwards; the next commit on `master` reports itself as
 `X.Y.(Z+1).devN` automatically.

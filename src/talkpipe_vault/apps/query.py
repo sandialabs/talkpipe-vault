@@ -11,7 +11,9 @@ Provides the following via web interface:
 """
 
 import argparse
+import errno
 import glob as globlib
+import json
 import logging
 import mimetypes
 import os
@@ -22,6 +24,7 @@ import sys
 import threading
 import time
 import urllib.parse
+import urllib.request
 import uuid
 import webbrowser
 from collections.abc import Callable, Iterator
@@ -51,7 +54,7 @@ from talkpipe.search.lancedb import LanceDBDocumentStore
 from talkpipe.search.whoosh import WhooshFullTextIndex
 from talkpipe.util.config import configure_logger
 
-from talkpipe_vault import memtune
+from talkpipe_vault import DIST_NAME, __version__, memtune
 from talkpipe_vault.apps import access_control, credentials, user_settings
 from talkpipe_vault.pipelines import diagnostics, retrieval_filter, vault_metadata
 from talkpipe_vault.pipelines.config import (
@@ -967,6 +970,18 @@ def _render_page(
         name=template,
         context=_template_context(request, state, **context),
     )
+
+
+@app.get("/api/health")
+async def health() -> dict[str, str]:
+    """Identify this server, without needing a vault.
+
+    Answers ``{"app": "<distribution name>", "version": "<version>"}`` so a
+    second ``vault-server`` launch (or a desktop launcher) can tell an
+    instance of this application from anything else listening on the port,
+    and so monitoring can confirm the server is up.
+    """
+    return {"app": DIST_NAME, "version": __version__}
 
 
 @app.get("/api/directories")
@@ -2912,6 +2927,52 @@ def _reachable_host(host: str) -> str:
 def _browser_url(host: str, port: int) -> str:
     """Build the URL to open in a browser for the given bind host and port."""
     return f"http://{_reachable_host(host)}:{port}/"
+
+
+def _port_in_use(host: str, port: int) -> bool:
+    """True when something already listens on host:port.
+
+    Every address the host resolves to is probed, because uvicorn binds all
+    of them. Resolution failures count as "free" so uvicorn reports them
+    itself.
+    """
+    try:
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except OSError:
+        return False
+    for family, socktype, proto, _, sockaddr in infos:
+        try:
+            sock = socket.socket(family, socktype, proto)
+        except OSError:
+            continue
+        with sock:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                sock.bind(sockaddr)
+            except OSError as exc:
+                if exc.errno == errno.EADDRINUSE:
+                    return True
+    return False
+
+
+def _running_instance_url(host: str, port: int, timeout: float = 1.0) -> str | None:
+    """URL of a TalkPipe Vault already serving on host:port, else None.
+
+    Asks the ``/api/health`` route and checks the application name it
+    reports, so an unrelated program on the port is not mistaken for a
+    running instance.
+    """
+    url = _browser_url(host, port)
+    try:
+        with urllib.request.urlopen(  # nosec B310 - http URL to a local port
+            url + "api/health", timeout=timeout
+        ) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (OSError, ValueError):
+        return None
+    if isinstance(payload, dict) and payload.get("app") == DIST_NAME:
+        return url
+    return None
 
 
 def _launch_browser_when_ready(host: str, port: int, timeout: float = 15.0) -> None:

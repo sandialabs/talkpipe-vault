@@ -77,6 +77,20 @@ def reset_app_state(tmp_path, monkeypatch):
     return
 
 
+def test_health_identifies_the_app_without_a_vault():
+    """A second launch (or a desktop launcher) checks this to tell a running
+    vault from anything else on the port; it must work before any vault is
+    opened, so it cannot redirect to the vault manager like the pages do."""
+    from talkpipe_vault import DIST_NAME, __version__
+
+    client = TestClient(query.app)
+
+    response = client.get("/api/health")
+
+    assert response.status_code == 200
+    assert response.json() == {"app": DIST_NAME, "version": __version__}
+
+
 def test_keyword_search_page_is_disabled_without_whoosh():
     """Keyword search UI should be disabled when no Whoosh index is available."""
     client = TestClient(query.app)

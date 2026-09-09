@@ -31,11 +31,11 @@ src/talkpipe_vault/
 ├── watchdog.py                 # File system monitoring (fileWatcher source)
 ├── apps/
 │   ├── query.py                # FastAPI web application (all routes + run_app)
-│   ├── vault_server.py         # vault-server CLI entry point
+│   ├── vault_server.py         # vault-server CLI entry point (port choice)
 │   ├── user_settings.py        # Persisted UI settings (recent vaults, model overrides)
 │   ├── templates/              # Jinja2 templates (base, home, documents,
 │   │                           #   settings, search, keyword_search, chat, partials)
-│   └── static/                 # favicon.svg, logo.jpg
+│   └── static/                 # favicon.svg, logo.jpg, icon-256.png + icon.ico (launcher)
 ├── tui/
 │   ├── app.py                  # Textual terminal interface (vault-tui): tabs, dialogs, bindings
 │   ├── app.tcss                # Its stylesheet
@@ -49,9 +49,17 @@ src/talkpipe_vault/
 
 ## The Web Application (primary user path)
 
-`vault-server [vault_path] [--resume] [--host] [--port] [--show-source-paths]` —
+`vault-server [vault_path] [--resume] [--host] [--port] [--show-source-paths] [--no-browser]` —
 `--resume` opens the most recently used vault (fallback: vault_path); the vault path is
 optional; without it the UI starts on the Vaults & Documents page.
+
+Startup (`apps/vault_server.py`): if a vault already serves the port (checked
+through the unauthenticated `GET /api/health`, which reports `DIST_NAME` and
+the version), the browser is opened at it and the process exits; if some other
+program holds 8002 and no `--port` was given, the next free port in 8003–8022
+is used and announced; an explicit `--port` that is taken fails before the
+banner. The packaged `apps/static/icon-256.png` and `icon.ico` exist for desktop
+launchers (the TalkPipe App Center uses them).
 
 Routes in `apps/query.py`:
 - `/documents` (+ `/documents/index`): the combined **Vaults & Documents** page — pick the
