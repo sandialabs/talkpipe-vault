@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.11.4"
 resolution-markers = [
     "python_full_version >= '3.15' and sys_platform == 'win32'",
@@ -1090,8 +1090,8 @@ name = "httpcore2"
 version = "2.12.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "h11", marker = "sys_platform != 'emscripten'" },
-    { name = "truststore", marker = "sys_platform != 'emscripten'" },
+    { name = "h11" },
+    { name = "truststore" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/be/ad/f4f0e57345f1870f3e8cb624e058d7eca6e5a27d33bcc3311d9b618734cd/httpcore2-2.12.0.tar.gz", hash = "sha256:9293522bba0aa7c4c8e9e3f040c16575bd8868e155a77fa30c7a9085a5eae648", size = 67548, upload-time = "2026-08-18T13:22:08.211Z" }
 wheels = [
@@ -3246,7 +3246,7 @@ resolution-markers = [
     "python_full_version < '3.12' and sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 dependencies = [
-    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" } },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/7a/97/5a3609c4f8d58b039179648e62dd220f89864f56f7357f5d4f45c29eb2cc/scipy-1.17.1.tar.gz", hash = "sha256:95d8e012d8cb8816c226aef832200b1d45109ed4464303e997c5b13122b297c0", size = 30573822, upload-time = "2026-02-23T00:26:24.851Z" }
 wheels = [
@@ -3331,7 +3331,7 @@ resolution-markers = [
     "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 dependencies = [
-    { name = "numpy", version = "2.5.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "numpy", version = "2.5.2", source = { registry = "https://pypi.org/simple" } },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/7e/74/66de6258867beb2ef08f35f9f2ac017a52cacd5081714d239ff1a442d458/scipy-1.18.1.tar.gz", hash = "sha256:52c4b7422442aba924d03ad4019852b08a92e64ea187b933135687bfe2747307", size = 30781235, upload-time = "2026-08-21T23:28:50.599Z" }
 wheels = [
@@ -3516,6 +3516,7 @@ dependencies = [
 
 [package.optional-dependencies]
 dev = [
+    { name = "authlib" },
     { name = "bandit" },
     { name = "httpx" },
     { name = "mypy" },
@@ -3528,6 +3529,7 @@ dev = [
     { name = "safety" },
 ]
 security = [
+    { name = "authlib" },
     { name = "bandit" },
     { name = "safety" },
 ]
@@ -3541,6 +3543,8 @@ test = [
 
 [package.metadata]
 requires-dist = [
+    { name = "authlib", marker = "extra == 'dev'", specifier = "<1.8" },
+    { name = "authlib", marker = "extra == 'security'", specifier = "<1.8" },
     { name = "bandit", marker = "extra == 'dev'", specifier = ">=1.7.7" },
     { name = "bandit", marker = "extra == 'security'", specifier = ">=1.7.7" },
     { name = "fastapi", extras = ["standard"], specifier = ">=0.109.1" },
@@ -3558,8 +3562,8 @@ requires-dist = [
     { name = "pytest-mock", marker = "extra == 'dev'", specifier = ">=3.10.0" },
     { name = "pytest-mock", marker = "extra == 'test'", specifier = ">=3.10.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.16.3,<0.17" },
-    { name = "safety", marker = "extra == 'dev'", specifier = ">=2.3.0" },
-    { name = "safety", marker = "extra == 'security'", specifier = ">=2.3.0" },
+    { name = "safety", marker = "extra == 'dev'", specifier = ">=3.8.1" },
+    { name = "safety", marker = "extra == 'security'", specifier = ">=3.8.1" },
     { name = "talkpipe", extras = ["all"], specifier = ">=1.0.0b5" },
     { name = "textual", specifier = ">=8.0.0" },
     { name = "uvicorn", specifier = ">=0.24.0" },

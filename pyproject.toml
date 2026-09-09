@@ -58,7 +58,17 @@ dev = [
     "mypy>=2.3,<3",
     "pre-commit>=4.0",
     "bandit>=1.7.7",
-    "safety>=2.3.0",
+    # safety 3.8.1 is the first release whose metadata declares the typer it
+    # can run on (<0.26). Older releases leave typer unbounded, so a fresh pip
+    # resolve that lands on a newer typer (pulled in by fastapi-cloud-cli)
+    # backtracks to safety 3.7.0 and pairs it with a typer it crashes on
+    # ("There is no active click context"). safety 3.8.x in turn crashes in
+    # its HTTP client under authlib 1.8.0 ("'Timeout' object cannot be
+    # interpreted as an integer"), which it does not cap itself; drop the
+    # authlib cap once a safety release runs on authlib 1.8. Same pins in
+    # `security` below.
+    "safety>=3.8.1",
+    "authlib<1.8",
 ]
 test = [
     "pytest>=9.0.3",
@@ -69,7 +79,8 @@ test = [
 ]
 security = [
     "bandit>=1.7.7",
-    "safety>=2.3.0",
+    "safety>=3.8.1",  # see the note in `dev`
+    "authlib<1.8",  # see the note in `dev`
 ]
 
 [project.urls]
