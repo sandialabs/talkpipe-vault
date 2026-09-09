@@ -16,8 +16,10 @@ import logging
 import os
 import sys
 import threading
+import time
 import traceback
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, ClassVar, cast
 
@@ -1960,10 +1962,15 @@ def main(argv: list[str] | None = None) -> None:
     run_app(app)
 
 
-# How long run_app waits for a still-running worker thread before leaving the
-# process without it. Long enough for a write that is finishing, far shorter
-# than the minutes a blocked network request can take.
+# How long run_app waits, in total, for worker threads still inside a service
+# call before leaving the process without them. Long enough for a write that
+# is finishing, far shorter than the minutes a blocked network request can
+# take.
 BLOCKED_THREAD_GRACE_SECONDS = 2.0
+
+# Name prefix of the threads that run service calls (every
+# ``@work(thread=True)`` worker), so they are recognizable in a stack dump.
+SERVICE_THREAD_NAME_PREFIX = "vault-tui-service"
 
 
 def _blocked_worker_threads() -> list[threading.Thread]:
@@ -1981,18 +1988,31 @@ def _blocked_worker_threads() -> list[threading.Thread]:
     ]
 
 
+def _join_within(threads: list[threading.Thread], seconds: float) -> None:
+    """Join *threads* against one shared deadline, not a timeout each."""
+    deadline = time.monotonic() + seconds
+    for thread in threads:
+        with contextlib.suppress(RuntimeError):  # not started yet
+            thread.join(timeout=max(0.0, deadline - time.monotonic()))
+
+
 def run_app(app: VaultApp) -> None:
     """Run the app and return promptly even if a service call is still blocked.
 
-    ``App.run()`` ends with ``asyncio.run``'s shutdown, which joins the
-    default executor — so Ctrl+Q during the first-run model download or an
-    Ask to an unreachable server restored the terminal and then hung, for
-    minutes, until that request gave up (and the interpreter's own exit
-    joins those threads again). Run on an explicit loop instead, and if a
-    worker thread is still blocked once the interface has closed, leave the
-    process without waiting for it.
+    Service calls run on the event loop's default executor, whose threads
+    are not daemons. ``App.run()`` on its own loop ends with ``asyncio.run``'s
+    shutdown, which joins that executor — so Ctrl+Q during the first-run
+    model download or an Ask to an unreachable server restored the terminal
+    and then hung, for minutes, until that request gave up (and the
+    interpreter's own exit joins those threads again). Run on an explicit
+    loop with an explicit executor instead. Once the interface has closed,
+    shut the executor down — its idle threads leave at once — give a thread
+    still inside a service call a moment to finish, and otherwise leave the
+    process without it.
     """
     loop = asyncio.new_event_loop()
+    executor = ThreadPoolExecutor(thread_name_prefix=SERVICE_THREAD_NAME_PREFIX)
+    loop.set_default_executor(executor)
     exit_code = 0
     try:
         asyncio.set_event_loop(loop)
@@ -2006,14 +2026,20 @@ def run_app(app: VaultApp) -> None:
         exit_code = 1
         raise
     finally:
-        blocked = _blocked_worker_threads()
-        if blocked:
-            # A worker that is nearly done (a Whoosh commit, a settings write)
-            # gets a moment to finish; one blocked in a download or an LLM
-            # request does not hold the terminal.
-            for thread in blocked:
-                with contextlib.suppress(RuntimeError):  # not started yet
-                    thread.join(timeout=BLOCKED_THREAD_GRACE_SECONDS)
+        # Every executor thread is alive and non-daemon whether it is idle or
+        # inside a call, so shut the executor down first: idle threads exit
+        # as soon as they see it, and only a thread that is actually inside
+        # a service call remains to be waited for. Before this, each idle
+        # thread the executor had ever started was waited for in turn, so
+        # quitting stalled for a full grace period per thread.
+        executor.shutdown(wait=False, cancel_futures=True)
+        # A worker that is nearly done (a Whoosh commit, a settings write)
+        # gets a moment to finish; one blocked in a download or an LLM
+        # request does not hold the terminal. Ctrl+C during that moment
+        # skips it — the terminal is already restored, so the user is
+        # asking to leave now.
+        with contextlib.suppress(KeyboardInterrupt):
+            _join_within(_blocked_worker_threads(), BLOCKED_THREAD_GRACE_SECONDS)
         if _blocked_worker_threads():
             logging.shutdown()
             sys.stdout.flush()

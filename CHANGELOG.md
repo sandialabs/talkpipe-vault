@@ -2,6 +2,20 @@
 
 ## In Development
 
+### Terminal interface
+- `vault-tui` no longer stalls on quit. Every service call (a search, an
+  Ask, a settings probe) runs on a pool thread that stays alive, idle, after
+  the call returns, and the exit path counted each of those idle threads as
+  "still blocked" and waited its full two-second grace period for it in
+  turn — so `Ctrl+Q` took two seconds per pool thread the session had ever
+  started (four seconds right after startup, longer on machines with more
+  cores or after a session of searches and asks) and looked like a hang
+  that needed `Ctrl+C`. The pool is now shut down as the interface closes,
+  which releases idle threads at once; only a thread actually inside a
+  service call is waited for, the grace period is shared across such
+  threads rather than paid per thread, and `Ctrl+C` during it skips
+  straight to leaving.
+
 ## 1.0.0 (2026-08-29)
 
 First stable release. TalkPipe Vault turns folders of documents into a

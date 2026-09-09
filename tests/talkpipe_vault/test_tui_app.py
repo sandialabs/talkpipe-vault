@@ -5,6 +5,7 @@ chat LLM is stubbed on the app state, as the web-app tests do.
 """
 
 import os
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -1268,8 +1269,6 @@ async def test_header_keeps_the_vault_name_at_80_columns(tmp_path):
 
 
 def test_run_app_leaves_without_waiting_for_blocked_threads(monkeypatch):
-    import threading
-
     from talkpipe_vault.tui import app as app_module
 
     calls: list[Any] = []
@@ -1291,9 +1290,84 @@ def test_run_app_leaves_without_waiting_for_blocked_threads(monkeypatch):
     assert calls == [("run", calls[0][1])]
 
 
-def test_blocked_worker_threads_ignores_daemons_and_self():
-    import threading
+def _service_threads():
+    from talkpipe_vault.tui.app import SERVICE_THREAD_NAME_PREFIX
 
+    return [
+        thread
+        for thread in threading.enumerate()
+        if thread.name.startswith(SERVICE_THREAD_NAME_PREFIX) and thread.is_alive()
+    ]
+
+
+def test_run_app_releases_idle_service_threads_at_once(monkeypatch):
+    """Threads that ran finished service calls must not delay quitting.
+
+    Every thread worker runs on the loop's default executor, whose threads
+    stay alive (and are not daemons) after their call returns. Quitting used
+    to wait a full grace period for each of them, so a session's worth of
+    searches and asks turned Ctrl+Q into a stall of several seconds — a
+    hang, from the user's chair.
+    """
+    from talkpipe_vault.tui import app as app_module
+
+    exits: list[int] = []
+    monkeypatch.setattr(app_module.os, "_exit", exits.append)
+    seen: list[str] = []
+
+    class FakeApp:
+        def run(self, *, loop):
+            # Two completed service calls, as a search then an Ask would leave.
+            for _ in range(2):
+                loop.run_until_complete(
+                    loop.run_in_executor(None, threading.current_thread)
+                )
+            seen.extend(thread.name for thread in _service_threads())
+
+    started = time.monotonic()
+    app_module.run_app(FakeApp())  # type: ignore[arg-type]  # duck-typed stand-in
+    elapsed = time.monotonic() - started
+
+    assert seen, "service calls should run on the named executor"
+    assert exits == []
+    assert not _service_threads()
+    assert elapsed < app_module.BLOCKED_THREAD_GRACE_SECONDS / 2
+
+
+def test_run_app_shares_one_grace_period_across_blocked_threads(monkeypatch):
+    from talkpipe_vault.tui import app as app_module
+
+    exits: list[int] = []
+    monkeypatch.setattr(app_module.os, "_exit", exits.append)
+    monkeypatch.setattr(app_module, "BLOCKED_THREAD_GRACE_SECONDS", 0.5)
+    release = threading.Event()
+    inside = threading.Barrier(3)
+
+    def blocked_call():
+        inside.wait(5)
+        release.wait(10)
+
+    class FakeApp:
+        def run(self, *, loop):
+            # Two calls still blocked (say, in an LLM request) when quitting.
+            for _ in range(2):
+                loop.run_in_executor(None, blocked_call)
+            inside.wait(5)
+
+    started = time.monotonic()
+    try:
+        app_module.run_app(FakeApp())  # type: ignore[arg-type]  # duck-typed stand-in
+        elapsed = time.monotonic() - started
+    finally:
+        release.set()
+        for thread in _service_threads():
+            thread.join(5)
+
+    assert exits == [0]
+    assert 0.5 <= elapsed < 1.0
+
+
+def test_blocked_worker_threads_ignores_daemons_and_self():
     from talkpipe_vault.tui.app import _blocked_worker_threads
 
     started = threading.Event()
