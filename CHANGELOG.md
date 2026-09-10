@@ -16,6 +16,27 @@
   threads rather than paid per thread, and `Ctrl+C` during it skips
   straight to leaving.
 
+### Added
+
+- **Packaged icons.** The package now ships `icon-256.png` and `icon.ico`
+  (cropped from the logo) under `apps/static/`, for desktop launchers such
+  as the ones the TalkPipe App Center creates.
+- **Second launch opens the running instance.** Starting `vault-server` —
+  or clicking the launcher — while it is already running opens the browser
+  at the running server instead of failing on the busy port, using the new
+  `GET /api/health` route, which reports the application name and version
+  and works before any vault is opened.
+- **Free-port fallback.** When port 8002 is held by some other program and
+  no `--port` was given, the server uses the next free port in the
+  8003–8022 range and announces it. An explicit port that is taken now
+  fails before the banner with a clear message instead of a uvicorn
+  traceback afterwards.
+
+### Fixed
+
+- `talkpipe_vault.__version__` reported a hard-coded `0.1.0`; it now
+  reports the installed distribution's version.
+
 ## 1.0.0 (2026-08-29)
 
 First stable release. TalkPipe Vault turns folders of documents into a

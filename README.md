@@ -58,7 +58,7 @@ pip install talkpipe-vault
 vault-server
 ```
 
-Open http://127.0.0.1:8002, then:
+Your browser opens at http://127.0.0.1:8002 (`--no-browser` skips that). Then:
 
 1. **Vaults & Documents** — pick the folder (or glob pattern) to index. A
    vault name is suggested for you; one click creates the vault and indexes
