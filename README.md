@@ -291,6 +291,12 @@ most; `pre-commit install` runs them on every commit). See
 
 ### Development environment
 
+The default branch, `stable`, is release-only: it points at the latest
+release, so what you see on the repository's front page describes that
+release. Development happens on `master`, which is where merge requests go
+and where unreleased changes and their documentation accumulate — check it
+out first (`git checkout master` after cloning).
+
 Local development uses [uv](https://docs.astral.sh/uv/) against the committed
 `uv.lock`, so contributors share one reproducible set of versions:
 
