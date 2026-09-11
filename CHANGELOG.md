@@ -42,9 +42,11 @@
   TalkPipe plugin registers — with how to select one and where its API key
   or server URL goes; the quickstart, container, terminal-interface, and
   requirements sections link to it instead of repeating Ollama-only advice.
-  The guide also records that the compose service forwards only the
-  variables named under its `environment:` key, so API keys placed in
-  `.env` never reached the container.
+  The guide also spells out the two ways to configure a provider in a
+  container: on the Settings page, which persists in the data volume, or
+  from the environment — naming the variable under a compose service's
+  `environment:` key (or an `env_file`), since compose passes a service
+  only the variables it names.
 
 ### Fixed
 

@@ -109,16 +109,16 @@ pip install podman-compose   # podman needs a compose provider
 podman compose up -d
 ```
 
-Compose passes the container only the variables listed under the service's
-`environment:` — `.env` merely fills those in. For providers, that is just
-`TALKPIPE_OLLAMA_SERVER_URL` (defaulting to an Ollama on the container
-host, `http://host.containers.internal:11434`); `OPENAI_API_KEY`,
-`ANTHROPIC_API_KEY`, `OPENAI_BASE_URL` and the `TALKPIPE_CHAT_*` /
-`TALKPIPE_EMBEDDING_*` model settings are **not** forwarded from `.env`.
-To use OpenAI or Anthropic with compose, select the provider and enter its
-key on the Settings page (both persist in the data volume), or add the
-variables to the service's `environment:` list yourself (for example
-`- ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}`).
+Any provider works under compose. Choose the source and enter its API key on
+the Settings page — both persist in the data volume, so they survive
+container recreation and need nothing in the environment. To configure a
+provider from the environment instead, add the variables to the service's
+`environment:` list (for example `- ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}`)
+or point the service at an `env_file`: compose passes the container only the
+variables that service names, so a key left in `.env` alone does not reach
+it. The shipped service names `TALKPIPE_OLLAMA_SERVER_URL` (defaulting to an
+Ollama on the container host, `http://host.containers.internal:11434`)
+because that is the default chat source's one setting.
 
 ### Deriving a customized image
 

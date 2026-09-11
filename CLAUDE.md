@@ -270,6 +270,7 @@ GitHub Actions (`.github/workflows/ci-cd.yml`), analogous to TalkPipe's pipeline
 - `pyproject.toml`: package config, entry points, tool settings
 - `Containerfile` / `docker-compose.yml`: container image and services
 - `.env.example`: example container environment (model/provider settings and
-  credentials; note that compose forwards only the variables named under its
-  `environment:` key, which for providers is just `TALKPIPE_OLLAMA_SERVER_URL`)
+  credentials; compose passes a service only the variables it names under
+  `environment:`, so configuring a provider that way under compose means
+  adding it there — the Settings page needs no environment variables)
 - `.github/workflows/ci-cd.yml`: CI/CD pipeline
