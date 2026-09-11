@@ -277,6 +277,15 @@ def test_ollama_present_but_chat_probe_fails_is_error(monkeypatch):
     assert "the connection was reset" in chat["detail"]
 
 
+def test_eliza_is_reported_as_a_plumbing_check_not_a_model():
+    report = diagnostics.collect_config_status(
+        _models(chat_source="eliza", chat_model="eliza"), probe=False
+    )
+    chat = _find(report, "Chat (Ask) provider")
+    assert chat["status"] == "ok"
+    assert "does not use your documents" in chat["summary"]
+
+
 def test_openai_selected_without_key_is_error():
     report = diagnostics.collect_config_status(
         _models(chat_source="openai", chat_model="gpt-4o"),

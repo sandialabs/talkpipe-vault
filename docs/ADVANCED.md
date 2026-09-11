@@ -109,6 +109,17 @@ pip install podman-compose   # podman needs a compose provider
 podman compose up -d
 ```
 
+Compose passes the container only the variables listed under the service's
+`environment:` — `.env` merely fills those in. For providers, that is just
+`TALKPIPE_OLLAMA_SERVER_URL` (defaulting to an Ollama on the container
+host, `http://host.containers.internal:11434`); `OPENAI_API_KEY`,
+`ANTHROPIC_API_KEY`, `OPENAI_BASE_URL` and the `TALKPIPE_CHAT_*` /
+`TALKPIPE_EMBEDDING_*` model settings are **not** forwarded from `.env`.
+To use OpenAI or Anthropic with compose, select the provider and enter its
+key on the Settings page (both persist in the data volume), or add the
+variables to the service's `environment:` list yourself (for example
+`- ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}`).
+
 ### Deriving a customized image
 
 To ship different default models and extra Python packages, build a small
@@ -125,7 +136,8 @@ USER root
 RUN pip install --no-cache-dir your-extra-package
 USER vault
 
-# Different default sources/models for embeddings and chat. TalkPipe reads
+# Different default sources/models for embeddings and chat — any registered
+# source works (model2vec, ollama, openai, anthropic, ...). TalkPipe reads
 # these at the configuration level, so they replace the built-in defaults
 # (model2vec / ollama+mistral-small) but choices saved on the web Settings
 # page still take precedence.
@@ -147,7 +159,10 @@ podman run --rm -p 8002:8002 -v vault_data:/app/data \
 
 Keep in mind:
 
-- Ollama-backed sources still need `TALKPIPE_OLLAMA_SERVER_URL` at run time.
+- Ollama-backed sources still need `TALKPIPE_OLLAMA_SERVER_URL` at run time;
+  OpenAI and Anthropic sources need their API key (`-e OPENAI_API_KEY=…` /
+  `-e ANTHROPIC_API_KEY=…`, or entered on the Settings page). Don't bake keys
+  into the image.
 - The embedding default applies to vaults indexed from now on; an existing
   vault reopens with the embedder recorded in its `vault_metadata.json`
   regardless of the new default.
@@ -204,24 +219,34 @@ export OPENAI_API_KEY="sk-your-key-here"
 
 ### Provider notes
 
+Vault can use any embedding or chat provider registered with TalkPipe; the
+README's [LLM providers](../README.md#llm-providers) section has the
+overview and TalkPipe's
+[model and source configuration guide](https://github.com/sandialabs/talkpipe/blob/stable/docs/guides/model-and-source-configuration.md)
+the library-wide reference. Only the providers you select need setting up.
+OpenAI and Anthropic keys are read from the environment (or the Settings
+page), not from `~/.talkpipe.toml`.
+
 - **model2vec** (default, embeddings only): runs fully in-process — no
   server, no API key. The model downloads from Hugging Face on first use and
   is cached; use TalkPipe's `talkpipe_precache_model2vec` to prefetch for
   offline machines.
-- **Ollama**: set the server URL in **Settings → Connections & credentials**,
-  via `TALKPIPE_OLLAMA_SERVER_URL`, or with `OLLAMA_SERVER_URL` in
+- **Ollama** (embeddings and chat; the default chat provider): set the
+  server URL in **Settings → Connections & credentials**, via
+  `TALKPIPE_OLLAMA_SERVER_URL`, or with `OLLAMA_SERVER_URL` in
   `~/.talkpipe.toml` (default `http://localhost:11434`). The model must
   already be pulled on that server.
-- **OpenAI**: set `OPENAI_API_KEY` in the environment or enter it in the
-  Settings page. A custom base URL — the **OpenAI base URL** field under
-  **Settings → Connections & credentials**, or `OPENAI_BASE_URL` in the
-  environment — points this provider at any OpenAI-compatible endpoint
-  (vLLM, LM Studio, llama.cpp server, a proxy).
+- **OpenAI** (embeddings and chat): set `OPENAI_API_KEY` in the environment
+  or enter it in the Settings page. A custom base URL — the **OpenAI base
+  URL** field under **Settings → Connections & credentials**, or
+  `OPENAI_BASE_URL` in the environment — points this provider at any
+  OpenAI-compatible endpoint (vLLM, LM Studio, llama.cpp server, a proxy).
 - **Anthropic** (chat only): model name such as `claude-sonnet-4-5`; key via
   Settings page or `ANTHROPIC_API_KEY`.
-- **eliza** (chat only, built-in): a rule-based responder needing no server
-  or key — useful for smoke-testing the Ask page before a real chat provider
-  is configured. It does not use the retrieved context.
+- **eliza** (chat only, built-in): a scripted responder, not a language
+  model — it needs no server or key and its replies do not use the
+  retrieved context. Use it only to smoke-test the Ask page before a real
+  chat provider is configured, never to judge answers.
 - **Plugins**: the Settings dropdowns are populated from TalkPipe's provider
   registry, so a TalkPipe plugin that registers an additional embedding or
   chat provider appears there automatically once installed. See

@@ -32,10 +32,28 @@
   fails before the banner with a clear message instead of a uvicorn
   traceback afterwards.
 
+### Documentation
+
+- **Provider-neutral documentation.** The README, Advanced Guide,
+  `.env.example`, and compose comments no longer read as if Ollama were
+  required. A new "LLM providers" section in the README is the single place
+  that lists what vault can use — model2vec, Ollama or OpenAI for
+  embeddings; Ollama, OpenAI or Anthropic for chat, plus any provider a
+  TalkPipe plugin registers — with how to select one and where its API key
+  or server URL goes; the quickstart, container, terminal-interface, and
+  requirements sections link to it instead of repeating Ollama-only advice.
+  The guide also records that the compose service forwards only the
+  variables named under its `environment:` key, so API keys placed in
+  `.env` never reached the container.
+
 ### Fixed
 
 - `talkpipe_vault.__version__` reported a hard-coded `0.1.0`; it now
   reports the installed distribution's version.
+- The Settings page's configuration status described eliza as a "rule-based
+  responder", which read like a working chat provider. It now says the
+  replies do not use your documents and that a model provider is needed for
+  real answers.
 
 ## 1.0.0 (2026-08-29)
 

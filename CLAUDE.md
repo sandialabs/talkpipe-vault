@@ -111,6 +111,17 @@ goes through `_plain_text_as_markdown` so it appears verbatim.
 4. Defaults in `pipelines/config.py`: model2vec/minishlab/potion-retrieval-32M (embeddings, in-process),
    ollama/mistral-small (chat)
 
+**Providers are whatever TalkPipe registers** — nothing here is Ollama-specific. The
+Settings page/tab dropdowns are `getEmbeddingSources()` / `getPromptSources()`, i.e.
+`model2vec`, `ollama`, `openai` for embeddings and `ollama`, `openai`, `anthropic`,
+`eliza` for chat, plus anything an installed plugin registers; `pipelines/diagnostics.py`
+has a tailored check per provider and probes unrecognized ones by using them.
+`apps/credentials.py` persists `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `ANTHROPIC_API_KEY`
+and `TALKPIPE_OLLAMA_SERVER_URL` into the process environment (stored values win over
+pre-existing ones). `eliza` is a scripted responder, not a model — plumbing checks only.
+User-facing docs: README "LLM providers" is the authoritative section; `docs/ADVANCED.md`
+"Provider notes" the reference.
+
 Ollama server URL comes from `TALKPIPE_OLLAMA_SERVER_URL` (or `OLLAMA_SERVER_URL` in
 `~/.talkpipe.toml`) — not `OLLAMA_BASE_URL`, which is meaningless to TalkPipe.
 
@@ -258,5 +269,7 @@ GitHub Actions (`.github/workflows/ci-cd.yml`), analogous to TalkPipe's pipeline
 
 - `pyproject.toml`: package config, entry points, tool settings
 - `Containerfile` / `docker-compose.yml`: container image and services
-- `.env.example`: example container environment (uses `TALKPIPE_OLLAMA_SERVER_URL`)
+- `.env.example`: example container environment (model/provider settings and
+  credentials; note that compose forwards only the variables named under its
+  `environment:` key, which for providers is just `TALKPIPE_OLLAMA_SERVER_URL`)
 - `.github/workflows/ci-cd.yml`: CI/CD pipeline

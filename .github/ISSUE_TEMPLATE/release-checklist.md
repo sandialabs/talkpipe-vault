@@ -14,7 +14,7 @@ The application itself must be tested by hand — the suite is not enough.
 - [ ] `talkpipe[all]` floor in `pyproject.toml` matches what this release needs (`uv lock` if changed)
 - [ ] CHANGELOG: `## In Development` → `## X.Y.Z (YYYY-MM-DD)`, fresh empty section above; merged via MR
 - [ ] Build the wheel and install it into a **new** virtual environment
-- [ ] Manual test — web UI (`vault-server --no-browser`, scratch `TALKPIPE_VAULT_HOME`, real Ollama model, not eliza)
+- [ ] Manual test — web UI (`vault-server --no-browser`, scratch `TALKPIPE_VAULT_HOME`, real chat model — Ollama, OpenAI or Anthropic — not eliza)
     - [ ] create vault from a folder, indexing completes, reopens from recent vaults, add a second folder
     - [ ] Settings: configuration status OK, model/URL change persists across restart, bad URL reported
     - [ ] Semantic search, keyword search (phrase + boolean), **Open** links serve documents

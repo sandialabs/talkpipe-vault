@@ -23,6 +23,11 @@ services:
       - VAULT_PATH=/app/data/vault
       # Persist web-interface settings (recent vaults, model choices) in the data volume
       - TALKPIPE_VAULT_HOME=/app/data/vault-home
+      # Used only when a selected source is ollama (the default chat
+      # setting). OpenAI or Anthropic need no line here: choose the provider
+      # and enter its API key on the Settings page (saved in the data
+      # volume), or forward the key from .env by adding a line such as
+      # - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - TALKPIPE_OLLAMA_SERVER_URL=${TALKPIPE_OLLAMA_SERVER_URL:-http://host.containers.internal:11434}
       # Hugging Face offline mode. Leave unset for auto-detection: the
       # entrypoint probes huggingface.co at startup and switches to offline

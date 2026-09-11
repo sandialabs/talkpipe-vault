@@ -83,8 +83,9 @@ Run this from a **wheel installed into a new virtual environment** (`python
 checkout — packaging mistakes (missing templates, static files, entry
 points) only show up that way. Use a scratch `TALKPIPE_VAULT_HOME` and a
 small folder of real documents (a few PDFs, some text or Markdown, one image
-if the install supports it). Point `TALKPIPE_OLLAMA_SERVER_URL` at a working
-Ollama so the Ask page can be judged against a real model; **eliza output
+if the install supports it). Configure a real chat provider so the Ask page
+can be judged against a real model — a working Ollama via
+`TALKPIPE_OLLAMA_SERVER_URL`, or an OpenAI or Anthropic key; **eliza output
 proves only that the plumbing runs**, never answer quality.
 
 Web (`vault-server --no-browser`, http://127.0.0.1:8002):
