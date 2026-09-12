@@ -104,3 +104,40 @@ def test_load_ignores_unreadable_file(tmp_path, monkeypatch):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("not valid json {")
     assert credentials.load() == {}
+
+
+def test_normalize_url_changes_completes_bare_host_and_leaves_secrets():
+    """Both interfaces share this step, so a bare host:port is completed once."""
+    cleaned, notes = credentials.normalize_url_changes(
+        {
+            "ollama_server_url": "ollama.example:11434",
+            "openai_base_url": "https://proxy.example/v1/",
+            "openai_api_key": "sk-live-123456",
+        }
+    )
+
+    assert cleaned["ollama_server_url"] == "http://ollama.example:11434"
+    assert cleaned["openai_base_url"] == "https://proxy.example/v1"
+    assert cleaned["openai_api_key"] == "sk-live-123456"
+    assert any("Added http://" in note for note in notes)
+
+
+def test_normalize_url_changes_keeps_blank_and_missing_fields():
+    """A blank URL still clears its field; absent keys stay absent."""
+    cleaned, notes = credentials.normalize_url_changes(
+        {"ollama_server_url": "", "anthropic_api_key": "k"}
+    )
+
+    assert cleaned == {"ollama_server_url": "", "anthropic_api_key": "k"}
+    assert notes == []
+
+
+def test_normalize_url_changes_rejects_unusable_url_naming_the_field():
+    """An unusable URL is refused with the field's label and key."""
+    with pytest.raises(credentials.UrlCredentialError) as excinfo:
+        credentials.normalize_url_changes({"ollama_server_url": "ftp://host:11434"})
+
+    assert excinfo.value.key == "ollama_server_url"
+    assert "Ollama server URL" in str(excinfo.value)
+    # A ValueError subclass, so existing except-ValueError callers still work.
+    assert isinstance(excinfo.value, ValueError)

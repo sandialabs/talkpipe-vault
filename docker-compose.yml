@@ -12,15 +12,18 @@ services:
     volumes:
       - talkpipe_vault_data:/app/data
       # Host documents to index, visible in the folder picker at /documents.
-      # Point VAULT_DOCUMENTS_DIR at any host folder (must exist).
+      # Required, and must be an absolute path that exists: compose providers
+      # do not expand "~" in a volume mapping, so a default of ~/Documents
+      # silently mounted a literal "~" directory under Docker Compose. Better
+      # to fail with the message above than to come up with nothing to index.
       # On SELinux hosts (e.g. Fedora) append :z, e.g. ".../documents:ro,z".
-      - ${VAULT_DOCUMENTS_DIR:-~/Documents}:/documents:ro
+      - ${VAULT_DOCUMENTS_DIR:?Set VAULT_DOCUMENTS_DIR in .env to the absolute path of the documents folder to mount}:/documents:ro
     environment:
-      - VAULT_HOST=0.0.0.0
-      - VAULT_PORT=8002
-      # LanceDB path (same semantics as makevectordatabase --path).
-      # Whoosh index is created under VAULT_PATH/fulltext_vault.
-      - VAULT_PATH=/app/data/vault
+      # The vault to open is not set here: the image's CMD is
+      # `vault-server --resume`, which reopens the vault last used in the web
+      # interface and otherwise starts on the Vaults & Documents page. The
+      # server's host and port are fixed by that CMD too; VAULT_PORT below
+      # only chooses the published host port.
       # Persist web-interface settings (recent vaults, model choices) in the data volume
       - TALKPIPE_VAULT_HOME=/app/data/vault-home
       # Used only when a selected source is ollama (the default chat
@@ -42,11 +45,15 @@ services:
       - PYTHONUNBUFFERED=1
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python3", "-c", "import talkpipe_vault; print('OK')"]
+      # Ask the running server, not the interpreter: importing the package
+      # succeeds even when the web application never came up or has wedged,
+      # which made this check unable to fail and `restart: unless-stopped`
+      # unable to help. /api/health needs no vault and no authentication.
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8002/api/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 60s
+      start_period: 90s
     extra_hosts:
       - "host.containers.internal:host-gateway"
     networks:
@@ -64,13 +71,12 @@ services:
       - .:/workspace:Z
       - talkpipe_vault_dev_data:/app/data
       - talkpipe_vault_dev_cache:/home/vault/.cache
-      - ${VAULT_DOCUMENTS_DIR:-~/Documents}:/documents:ro
+      - ${VAULT_DOCUMENTS_DIR:?Set VAULT_DOCUMENTS_DIR in .env to the absolute path of the documents folder to mount}:/documents:ro
     environment:
+      # Unlike the `vault` service, this one overrides the command below and
+      # does pass these to vault-server.
       - VAULT_HOST=0.0.0.0
       - VAULT_PORT=8002
-      # LanceDB path (same semantics as makevectordatabase --path).
-      # Whoosh index is created under VAULT_PATH/fulltext_vault.
-      - VAULT_PATH=/app/data/vault
       # Persist web-interface settings (recent vaults, model choices) in the data volume
       - TALKPIPE_VAULT_HOME=/app/data/vault-home
       - TALKPIPE_OLLAMA_SERVER_URL=${TALKPIPE_OLLAMA_SERVER_URL:-http://host.containers.internal:11434}

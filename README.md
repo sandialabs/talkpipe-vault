@@ -40,10 +40,18 @@ pipeline framework and doubles as a real-world example of composing document
 processing, vector search, and RAG from reusable components — see the
 [Advanced Guide](docs/ADVANCED.md) if that side interests you.
 
-**Status:** alpha, under active development. The PyPI release can lag this
-README — if something described here is missing from a `pip install`,
-install from source ([Development setup](docs/ADVANCED.md#development-setup))
-to get the documented behavior.
+**Status:** alpha, under active development. This page is the `master` branch,
+which runs ahead of the PyPI release — if something described here is missing
+from a `pip install`, install the development branch to get the documented
+behavior:
+
+```bash
+pip install "git+https://github.com/sandialabs/talkpipe-vault.git@master"
+```
+
+The `@master` matters: the repository's default branch is the release-only
+`stable`, so a plain `git+https://…` URL installs the same code as PyPI. See
+[Development setup](docs/ADVANCED.md#development-setup) for a full clone.
 
 ## Run the web app
 
@@ -62,10 +70,16 @@ vault-server
 Your browser opens at http://127.0.0.1:8002 (`--no-browser` skips that). Then:
 
 1. **Vaults & Documents** — pick the folder (or glob pattern) to index. A
-   vault name is suggested for you; one click creates the vault and indexes
-   into it. The first index downloads the default embedding model from
-   Hugging Face (about 250 MB on disk, cached afterward).
-2. **Search** and **Ask** away.
+   vault name is suggested for you (under your home directory); one click
+   creates the vault and indexes into it. The first index downloads the
+   default embedding model from Hugging Face (about 250 MB on disk, cached
+   afterward).
+2. **Semantic Search** and **Ask** away.
+3. **Keyword Search** works once you build its index: that page starts
+   disabled and offers a **Create Full-Text Index** button, which builds a
+   separate full-text index from the documents already in the vault. It is a
+   one-off, but indexing more documents later does not refresh it — rebuild
+   it from the same page when you do.
 
 Search and indexing need nothing more. Answers on the Ask page need a chat
 provider — Ollama, OpenAI, or Anthropic. Pick it on the **Settings** page
@@ -130,18 +144,9 @@ A compose service and instructions for deriving your own customized image
 ## The terminal interface (`vault-tui`)
 
 Everything above is also available without a browser — in an SSH session, a
-tmux window, or on a headless machine — through `vault-tui`, installed
-alongside `vault-server`. It is new and not yet in a PyPI release, so install
-it from source — either straight from the repository:
-
-```bash
-python -m venv .venv
-source .venv/bin/activate      # Windows: .venv\Scripts\activate
-pip install "git+https://github.com/sandialabs/talkpipe-vault.git"
-```
-
-or from a clone with `pip install .` (contributors use the editable
-`pip install -e ".[dev]"` in [Development setup](docs/ADVANCED.md#development-setup)).
+tmux window, or on a headless machine — through `vault-tui`. It is installed
+by the same `pip install talkpipe-vault` (or container image) as
+`vault-server`; there is nothing extra to install.
 
 ```bash
 vault-tui ~/my-vault      # open (or create) a vault — the index folder, not your documents
@@ -228,10 +233,15 @@ script syntax is in the Advanced Guide under
   credentials** for the OpenAI and Anthropic API keys and the Ollama and
   OpenAI-compatible server URLs — no environment variables required. See
   [LLM providers](#llm-providers).
-- **Semantic Search** — vector similarity search over your documents.
-- **Keyword Search** — boolean and phrase queries. Matching is
-  case-insensitive but on exact word tokens (`apple` won't match `apples`);
-  use semantic search for meaning-based lookups.
+- **Semantic Search** — vector similarity search over your documents. The
+  closest ten chunks are always returned, so on a small vault every chunk
+  comes back and the last few are weak matches.
+- **Keyword Search** — boolean and phrase queries, over a separate full-text
+  index you build once with the button on that page (the page says so, and
+  stays disabled until you do). Indexing documents never updates it, so
+  rebuild it there after adding more. Matching is case-insensitive but on
+  exact word tokens (`apple` won't match `apples`), and very common words are
+  not indexed; use semantic search for meaning-based lookups.
 - **Ask** — single-turn Q&A with source citations you can open and copy.
   Once a full-text index exists, a **Boost retrieval with keyword search**
   checkbox appears: the chat model distills your question into index

@@ -26,9 +26,13 @@
     <span>Refreshing vault connections and searching semantic matches...</span>
 </div>
 
-{% set results_note = "Semantic matches are ranked by vector similarity." %}
+{% set results_note = "Ranked by vector similarity: the closest " ~ search_result_limit ~ " chunks are always returned, so the last few can be weak matches — on a small vault, every chunk." %}
 {% set score_help = "Higher scores are more similar to your query." %}
 {% set no_results_hint = "Semantic search works best with a complete question or descriptive phrase." %}
+{% set no_results_suggestions = [
+    "Use a broader phrase.",
+    "Refresh the vault if files were just indexed.",
+] %}
 {% include "_search_results.html" %}
 
 <script>

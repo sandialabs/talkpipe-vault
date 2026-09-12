@@ -138,6 +138,25 @@ Checkbox {
     background: transparent;
 }
 
+/* Textual draws an *unchecked* toggle's inner glyph in $panel-darken-2 over
+   $panel — a dark "X" inside a dark box. It is meant to be faint, but it
+   stays legible, so an unticked option reads as ticked; checked and unchecked
+   then differ only in the mark's colour, which is no difference at all on a
+   terminal without 24-bit colour. That is worst on "Overwrite existing
+   index", where the wrong reading costs an index. Paint the off-state glyph
+   in the box's own colour so it is genuinely absent, and make the on-state
+   mark bold so its presence carries the state. */
+Checkbox > .toggle--button {
+    color: $panel;
+    background: $panel;
+}
+
+Checkbox.-on > .toggle--button {
+    color: $text-success;
+    background: $panel;
+    text-style: bold;
+}
+
 /* ---- Vault tab -------------------------------------------------------------- */
 
 #vault-scroll {

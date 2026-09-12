@@ -42,10 +42,10 @@ RUN pip install --no-cache-dir . && \
 # Switch to non-root user
 USER vault
 
-# Default environment variables
-ENV VAULT_PATH=/app/data/vault
-ENV VAULT_HOST=0.0.0.0
-ENV VAULT_PORT=8002
+# Default environment variables.
+# Deliberately no VAULT_PATH/VAULT_HOST/VAULT_PORT: nothing reads them. The
+# host and port are fixed by CMD below, and which vault is open is decided by
+# `--resume` plus the web interface, not by the environment.
 # Persist web-interface settings (recent vaults, model choices) in the data volume
 ENV TALKPIPE_VAULT_HOME=/app/data/vault-home
 # Keep the Hugging Face model cache in the data volume so the embedding model

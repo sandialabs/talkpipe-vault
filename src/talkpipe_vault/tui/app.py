@@ -996,7 +996,7 @@ class VaultApp(App[None]):
                     yield Label("Shingle overlap", classes="field-label")
                     yield Input(id="shingle-overlap", type="integer", valid_empty=True)
                 with Vertical(classes="form-col"):
-                    yield Label("Ask result count", classes="field-label")
+                    yield Label("Ask & keyword result count", classes="field-label")
                     yield Input(id="rag-result-limit", type="integer", valid_empty=True)
             with Horizontal(classes="button-row"):
                 yield Button("Save settings", variant="primary", id="settings-save")

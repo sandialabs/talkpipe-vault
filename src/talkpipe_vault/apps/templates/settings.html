@@ -155,12 +155,14 @@
             <label for="shingle-overlap">Shingle Overlap</label>
             <input type="number" name="shingle_overlap" id="shingle-overlap" min="0"
                    value="{{ models.shingle_overlap }}">
-            <label for="rag-result-limit">Ask Result Count</label>
+            <label for="rag-result-limit">Ask &amp; Keyword Result Count</label>
             <input type="number" name="rag_result_limit" id="rag-result-limit" min="1"
                    value="{{ models.rag_result_limit }}">
             <p class="field-hint">
-                Controls how many results the Search and Keyword Search pages return, and how many
-                are used to evaluate an Ask request and shown as source chunks.
+                How many chunks are retrieved to answer an Ask request (and listed
+                under the answer as its source chunks), and how many results the
+                Keyword Search page returns. Semantic Search is not affected: it
+                always shows its top {{ search_result_limit }} matches.
             </p>
         </fieldset>
         <button type="submit">Save Settings</button>

@@ -91,8 +91,11 @@ DEFAULT_CHUNK_SIZE = 300
 DEFAULT_SHINGLE_SIZE = 3
 DEFAULT_SHINGLE_OVERLAP = 1
 DEFAULT_RAG_RESULT_LIMIT = 5
-# Mirrors the vector store's own default result count, so the filtered
-# semantic-search pipeline can over-fetch and truncate back to it.
+# How many results the Semantic Search page shows. Unlike the Ask/keyword
+# count, this is fixed rather than configurable; both the plain and the
+# filtered semantic pipelines pass it explicitly, so the page's result count
+# is this constant rather than whatever default the vector store happens to
+# ship.
 DEFAULT_SEARCH_RESULT_LIMIT = 10
 
 
@@ -163,6 +166,9 @@ def _template_context(
         "keyword_search_enabled": state.keyword_search_enabled,
         "show_source_paths": state.show_source_paths,
         "result_filter_active": state.result_filter_active,
+        # Fixed, unlike the configurable Ask/keyword count; pages that mention
+        # how many semantic matches they show read it from here.
+        "search_result_limit": DEFAULT_SEARCH_RESULT_LIMIT,
     }
     context.update(extra)
     return context
@@ -464,6 +470,16 @@ def _refresh_pipelines(force: bool = False) -> None:
         vault_path=vault_path,
         embedding_model=_state.embedding_model,
         embedding_source=_state.embedding_source,
+        # Serves two readers with different counts: the Search pages, which
+        # show DEFAULT_SEARCH_RESULT_LIMIT, and Ask's citation list, which
+        # shows the configured Ask result count. Fetch enough for whichever
+        # is larger and let each truncate — leaving the limit unset would
+        # instead inherit the vector store's own default, so the Search
+        # page's result count would be set outside this application.
+        limit=max(
+            DEFAULT_SEARCH_RESULT_LIMIT,
+            _state.rag_result_limit or DEFAULT_RAG_RESULT_LIMIT,
+        ),
     ).as_function(single_in=True, single_out=True)
     _state.chat_pipeline = VaultChat(
         vault_path=vault_path,
@@ -944,11 +960,16 @@ def _vault_selected(state: AppState) -> bool:
 
 
 def _require_vault(state: AppState) -> RedirectResponse | None:
-    """Redirect to the documents page (vault + indexing) when none is selected."""
+    """Redirect to the documents page (vault + indexing) when none is selected.
+
+    Carried as a neutral ``message``, not an ``error``: on a first run this is
+    the landing page's welcome, and nothing has gone wrong — rendering it in
+    the red alert style made the very first screen look like a failure.
+    """
     if _vault_selected(state):
         return None
     return _redirect_with_message(
-        "/documents", error="Choose the documents to index to get started."
+        "/documents", message="Choose the documents to index to get started."
     )
 
 
@@ -2246,6 +2267,12 @@ async def save_credentials(
     blank value clears them. Secret fields (API keys) are never echoed back, so
     a blank value keeps the saved key and the matching "clear" checkbox removes
     it. Saved values are applied to the process environment immediately.
+
+    URL fields go through the same normalization as the terminal interface: a
+    bare ``host:port`` is completed with ``http://`` and the confirmation says
+    so, and a URL that can never work is refused here, at the field, instead of
+    being stored and then reported by the configuration probe as an unreachable
+    server.
     """
     changes: dict[str, str | None] = {
         "openai_base_url": openai_base_url,
@@ -2260,11 +2287,17 @@ async def save_credentials(
     elif anthropic_api_key.strip():
         changes["anthropic_api_key"] = anthropic_api_key
 
+    try:
+        changes, notes = credentials.normalize_url_changes(changes)
+    except credentials.UrlCredentialError as exc:
+        return _redirect_with_message("/settings", error=str(exc))
+
     credentials.set_values(changes)
     if _vault_selected(state):
         _refresh_pipelines(force=True)
     return _redirect_with_message(
-        "/settings", message="Connection settings saved for this app."
+        "/settings",
+        message=" ".join(["Connection settings saved for this app.", *notes]),
     )
 
 
@@ -2434,7 +2467,9 @@ async def search_results(
                 filter_note = _filter_outcome_note(len(results), filter_error)
             else:
                 raw_results = state.search_pipeline(query)
-                results = _process_semantic_results(raw_results)
+                results = _process_semantic_results(raw_results)[
+                    :DEFAULT_SEARCH_RESULT_LIMIT
+                ]
         except Exception as e:
             error = str(e)
 
@@ -2782,17 +2817,23 @@ async def chat_response(
         except Exception as e:
             error = str(e)
             lowered = error.lower()
+            # The provider's own message leads with environment variables and
+            # config files. In this application the Settings page is the
+            # shorter route and needs nothing outside the app, so say that
+            # plainly rather than as an afterthought.
             if "ollama" in lowered and ("connect" in lowered or "refused" in lowered):
                 error += (
-                    " Tip: you can also set the Ollama server URL in this app "
-                    "under Settings > Connections & credentials."
+                    " In this app you can set the Ollama server URL on the "
+                    "Settings page under Connections & credentials — no "
+                    "environment variable needed."
                 )
             elif ("openai" in lowered or "anthropic" in lowered) and (
                 "api key" in lowered or "api_key" in lowered or "credential" in lowered
             ):
                 error += (
-                    " Tip: you can also enter the API key in this app "
-                    "under Settings > Connections & credentials."
+                    " In this app you can enter the API key on the Settings "
+                    "page under Connections & credentials — no environment "
+                    "variable needed."
                 )
 
     if not state.show_source_paths:

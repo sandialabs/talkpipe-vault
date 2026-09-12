@@ -58,6 +58,11 @@ FIELDS: tuple[_Field, ...] = (
 
 _FIELDS_BY_KEY = {field.key: field for field in FIELDS}
 
+# Credentials that hold a server URL rather than a secret. Both interfaces run
+# these through normalize_server_url before saving, so a bare "host:port" is
+# completed the same way whichever one the user typed it into.
+URL_CREDENTIAL_KEYS: tuple[str, ...] = ("openai_base_url", "ollama_server_url")
+
 # Env vars we set from the stored credentials, so we can safely unset only our
 # own when a value is cleared (never a variable the environment already had).
 _managed_env: set[str] = set()
@@ -182,6 +187,45 @@ def normalize_server_url(value: str) -> tuple[str, str]:
             "http://host:port (e.g. http://localhost:11434)."
         )
     return f"{scheme}://{rest.rstrip('/')}", ""
+
+
+class UrlCredentialError(ValueError):
+    """A URL credential a form should refuse; ``key`` names the field."""
+
+    def __init__(self, key: str, message: str):
+        super().__init__(message)
+        self.key = key
+
+
+def normalize_url_changes(
+    changes: dict[str, str | None],
+) -> tuple[dict[str, str | None], list[str]]:
+    """Normalize every URL field in a set of credential changes.
+
+    Returns ``(changes, notes)`` with each URL field passed through
+    :func:`normalize_server_url`; ``notes`` collects the human-readable
+    outcomes ("Added http:// in front of …") to show alongside the save
+    confirmation. Raises :class:`UrlCredentialError` — a ``ValueError`` — with
+    a form-ready message prefixed by the offending field's label, for a URL
+    that cannot work.
+
+    Both the web Settings page and the terminal interface call this, so the
+    same typed value is stored the same way in either one.
+    """
+    cleaned: dict[str, str | None] = dict(changes)
+    notes: list[str] = []
+    for key in URL_CREDENTIAL_KEYS:
+        value = cleaned.get(key)
+        if not value:
+            continue
+        try:
+            url, note = normalize_server_url(str(value))
+        except ValueError as exc:
+            raise UrlCredentialError(key, f"{label_for(key)}: {exc}") from exc
+        cleaned[key] = url
+        if note:
+            notes.append(note)
+    return cleaned, notes
 
 
 def source_for(env_var: str) -> str:

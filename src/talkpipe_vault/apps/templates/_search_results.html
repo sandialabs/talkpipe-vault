@@ -34,9 +34,9 @@
         <h3>No results found for "{{ query }}"</h3>
         <p>{{ no_results_hint }}</p>
         <div class="empty-suggestions">
-            <span>Try a shorter query.</span>
-            <span>Use a broader phrase.</span>
-            <span>Refresh the vault if files were just indexed.</span>
+            {% for suggestion in no_results_suggestions or [] %}
+            <span>{{ suggestion }}</span>
+            {% endfor %}
         </div>
     </div>
     {% endif %}

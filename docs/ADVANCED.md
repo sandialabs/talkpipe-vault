@@ -81,8 +81,10 @@ and no vault open, so the variable can be fixed and the app restarted.
 
 - `TALKPIPE_VAULT_ROOT` — a single directory. Vaults can only be created,
   opened, deleted, or resumed inside it, and the vault name suggested for a
-  new documents folder is placed under it instead of next to the folder
-  (`~/notes` → `$TALKPIPE_VAULT_ROOT/notes-vault`).
+  new documents folder is placed under it instead of in your home directory
+  (`/mnt/archive/notes` → `$TALKPIPE_VAULT_ROOT/notes-vault`, rather than the
+  unrestricted default `~/notes-vault`). The suggestion is only a pre-filled
+  value in either case — edit it or browse elsewhere before submitting.
 - `TALKPIPE_DOCUMENT_ROOTS` — one or more directories separated by the
   platform path separator (`:` on Linux/macOS, `;` on Windows). The folder
   picker and document indexing are confined to them.
@@ -105,9 +107,19 @@ basic `podman run` invocation. Additional options:
 configured through `.env` (see `.env.example`):
 
 ```bash
+cp .env.example .env
+# Edit .env and set VAULT_DOCUMENTS_DIR to the absolute path of the folder
+# you want to index; the services refuse to start without it, because
+# compose does not expand "~" in a volume mapping.
+
 pip install podman-compose   # podman needs a compose provider
 podman compose up -d
 ```
+
+The vault itself is not configured here: the service starts
+`vault-server --resume`, so it reopens whatever vault you last used in the
+web interface and otherwise opens on the Vaults & Documents page. Vaults live
+under `/app/data`, which is the persistent volume.
 
 Any provider works under compose. Choose the source and enter its API key on
 the Settings page — both persist in the data volume, so they survive
@@ -191,7 +203,7 @@ Via `~/.talkpipe.toml` (keys work in a `[vault]` section or at top level):
 [vault]
 embedding_model = "text-embedding-3-large"
 embedding_source = "openai"
-chat_model = "gpt-4"
+chat_model = "gpt-4o-mini"
 chat_source = "openai"
 ```
 
@@ -200,7 +212,7 @@ Or via environment variables:
 ```bash
 export TALKPIPE_EMBEDDING_MODEL="text-embedding-3-large"
 export TALKPIPE_EMBEDDING_SOURCE="openai"
-export TALKPIPE_CHAT_MODEL="gpt-4"
+export TALKPIPE_CHAT_MODEL="gpt-4o-mini"
 export TALKPIPE_CHAT_SOURCE="openai"
 export OPENAI_API_KEY="sk-your-key-here"
 ```
@@ -509,6 +521,10 @@ described above.
 ```bash
 git clone https://github.com/sandialabs/talkpipe-vault.git
 cd talkpipe-vault
+
+# A fresh clone lands on the release-only default branch, `stable`.
+# Development happens on `master`; switch to it before anything else.
+git checkout master
 
 # Virtual environment (see the README note about PEP 668)
 python -m venv .venv

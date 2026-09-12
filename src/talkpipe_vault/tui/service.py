@@ -55,8 +55,10 @@ def _newest_mtime(folder: Path) -> float | None:
     return newest
 
 
-# Connection settings that hold a server address rather than a secret.
-URL_CREDENTIAL_KEYS = ("openai_base_url", "ollama_server_url")
+# Connection settings that hold a server address rather than a secret. Defined
+# in apps.credentials so the web interface normalizes the same fields; re-exported
+# here for the TUI tests that reference it.
+URL_CREDENTIAL_KEYS = credentials.URL_CREDENTIAL_KEYS
 
 
 def _ok(message: str = "", **extra: Any) -> dict[str, Any]:
@@ -575,7 +577,9 @@ class VaultService:
                 results = query._process_semantic_results(raw)
                 note = query._filter_outcome_note(len(results), filter_error)
             else:
-                results = query._process_semantic_results(state.search_pipeline(text))
+                results = query._process_semantic_results(state.search_pipeline(text))[
+                    : query.DEFAULT_SEARCH_RESULT_LIMIT
+                ]
         except Exception as exc:
             return _fail(str(exc))
         return _ok(results=results, note=note)
@@ -852,18 +856,10 @@ class VaultService:
         field is, rather than saved and reported by the configuration probe
         as "Can't reach Ollama".
         """
-        notes: list[str] = []
-        cleaned: dict[str, str | None] = dict(changes)
-        for key in URL_CREDENTIAL_KEYS:
-            if cleaned.get(key):
-                try:
-                    url, note = credentials.normalize_server_url(str(cleaned[key]))
-                except ValueError as exc:
-                    label = credentials.label_for(key)
-                    return _fail(f"{label}: {exc}", field=key)
-                cleaned[key] = url
-                if note:
-                    notes.append(note)
+        try:
+            cleaned, notes = credentials.normalize_url_changes(changes)
+        except credentials.UrlCredentialError as exc:
+            return _fail(str(exc), field=exc.key)
         try:
             credentials.set_values(cleaned)
         except Exception as exc:
