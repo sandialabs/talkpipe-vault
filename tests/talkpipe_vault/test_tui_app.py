@@ -1413,7 +1413,15 @@ async def test_shift_tab_from_the_top_of_settings_reaches_the_ollama_url(
         assert app.focused.id != "cred-ollama_server_url"
 
 
-async def test_saving_a_bare_host_port_completes_the_ollama_url(sample_vault):
+async def test_saving_a_bare_host_port_completes_the_ollama_url(
+    sample_vault, monkeypatch
+):
+    # Save starts a live probe of the saved server; ollama.example never
+    # resolves, and the test is about the saved value, not the probe.
+    monkeypatch.setattr(
+        "talkpipe_vault.tui.service.VaultService.config_status",
+        lambda self, **_kw: {"overall": "ok", "checks": []},
+    )
     app = VaultApp(VaultService(), vault_path=sample_vault)
     async with app.run_test(size=SIZE) as pilot:
         await _wait_workers(app, pilot)
@@ -1422,9 +1430,8 @@ async def test_saving_a_bare_host_port_completes_the_ollama_url(sample_vault):
         app.query_one("#cred-ollama_server_url", Input).value = "ollama.example:11434"
         app.query_one("#credentials-save", Button).press()
         await _settle(pilot)
-        # Check the toast before waiting out the live probe that Save starts:
-        # it expires after Textual's default five seconds, and the probe can
-        # take longer than that on a slow runner.
+        # Toasts expire after Textual's default five seconds; check this one
+        # before waiting on anything else.
         assert any("Added http://" in str(n.message) for n in app._notifications)
         await _wait_workers(app, pilot)
         creds = {c["key"]: c for c in app.service.settings_view()["credentials"]}
