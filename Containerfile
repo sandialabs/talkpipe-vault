@@ -1,3 +1,9 @@
+# The build context excludes .git (see .containerignore), so setuptools_scm
+# cannot derive the package version. Pass the real version as a build arg:
+#   podman build --build-arg APP_VERSION="$(python3 -m setuptools_scm)" .
+# When unset, the image reports the fallback version 0.1.0.
+ARG APP_VERSION=0.1.0
+
 FROM fedora:latest
 
 # Install Python, pip, git (for setuptools-scm), and network tools
@@ -22,9 +28,8 @@ RUN mkdir -p /app/data /documents && chown -R vault:vault /app/data
 # Define volumes
 VOLUME ["/app/data"]
 
-# Copy project files (including .git for setuptools-scm version detection)
+# Copy project files
 COPY pyproject.toml README.md ./
-COPY .git/ ./.git/
 COPY src/ ./src/
 COPY --chmod=755 container/entrypoint.sh /usr/local/bin/vault-entrypoint
 
@@ -35,6 +40,8 @@ COPY --chmod=755 container/entrypoint.sh /usr/local/bin/vault-entrypoint
 # uses that code. Deliberately no `pip install --upgrade pip` first: that
 # would leave a second pip copy under /usr/local that `dnf remove` cannot
 # see.
+ARG APP_VERSION
+ENV SETUPTOOLS_SCM_PRETEND_VERSION_FOR_TALKPIPE_VAULT=${APP_VERSION}
 RUN pip install --no-cache-dir . && \
     dnf remove -y python3-pip && \
     dnf clean all

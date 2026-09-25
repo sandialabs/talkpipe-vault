@@ -5,6 +5,10 @@ services:
     build:
       context: .
       dockerfile: Containerfile
+      args:
+        # The build context excludes .git, so pass the package version in:
+        #   APP_VERSION="$(python3 -m setuptools_scm)" podman compose build
+        APP_VERSION: ${APP_VERSION:-0.1.0}
     image: ${IMAGE_NAME:-talkpipe-vault}
     container_name: talkpipe-vault
     ports:
@@ -63,6 +67,10 @@ services:
     build:
       context: .
       dockerfile: Containerfile
+      args:
+        # The build context excludes .git, so pass the package version in:
+        #   APP_VERSION="$(python3 -m setuptools_scm)" podman compose build
+        APP_VERSION: ${APP_VERSION:-0.1.0}
     image: ${IMAGE_NAME:-talkpipe-vault}:dev
     container_name: talkpipe-vault-dev
     ports:

@@ -116,11 +116,13 @@ Command line and container:
 
 - `makevectordatabase` indexes the same folder from the shell and the
   resulting vault opens in `vault-server`.
-- `podman build -t talkpipe-vault .` succeeds and `podman run --rm -p
+- `podman build --build-arg APP_VERSION="$(python3 -m setuptools_scm)" -t
+  talkpipe-vault .` succeeds and `podman run --rm -p
   8002:8002 -v <docs>:/documents:ro -v <home>:/vault talkpipe-vault` serves
   the home page on http://127.0.0.1:8002 (see the README for the full
-  invocation); indexing `/documents` from inside the container works and
-  the result survives a container restart.
+  invocation) and `/api/health` reports the version; indexing `/documents`
+  from inside the container works and the result survives a container
+  restart.
 - Upgrade check: install the previous release, create a vault, then upgrade
   to the wheel under test — the existing vault still opens and searches.
   Anything that requires re-indexing must be called out in the changelog.

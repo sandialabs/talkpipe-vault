@@ -79,6 +79,15 @@
 
 - `talkpipe_vault.__version__` reported a hard-coded `0.1.0`; it now
   reports the installed distribution's version.
+- **The container image reports the release version.** The image derived
+  its version from a copy of `.git` next to only part of the source tree,
+  so setuptools_scm saw every other tracked file as deleted and reported an
+  unreleased version (an image built at `v1.0.1` said `1.0.2.dev0+…`), and
+  CI's shallow checkout had no tags to derive it from at all. The version
+  now comes from an `APP_VERSION` build argument: CI computes it with
+  setuptools_scm, compose passes `${APP_VERSION:-0.1.0}`, and a plain
+  `podman build` without it reports `0.1.0`. `.git` is no longer copied
+  into the build.
 - The Settings page's configuration status described eliza as a "rule-based
   responder", which read like a working chat provider. It now says the
   replies do not use your documents and that a model provider is needed for

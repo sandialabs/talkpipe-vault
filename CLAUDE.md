@@ -221,7 +221,7 @@ Test notes:
 ## Container
 
 ```bash
-podman build -t talkpipe-vault -f Containerfile .
+podman build --build-arg APP_VERSION="$(python3 -m setuptools_scm)" -t talkpipe-vault -f Containerfile .
 podman run --rm -p 8002:8002 --userns=keep-id \
     -v <host-data-dir>:/app/data:Z -v <host-docs-dir>:/documents:ro,Z \
     -e TALKPIPE_OLLAMA_SERVER_URL=http://host.containers.internal:11434 \

@@ -22,7 +22,7 @@ The application itself must be tested by hand — the suite is not enough.
     - [ ] `--resume` restarts into the same vault
 - [ ] Manual test — `vault-tui`: search/keywords/ask match the web UI, Settings saves, `--resume` works, usable at 80×24 and in tmux
 - [ ] Manual test — `makevectordatabase` output opens in `vault-server`
-- [ ] Manual test — `podman build -t talkpipe-vault .`, run per README, index `/documents`, survives restart
+- [ ] Manual test — container built with `APP_VERSION` (`podman build --build-arg APP_VERSION="$(python3 -m setuptools_scm)" -t talkpipe-vault .`), run per README, reports the version, index `/documents`, survives restart
 - [ ] Upgrade check: vault created by the previous release still opens (note any re-index requirement in the changelog)
 - [ ] Anything found: fix via MR, re-test
 - [ ] Tag the merge commit on `master` (`git tag -a vX.Y.Z -m vX.Y.Z`) and push the tag
