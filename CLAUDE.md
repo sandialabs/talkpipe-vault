@@ -59,7 +59,7 @@ the version), the browser is opened at it and the process exits; if some other
 program holds 8002 and no `--port` was given, the next free port in 8003–8022
 is used and announced; an explicit `--port` that is taken fails before the
 banner. The packaged `apps/static/icon-256.png` and `icon.ico` exist for desktop
-launchers (the TalkPipe App Center uses them).
+launchers.
 
 Routes in `apps/query.py`:
 - `/documents` (+ `/documents/index`): the combined **Vaults & Documents** page — pick the

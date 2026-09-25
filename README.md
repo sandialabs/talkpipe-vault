@@ -67,6 +67,15 @@ pip install talkpipe-vault
 vault-server
 ```
 
+Or, with [uv](https://docs.astral.sh/uv/), install it as a standalone
+command in an environment of its own (`uv tool upgrade talkpipe-vault`
+upgrades it later):
+
+```bash
+uv tool install talkpipe-vault
+vault-server
+```
+
 Your browser opens at http://127.0.0.1:8002 (`--no-browser` skips that). Then:
 
 1. **Vaults & Documents** — pick the folder (or glob pattern) to index. A

@@ -25,8 +25,7 @@
 ### Added
 
 - **Packaged icons.** The package now ships `icon-256.png` and `icon.ico`
-  (cropped from the logo) under `apps/static/`, for desktop launchers such
-  as the ones the TalkPipe App Center creates.
+  (cropped from the logo) under `apps/static/`, for desktop launchers.
 - **Second launch opens the running instance.** Starting `vault-server` —
   or clicking the launcher — while it is already running opens the browser
   at the running server instead of failing on the busy port, using the new

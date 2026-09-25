@@ -344,7 +344,7 @@ def test_port_in_use_detects_a_real_listener():
 
 
 def test_packaged_icons_ship_next_to_the_favicon():
-    """The PNG and ICO are what the TalkPipe App Center uses for the vault's launcher."""
+    """The PNG and ICO ship for desktop launchers of the vault."""
     static = Path(query.__file__).parent / "static"
     assert (static / "favicon.svg").is_file()
     assert (static / "icon-256.png").is_file()
