@@ -1421,13 +1421,17 @@ async def test_saving_a_bare_host_port_completes_the_ollama_url(sample_vault):
         await _settle(pilot)
         app.query_one("#cred-ollama_server_url", Input).value = "ollama.example:11434"
         app.query_one("#credentials-save", Button).press()
+        await _settle(pilot)
+        # Check the toast before waiting out the live probe that Save starts:
+        # it expires after Textual's default five seconds, and the probe can
+        # take longer than that on a slow runner.
+        assert any("Added http://" in str(n.message) for n in app._notifications)
         await _wait_workers(app, pilot)
         creds = {c["key"]: c for c in app.service.settings_view()["credentials"]}
         assert creds["ollama_server_url"]["value"] == "http://ollama.example:11434"
         assert app.query_one("#cred-ollama_server_url", Input).value == (
             "http://ollama.example:11434"
         )
-        assert any("Added http://" in str(n.message) for n in app._notifications)
 
         app.query_one("#cred-ollama_server_url", Input).value = "ftp://ollama.example"
         app.query_one("#credentials-save", Button).press()
