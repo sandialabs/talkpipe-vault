@@ -2,6 +2,8 @@
 
 ## In Development
 
+## 1.0.1 (2026-09-25)
+
 ### Terminal interface
 - `vault-tui` no longer stalls on quit. Every service call (a search, an
   Ask, a settings probe) runs on a pool thread that stays alive, idle, after
