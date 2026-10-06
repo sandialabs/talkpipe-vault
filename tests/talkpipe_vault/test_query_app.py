@@ -330,6 +330,20 @@ def test_refresh_agent_pipelines_clears_both_on_a_bad_model(monkeypatch):
     assert query._state.agent_chat_pipeline is None
 
 
+def test_health_identifies_the_app_without_a_vault():
+    """A second launch (or a desktop launcher) checks this to tell a running
+    vault from anything else on the port; it must work before any vault is
+    opened, so it cannot redirect to the vault manager like the pages do."""
+    from talkpipe_vault import DIST_NAME, __version__
+
+    client = TestClient(query.app)
+
+    response = client.get("/api/health")
+
+    assert response.status_code == 200
+    assert response.json() == {"app": DIST_NAME, "version": __version__}
+
+
 def test_keyword_search_page_is_disabled_without_whoosh():
     """Keyword search UI should be disabled when no Whoosh index is available."""
     client = TestClient(query.app)
@@ -588,6 +602,52 @@ def test_save_credentials_clear_checkbox_removes_key(monkeypatch):
 
     assert "openai_api_key" not in credentials.load()
     assert "OPENAI_API_KEY" not in os.environ
+    credentials._managed_env.clear()
+
+
+def test_save_credentials_completes_bare_host_port(monkeypatch):
+    """A bare host:port is stored with http://, as in the terminal interface."""
+    from talkpipe_vault.apps import credentials
+
+    monkeypatch.delenv("TALKPIPE_OLLAMA_SERVER_URL", raising=False)
+    credentials._managed_env.clear()
+    monkeypatch.setattr(query, "_refresh_pipelines", lambda force=False: None)
+    client = TestClient(query.app)
+
+    response = client.post(
+        "/settings/credentials",
+        data={"ollama_server_url": "ollama.example:11434"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert credentials.load()["ollama_server_url"] == "http://ollama.example:11434"
+    assert os.environ["TALKPIPE_OLLAMA_SERVER_URL"] == "http://ollama.example:11434"
+    assert "Added+http" in response.headers["location"]
+    credentials._managed_env.clear()
+
+
+def test_save_credentials_refuses_unusable_url(monkeypatch):
+    """A URL with an unsupported scheme is refused at the field, not stored."""
+    from talkpipe_vault.apps import credentials
+
+    monkeypatch.delenv("TALKPIPE_OLLAMA_SERVER_URL", raising=False)
+    credentials._managed_env.clear()
+    monkeypatch.setattr(query, "_refresh_pipelines", lambda force=False: None)
+    client = TestClient(query.app)
+
+    response = client.post(
+        "/settings/credentials",
+        data={"ollama_server_url": "ftp://ollama.example:11434"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    location = response.headers["location"]
+    assert "error=" in location
+    assert "Ollama+server+URL" in location
+    assert "ollama_server_url" not in credentials.load()
+    assert "TALKPIPE_OLLAMA_SERVER_URL" not in os.environ
     credentials._managed_env.clear()
 
 
@@ -1115,6 +1175,47 @@ def test_semantic_search_omits_zero_score_badge(monkeypatch):
     assert "Score:" not in response.text
 
 
+def test_semantic_search_page_shows_its_own_result_limit(monkeypatch):
+    """The Search page shows DEFAULT_SEARCH_RESULT_LIMIT matches, not more.
+
+    The count is the application's, not the vector store's default and not the
+    configurable Ask/keyword count, so a page that renders more rows than the
+    constant means the limit slipped out of this application's hands again.
+    """
+    query._state.rag_result_limit = 3
+    query._state.search_pipeline = lambda _query: [
+        {
+            "_doc_id": f"row-{index}",
+            "source": f"/docs/note-{index}.txt",
+            "title": f"note-{index}.txt",
+            "content": f"semantic result {index}",
+        }
+        for index in range(query.DEFAULT_SEARCH_RESULT_LIMIT + 5)
+    ]
+    monkeypatch.setattr(query, "_refresh_pipelines", lambda: None)
+    monkeypatch.setattr(query, "_update_document_counts", lambda vault_path: None)
+    client = TestClient(query.app)
+
+    response = client.post("/search", data={"query": "semantic"})
+
+    assert response.status_code == 200
+    assert f"Found {query.DEFAULT_SEARCH_RESULT_LIMIT} result(s)" in response.text
+    assert f"semantic result {query.DEFAULT_SEARCH_RESULT_LIMIT - 1}" in response.text
+    assert f"semantic result {query.DEFAULT_SEARCH_RESULT_LIMIT}" not in response.text
+
+
+def test_settings_result_count_hint_does_not_claim_semantic_search(monkeypatch):
+    """The Ask/keyword count does not govern Semantic Search; don't say it does."""
+    client = TestClient(query.app)
+
+    response = client.get("/settings")
+
+    assert response.status_code == 200
+    assert "Ask &amp; Keyword Result Count" in response.text
+    assert "Semantic Search is not affected" in response.text
+    assert f"top {query.DEFAULT_SEARCH_RESULT_LIMIT} matches" in response.text
+
+
 def test_semantic_search_results_match_keyword_result_display(monkeypatch):
     """Semantic results should render source path, snippet, and score like keyword results."""
     query._state.show_source_paths = True
@@ -1433,17 +1534,23 @@ def _chat_error_response(monkeypatch, exc: Exception) -> str:
 
 
 def test_chat_ollama_connection_error_points_at_settings(monkeypatch):
-    """Ollama connection failures should mention the in-app Settings fix."""
+    """Ollama connection failures should lead with the in-app Settings fix.
+
+    The provider's own message opens with environment variables and a config
+    file; the Settings page needs nothing outside the app, so it must be
+    offered as the fix rather than as a trailing tip.
+    """
     body = _chat_error_response(
         monkeypatch,
         RuntimeError("Failed to connect to Ollama at 'http://localhost:11434'."),
     )
-    assert "set the Ollama server URL in this app" in body
-    assert "Settings &gt; Connections &amp; credentials" in body
+    assert "you can set the Ollama server URL on the Settings page" in body
+    assert "Connections &amp; credentials" in body
+    assert "no environment variable needed" in body
 
 
 def test_chat_missing_openai_key_error_points_at_settings(monkeypatch):
-    """Missing OpenAI credentials should mention the in-app Settings fix."""
+    """Missing OpenAI credentials should lead with the in-app Settings fix."""
     body = _chat_error_response(
         monkeypatch,
         RuntimeError(
@@ -1451,12 +1558,13 @@ def test_chat_missing_openai_key_error_points_at_settings(monkeypatch):
             "Set the OPENAI_API_KEY environment variable."
         ),
     )
-    assert "enter the API key in this app" in body
-    assert "Settings &gt; Connections &amp; credentials" in body
+    assert "you can enter the API key on the Settings page" in body
+    assert "Connections &amp; credentials" in body
+    assert "no environment variable needed" in body
 
 
 def test_chat_missing_anthropic_key_error_points_at_settings(monkeypatch):
-    """Missing Anthropic credentials should mention the in-app Settings fix."""
+    """Missing Anthropic credentials should lead with the in-app Settings fix."""
     body = _chat_error_response(
         monkeypatch,
         RuntimeError(
@@ -1464,7 +1572,8 @@ def test_chat_missing_anthropic_key_error_points_at_settings(monkeypatch):
             "Set the ANTHROPIC_API_KEY environment variable."
         ),
     )
-    assert "enter the API key in this app" in body
+    assert "you can enter the API key on the Settings page" in body
+    assert "no environment variable needed" in body
 
 
 def test_vault_text_search_default_limit_returns_all_whoosh_results(
@@ -1788,6 +1897,25 @@ def test_open_file_route_requires_vault():
     response = client.get("/open-file", params={"path": "row-uuid"})
 
     assert response.status_code == 400
+
+
+def test_first_run_redirect_is_not_an_error():
+    """With no vault, the landing hint is a status message, not a red alert.
+
+    It is the first thing a new user sees and nothing has failed, so it must
+    not arrive as error= (which renders in the danger style, role="alert").
+    """
+    query._state.vault_path = ""
+    client = TestClient(query.app)
+
+    for path in ("/", "/search", "/keyword-search", "/chat"):
+        response = client.get(path, follow_redirects=False)
+
+        assert response.status_code == 303
+        location = response.headers["location"]
+        assert location.startswith("/documents?")
+        assert "message=Choose+the+documents" in location
+        assert "error=" not in location
 
 
 def test_indexed_source_paths_reads_references_from_docs_rows(monkeypatch):

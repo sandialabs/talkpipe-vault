@@ -31,7 +31,8 @@ three ways:
 Everything runs locally by default. The built-in embedding model (model2vec)
 runs in-process with no server or API key; generated answers can come from
 any LLM provider TalkPipe supports — a local [Ollama](https://ollama.com/)
-server, OpenAI, Anthropic — and TalkPipe plugins can add others. Your
+server, OpenAI, or Anthropic — and TalkPipe plugins can add others. Ollama
+is one option, not a requirement: see [LLM providers](#llm-providers). Your
 documents are only ever sent to the provider you choose.
 
 It is built on the [TalkPipe](https://github.com/sandialabs/talkpipe)
@@ -39,10 +40,18 @@ pipeline framework and doubles as a real-world example of composing document
 processing, vector search, and RAG from reusable components — see the
 [Advanced Guide](docs/ADVANCED.md) if that side interests you.
 
-**Status:** alpha, under active development. The PyPI release can lag this
-README — if something described here is missing from a `pip install`,
-install from source ([Development setup](docs/ADVANCED.md#development-setup))
-to get the documented behavior.
+**Status:** alpha, under active development. This page is the `master` branch,
+which runs ahead of the PyPI release — if something described here is missing
+from a `pip install`, install the development branch to get the documented
+behavior:
+
+```bash
+pip install "git+https://github.com/sandialabs/talkpipe-vault.git@master"
+```
+
+The `@master` matters: the repository's default branch is the release-only
+`stable`, so a plain `git+https://…` URL installs the same code as PyPI. See
+[Development setup](docs/ADVANCED.md#development-setup) for a full clone.
 
 ## Run the web app
 
@@ -58,23 +67,36 @@ pip install talkpipe-vault
 vault-server
 ```
 
-Open http://127.0.0.1:8002, then:
+Or, with [uv](https://docs.astral.sh/uv/), install it as a standalone
+command in an environment of its own (`uv tool upgrade talkpipe-vault`
+upgrades it later):
+
+```bash
+uv tool install talkpipe-vault
+vault-server
+```
+
+Your browser opens at http://127.0.0.1:8002 (`--no-browser` skips that). Then:
 
 1. **Vaults & Documents** — pick the folder (or glob pattern) to index. A
-   vault name is suggested for you; one click creates the vault and indexes
-   into it. The first index downloads the default embedding model from
-   Hugging Face (about 250 MB on disk, cached afterward).
-2. **Search** and **Ask** away.
+   vault name is suggested for you (under your home directory); one click
+   creates the vault and indexes into it. The first index downloads the
+   default embedding model from Hugging Face (about 250 MB on disk, cached
+   afterward).
+2. **Semantic Search** and **Ask** away.
+3. **Keyword Search** works once you build its index: that page starts
+   disabled and offers a **Create Full-Text Index** button, which builds a
+   separate full-text index from the documents already in the vault. It is a
+   one-off, but indexing more documents later does not refresh it — rebuild
+   it from the same page when you do.
 
-Answers on the Ask page need a chat provider — any one that TalkPipe
-supports. Pick it on the **Settings** page: a local Ollama server (the
-default setting; enter its URL under **Connections & credentials**), or
-OpenAI or Anthropic (enter an API key there — no environment variables
-needed). The default setting is Ollama, so until a reachable provider is
-configured, Ask shows a connection error that explains how to fix it. To
-try the Ask page without any provider, select the built-in scripted
-responder (**eliza**) as the chat source on the Settings page — it needs
-no server or key but is only useful for checking that the plumbing works.
+Search and indexing need nothing more. Answers on the Ask page need a chat
+provider — Ollama, OpenAI, or Anthropic. Pick it on the **Settings** page
+and enter its server URL or API key under **Connections & credentials**
+there (no environment variables needed); [LLM providers](#llm-providers)
+has the details. The chat setting starts out as Ollama at
+`http://localhost:11434`, so until a reachable provider is configured, Ask
+shows a connection error that explains how to fix it.
 
 ### Option 2: Container (Podman or Docker)
 
@@ -101,11 +123,14 @@ What each piece does:
   home directory. Keep `:Z` on SELinux Linux hosts (e.g. Fedora); **drop it
   on macOS and Windows**, where it makes podman try to relabel every mounted
   file.
-- The `TALKPIPE_OLLAMA_SERVER_URL` line is **optional** and only matters if
-  you use the default Ollama chat setting — drop it if you configure OpenAI
-  or Anthropic in the browser instead. Without any provider, search and
-  indexing still work; for Ask, either configure a provider or select the
-  scripted **eliza** responder on the Settings page.
+- `-e TALKPIPE_OLLAMA_SERVER_URL=…` — **optional**, and only for Ollama (the
+  default chat setting) running on the container host. Using OpenAI or
+  Anthropic instead? Drop the line, select the provider on the Settings page
+  and enter its API key under **Connections & credentials** — both are saved
+  in the data volume. Environment variables work too — for example
+  `-e TALKPIPE_CHAT_SOURCE=anthropic`, `-e TALKPIPE_CHAT_MODEL=<model>` and
+  `-e ANTHROPIC_API_KEY=…`; see [LLM providers](#llm-providers). Search and
+  indexing work without any chat provider.
 
 **macOS/Windows notes:** containers run inside the podman machine VM
 (Podman Desktop sets this up). In PowerShell, replace the `\` line
@@ -129,18 +154,9 @@ A compose service and instructions for deriving your own customized image
 
 Everything above is also available without a browser — in an SSH session, a
 tmux window, or on a headless machine — through `vault-tui` (the **Use Agent**
-options on Search and Ask included), installed
-alongside `vault-server`. It is new and not yet in a PyPI release, so install
-it from source — either straight from the repository:
-
-```bash
-python -m venv .venv
-source .venv/bin/activate      # Windows: .venv\Scripts\activate
-pip install "git+https://github.com/sandialabs/talkpipe-vault.git"
-```
-
-or from a clone with `pip install .` (contributors use the editable
-`pip install -e ".[dev]"` in [Development setup](docs/ADVANCED.md#development-setup)).
+options on Search and Ask included). It is installed
+by the same `pip install talkpipe-vault` (or container image) as
+`vault-server`; there is nothing extra to install.
 
 ```bash
 vault-tui ~/my-vault      # open (or create) a vault — the index folder, not your documents
@@ -178,17 +194,22 @@ confine where vaults and documents may live for both interfaces — see
 [Confining paths on a shared machine](docs/ADVANCED.md#confining-paths-on-a-shared-machine).
 Long operations (embedding, Ask, indexing) run in the background and report
 progress in the tab that started them. As in the browser, Ask needs a chat
-provider: enter the Ollama URL or an API key under **Connections &
-credentials** on the Settings tab (`F6`) — it is the last field on the tab,
-and one `Shift+Tab` from the top (the Re-test button `F6` lands on) jumps
-straight to it; `PageUp`/`PageDown` scroll the tab — and press **Save
-connection settings**, which re-tests the configuration by itself. A bare
+provider (Ollama, OpenAI, or Anthropic — see [LLM providers](#llm-providers)):
+choose it under **Model settings** on the Settings tab (`F6`), then enter
+its API key or server URL under **Connections & credentials** — the last
+section on the tab (one `Shift+Tab` from the top, the Re-test button `F6`
+lands on, jumps straight to its last field, the Ollama URL;
+`PageUp`/`PageDown` scroll the tab) — and press **Save connection
+settings**, which re-tests the configuration by itself. A bare
 `host:11434` is completed to `http://host:11434` when saved. Alternatively
-export `TALKPIPE_OLLAMA_SERVER_URL` before starting — but a URL saved on the
-Settings tab takes precedence over the variable, so clear the field to go
-back to it (the configuration status names which one is in effect). The
-OpenAI base URL field points the OpenAI provider at any OpenAI-compatible
-endpoint — see [Provider notes](docs/ADVANCED.md#provider-notes). While an
+export the provider's variable (`TALKPIPE_OLLAMA_SERVER_URL`,
+`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`) before starting — but a value saved
+on the Settings tab takes precedence over the variable, so clear the URL
+field (or tick **Clear the saved key**) to go back to it; the configuration
+status names which one is in effect.
+The OpenAI base URL field points the OpenAI provider at any
+OpenAI-compatible endpoint — see
+[Provider notes](docs/ADVANCED.md#provider-notes). While an
 answer is being generated, `Esc` stops waiting for it. "Index
 documents" adds to the open vault — tick **Overwrite existing index** to
 replace it; re-indexing the same folder without it duplicates every chunk
@@ -221,10 +242,12 @@ script syntax is in the Advanced Guide under
   section bounds how much one agent run may collect), with a live
   **Configuration status** panel that tests your selection (and can download
   an uncached embedding model via Re-test), plus **Connections &
-  credentials** for API keys and the Ollama URL — no environment variables
-  required.
-- **Semantic Search** — vector similarity search over your documents. A
-  **Let an agent select the results** checkbox hands the search to an agent
+  credentials** for the OpenAI and Anthropic API keys and the Ollama and
+  OpenAI-compatible server URLs — no environment variables required. See
+  [LLM providers](#llm-providers).
+- **Semantic Search** — vector similarity search over your documents. The
+  closest ten chunks are always returned, so on a small vault every chunk
+  comes back and the last few are weak matches. A **Let an agent select the results** checkbox hands the search to an agent
   instead: it runs semantic and keyword searches as tools, reads what comes
   back, keeps the relevant chunks and discards the rest, and rewrites its
   queries from what it learns (it can also ask the model to turn a question
@@ -238,9 +261,12 @@ script syntax is in the Advanced Guide under
   tool calling. To use the agent's tools in your own application, or over
   your own search backend, see the
   [agent retrieval developer's guide](docs/AGENT_RETRIEVAL.md).
-- **Keyword Search** — boolean and phrase queries. Matching is
-  case-insensitive but on exact word tokens (`apple` won't match `apples`);
-  use semantic search for meaning-based lookups.
+- **Keyword Search** — boolean and phrase queries, over a separate full-text
+  index you build once with the button on that page (the page says so, and
+  stays disabled until you do). Indexing documents never updates it, so
+  rebuild it there after adding more. Matching is case-insensitive but on
+  exact word tokens (`apple` won't match `apples`), and very common words are
+  not indexed; use semantic search for meaning-based lookups.
 - **Ask** — single-turn Q&A with source citations you can open and copy.
   Once a full-text index exists, a **Boost retrieval with keyword search**
   checkbox appears: the chat model distills your question into index
@@ -264,26 +290,66 @@ HTTP, this works the same when the server runs in a container (where your
 documents live at a container-side mount path the browser can't reach
 directly).
 
-## Configuring models
+## LLM providers
 
-The Settings page is the primary way to configure models; choices persist
-and apply immediately. The defaults are just starting points — embeddings:
-`model2vec` / `minishlab/potion-retrieval-32M` (in-process, no key or
-server); chat: `ollama` / `mistral-small` — and both dropdowns list every
-provider registered with TalkPipe: model2vec, Ollama, OpenAI, and Anthropic
-out of the box, plus any provider added by an installed TalkPipe plugin,
-which appears there automatically. API keys are entered in the browser, not
-the environment.
+TalkPipe Vault is not tied to Ollama. It uses two models — one for
+**embeddings** (indexing and semantic search) and one for **chat** (Ask
+answers) — and each can come from any provider registered with TalkPipe
+that supports that role. Out of the box:
 
-One behavior worth knowing: the embedding model is a property of the indexed
-data — embeddings are only comparable to queries embedded by the same model —
-so each vault records the embedder it was built with and reopens with it,
-regardless of the current default. Chat models can be switched freely at any
-time.
+| Provider | Embeddings | Chat | What it needs |
+|----------|------------|------|---------------|
+| `model2vec` | yes — **default** (`minishlab/potion-retrieval-32M`) | — | Nothing: runs in-process; the model downloads from Hugging Face once |
+| `ollama` | yes | yes — **default** (`mistral-small`) | A reachable Ollama server (default `http://localhost:11434`) with the model pulled |
+| `openai` | yes | yes | An API key; optionally a base URL for any OpenAI-compatible endpoint |
+| `anthropic` | — | yes | An API key |
+| `eliza` | — | plumbing check only | Nothing — see below |
 
-Configuration is also possible via `~/.talkpipe.toml` or `TALKPIPE_*`
-environment variables; the full reference (precedence, all keys, templates,
-provider notes) is in the [Advanced Guide](docs/ADVANCED.md#model-configuration).
+Any provider a TalkPipe plugin registers appears alongside these
+automatically; TalkPipe's
+[supported sources](https://github.com/sandialabs/talkpipe/blob/stable/docs/guides/model-and-source-configuration.md#supported-sources)
+has the library's full list.
+
+**Choosing.** Pick the source and model for each role on the **Settings**
+page (the Settings tab, `F6`, in `vault-tui`); choices persist and apply
+immediately, and the **Configuration status** panel tests whatever is
+selected. Only the providers you select need to be set up — the default
+combination needs just an Ollama server, and search and indexing need no
+chat provider at all. `TALKPIPE_EMBEDDING_SOURCE`/`TALKPIPE_EMBEDDING_MODEL`
+and `TALKPIPE_CHAT_SOURCE`/`TALKPIPE_CHAT_MODEL` (or `embedding_source`,
+`chat_model`, … in `~/.talkpipe.toml`) replace the defaults above; a choice
+saved on the Settings page overrides them.
+
+**Credentials.** Enter keys and URLs under **Settings → Connections &
+credentials** — no environment variables needed — or supply them through
+the environment:
+
+| Setting | Environment variable |
+|---------|----------------------|
+| OpenAI API key | `OPENAI_API_KEY` |
+| OpenAI base URL (optional) | `OPENAI_BASE_URL` |
+| Anthropic API key | `ANTHROPIC_API_KEY` |
+| Ollama server URL | `TALKPIPE_OLLAMA_SERVER_URL` |
+
+Values saved on the Settings page are stored in `credentials.json` under
+`TALKPIPE_VAULT_HOME` (default `~/.talkpipe-vault`, owner-only permissions),
+apply only to the vault process, and take precedence over the environment
+variable; clear a field to fall back to the variable.
+
+**eliza is not a model.** It is a built-in scripted responder whose
+replies do not draw on your documents. Select it only to check that the Ask
+page works end to end before a real provider is set up — its replies say
+nothing about answer quality.
+
+**The embedding model belongs to the vault.** Embeddings are only comparable
+to queries embedded by the same model, so each vault records the embedder it
+was built with and reopens with it, regardless of the current setting;
+switching embedders means re-indexing. Chat models can be switched freely at
+any time.
+
+The full reference — precedence, every configuration key, templates, and
+per-provider notes — is in the
+[Advanced Guide](docs/ADVANCED.md#model-configuration).
 
 ## More documentation
 
@@ -302,8 +368,10 @@ The [Advanced Guide](docs/ADVANCED.md) covers:
 ## Requirements
 
 - **Python** 3.11.4+ (pip install path)
-- **Ollama** (optional) for local chat answers; **OpenAI/Anthropic API key**
-  (optional) for cloud models. Embeddings work out of the box with neither.
+- **A chat provider** for Ask answers — any one of a local Ollama server, an
+  OpenAI API key (or OpenAI-compatible endpoint), or an Anthropic API key;
+  see [LLM providers](#llm-providers). Nothing else is needed: embeddings
+  work out of the box, and indexing and search need no chat provider.
 
 ## Contributing
 
@@ -314,6 +382,12 @@ most; `pre-commit install` runs them on every commit). See
 [Development setup](docs/ADVANCED.md#development-setup).
 
 ### Development environment
+
+The default branch, `stable`, is release-only: it points at the latest
+release, so what you see on the repository's front page describes that
+release. Development happens on `master`, which is where merge requests go
+and where unreleased changes and their documentation accumulate — check it
+out first (`git checkout master` after cloning).
 
 Local development uses [uv](https://docs.astral.sh/uv/) against the committed
 `uv.lock`, so contributors share one reproducible set of versions:
@@ -345,6 +419,12 @@ release yet. Its wheel is served from the self-hosted Gitea's PyPI registry:
 only `talkpipe-agents` resolves from it), and CI's pip reaches it through the
 `PIP_EXTRA_INDEX_URL` / `PIP_TRUSTED_HOST` repository variables. Remove the
 index, the source entry, and the variables once the first release is out.
+
+## Releasing
+
+The release process — tag conventions, the manual application test that
+must pass before tagging, and the publish steps — is in
+[RELEASING.md](RELEASING.md).
 
 ## License
 

@@ -1,4 +1,6 @@
-# Git files (keep .git for setuptools-scm, but ignore other git files)
+# Git files. The version comes from the APP_VERSION build arg (see
+# Containerfile), not from .git.
+.git
 .gitignore
 
 # Python cache and virtual environments

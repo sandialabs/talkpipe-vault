@@ -289,7 +289,10 @@ def _check_provider(
     if normalized == "eliza":
         base["status"] = "ok"
         base["summary"] = (
-            "Eliza is a built-in rule-based responder — no external service or key."
+            "Eliza is a built-in scripted responder for checking that Ask works "
+            "— it does not use your documents, so its replies are not real "
+            "answers. Choose a model provider (e.g. ollama, openai, anthropic) "
+            "for those."
         )
         return base
 

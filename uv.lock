@@ -3932,6 +3932,7 @@ dependencies = [
 
 [package.optional-dependencies]
 dev = [
+    { name = "authlib" },
     { name = "bandit" },
     { name = "httpx" },
     { name = "mypy" },
@@ -3944,6 +3945,7 @@ dev = [
     { name = "safety" },
 ]
 security = [
+    { name = "authlib" },
     { name = "bandit" },
     { name = "safety" },
 ]
@@ -3957,6 +3959,8 @@ test = [
 
 [package.metadata]
 requires-dist = [
+    { name = "authlib", marker = "extra == 'dev'", specifier = "<1.8" },
+    { name = "authlib", marker = "extra == 'security'", specifier = "<1.8" },
     { name = "bandit", marker = "extra == 'dev'", specifier = ">=1.7.7" },
     { name = "bandit", marker = "extra == 'security'", specifier = ">=1.7.7" },
     { name = "fastapi", extras = ["standard"], specifier = ">=0.109.1" },
@@ -3974,8 +3978,8 @@ requires-dist = [
     { name = "pytest-mock", marker = "extra == 'dev'", specifier = ">=3.10.0" },
     { name = "pytest-mock", marker = "extra == 'test'", specifier = ">=3.10.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.16.3,<0.17" },
-    { name = "safety", marker = "extra == 'dev'", specifier = ">=2.3.0" },
-    { name = "safety", marker = "extra == 'security'", specifier = ">=2.3.0" },
+    { name = "safety", marker = "extra == 'dev'", specifier = ">=3.8.1" },
+    { name = "safety", marker = "extra == 'security'", specifier = ">=3.8.1" },
     { name = "talkpipe", extras = ["all"], specifier = ">=1.0.0b5" },
     { name = "talkpipe-agents", specifier = ">=0.0.1a2", index = "http://<server>/api/packages/travis/pypi/simple" },
     { name = "textual", specifier = ">=8.0.0" },

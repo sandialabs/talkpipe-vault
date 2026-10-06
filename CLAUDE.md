@@ -37,11 +37,11 @@ src/talkpipe_vault/
 ├── watchdog.py                 # File system monitoring (fileWatcher source)
 ├── apps/
 │   ├── query.py                # FastAPI web application (all routes + run_app)
-│   ├── vault_server.py         # vault-server CLI entry point
+│   ├── vault_server.py         # vault-server CLI entry point (port choice)
 │   ├── user_settings.py        # Persisted UI settings (recent vaults, model overrides)
 │   ├── templates/              # Jinja2 templates (base, home, documents,
 │   │                           #   settings, search, keyword_search, chat, partials)
-│   └── static/                 # favicon.svg, logo.jpg
+│   └── static/                 # favicon.svg, logo.jpg, icon-256.png + icon.ico (launcher)
 ├── tui/
 │   ├── app.py                  # Textual terminal interface (vault-tui): tabs, dialogs, bindings
 │   ├── app.tcss                # Its stylesheet
@@ -57,9 +57,17 @@ src/talkpipe_vault/
 
 ## The Web Application (primary user path)
 
-`vault-server [vault_path] [--resume] [--host] [--port] [--show-source-paths]` —
+`vault-server [vault_path] [--resume] [--host] [--port] [--show-source-paths] [--no-browser]` —
 `--resume` opens the most recently used vault (fallback: vault_path); the vault path is
 optional; without it the UI starts on the Vaults & Documents page.
+
+Startup (`apps/vault_server.py`): if a vault already serves the port (checked
+through the unauthenticated `GET /api/health`, which reports `DIST_NAME` and
+the version), the browser is opened at it and the process exits; if some other
+program holds 8002 and no `--port` was given, the next free port in 8003–8022
+is used and announced; an explicit `--port` that is taken fails before the
+banner. The packaged `apps/static/icon-256.png` and `icon.ico` exist for desktop
+launchers.
 
 Routes in `apps/query.py`:
 - `/documents` (+ `/documents/index`): the combined **Vaults & Documents** page — pick the
@@ -110,6 +118,17 @@ goes through `_plain_text_as_markdown` so it appears verbatim.
    `default_embedding_model_name`/`default_model_name` style keys)
 4. Defaults in `pipelines/config.py`: model2vec/minishlab/potion-retrieval-32M (embeddings, in-process),
    ollama/mistral-small (chat)
+
+**Providers are whatever TalkPipe registers** — nothing here is Ollama-specific. The
+Settings page/tab dropdowns are `getEmbeddingSources()` / `getPromptSources()`, i.e.
+`model2vec`, `ollama`, `openai` for embeddings and `ollama`, `openai`, `anthropic`,
+`eliza` for chat, plus anything an installed plugin registers; `pipelines/diagnostics.py`
+has a tailored check per provider and probes unrecognized ones by using them.
+`apps/credentials.py` persists `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `ANTHROPIC_API_KEY`
+and `TALKPIPE_OLLAMA_SERVER_URL` into the process environment (stored values win over
+pre-existing ones). `eliza` is a scripted responder, not a model — plumbing checks only.
+User-facing docs: README "LLM providers" is the authoritative section; `docs/ADVANCED.md`
+"Provider notes" the reference.
 
 Ollama server URL comes from `TALKPIPE_OLLAMA_SERVER_URL` (or `OLLAMA_SERVER_URL` in
 `~/.talkpipe.toml`) — not `OLLAMA_BASE_URL`, which is meaningless to TalkPipe.
@@ -295,7 +314,7 @@ Test notes:
 ## Container
 
 ```bash
-podman build -t talkpipe-vault -f Containerfile .
+podman build --build-arg APP_VERSION="$(python3 -m setuptools_scm)" -t talkpipe-vault -f Containerfile .
 podman run --rm -p 8002:8002 --userns=keep-id \
     -v <host-data-dir>:/app/data:Z -v <host-docs-dir>:/documents:ro,Z \
     -e TALKPIPE_OLLAMA_SERVER_URL=http://host.containers.internal:11434 \
@@ -343,5 +362,8 @@ GitHub Actions (`.github/workflows/ci-cd.yml`), analogous to TalkPipe's pipeline
 
 - `pyproject.toml`: package config, entry points, tool settings
 - `Containerfile` / `docker-compose.yml`: container image and services
-- `.env.example`: example container environment (uses `TALKPIPE_OLLAMA_SERVER_URL`)
+- `.env.example`: example container environment (model/provider settings and
+  credentials; compose passes a service only the variables it names under
+  `environment:`, so configuring a provider that way under compose means
+  adding it there — the Settings page needs no environment variables)
 - `.github/workflows/ci-cd.yml`: CI/CD pipeline
