@@ -2,6 +2,11 @@
 
 ## In Development
 
+### CI
+- Dependabot version-update PRs target `master` instead of the default
+  branch `stable`, which only ever points at a release. Security alerts
+  still come from `stable`, so they reflect what is released.
+
 ## 1.0.1 (2026-09-25)
 
 ### Terminal interface
