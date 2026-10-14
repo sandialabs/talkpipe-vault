@@ -2,6 +2,11 @@
 
 ## In Development
 
+### CI
+- The `dev` extra moves ruff to the 0.17 series (`>=0.17.0,<0.18`), with
+  the ruff-pre-commit hook on v0.17.0 to match. The code needed no changes
+  for the new release's rules or formatting.
+
 ## 1.0.2 (2026-10-13)
 
 ### Security
