@@ -2,6 +2,8 @@
 
 ## In Development
 
+## 1.0.2 (2026-10-13)
+
 ### Security
 - Require talkpipe 1.1.0 or later, which brings pymongo 4.18.2 and pypdf
   6.19.0 or later (crafted-PDF runtime and memory exhaustion advisories).
