@@ -2,10 +2,28 @@
 
 ## In Development
 
+### Security
+- Require talkpipe 1.1.0 or later, which brings pymongo 4.18.2 and pypdf
+  6.19.0 or later (crafted-PDF runtime and memory exhaustion advisories).
+- Add security floors for transitive dependencies: urllib3 2.8.0 (via
+  requests and other HTTP clients; proxy TLS and chunked-response
+  advisories) and, in the `dev` extra, virtualenv 21.7.13 (via pre-commit;
+  activation script and seed wheel advisories).
+
 ### CI
+- The `dev` extra pins ruff to the 0.16 series again (`<0.17`), in step with
+  the ruff-pre-commit hook; a dependency update had widened it to `<0.18`.
 - Dependabot version-update PRs target `master` instead of the default
   branch `stable`, which only ever points at a release. Security alerts
   still come from `stable`, so they reflect what is released.
+- The security scanners run from a virtual environment of their own, and
+  the dependency scan is given the packages installed in the project's
+  environment. An advisory against one of the scanners' own dependencies
+  (`nltk`, which `safety` requires and vault does not) no longer fails the
+  build with nothing in the project to fix; the scan still fails on any
+  finding in what the project installs.
+- Steps that only work on GitHub (CodeQL, the container push, artifact
+  uploads, PyPI publishing) are skipped when the workflow runs elsewhere.
 
 ## 1.0.1 (2026-09-25)
 
