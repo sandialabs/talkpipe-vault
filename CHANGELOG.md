@@ -23,6 +23,10 @@
   activation script and seed wheel advisories).
 
 ### CI
+- All CodeQL steps use the same `github/codeql-action` release again
+  (4.38.3). Two dependency updates had left the `init` step one release
+  behind the others, and CodeQL refuses to run with mismatched versions.
+  Dependabot now updates the CodeQL steps together, in one PR.
 - The `dev` extra pins ruff to the 0.16 series again (`<0.17`), in step with
   the ruff-pre-commit hook; a dependency update had widened it to `<0.18`.
 - Dependabot version-update PRs target `master` instead of the default

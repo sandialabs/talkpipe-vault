@@ -49,3 +49,9 @@ updates:
     commit-message:
       prefix: "ci"
       include: "scope"
+    # CodeQL refuses to run when its steps are on different versions, so
+    # update all github/codeql-action steps in one PR.
+    groups:
+      codeql-action:
+        patterns:
+          - "github/codeql-action*"
