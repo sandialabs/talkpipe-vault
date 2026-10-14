@@ -5,6 +5,16 @@
 ## 1.0.2 (2026-10-13)
 
 ### Security
+- **HTML in an indexed document no longer runs in the browser.** Search and
+  Keyword Search highlighted the query terms in each result by writing the
+  snippet's text back as HTML, so markup inside a document became live in
+  the results page — an `<img onerror=…>` in a text file ran its script
+  when the file came up in a search. Highlighting now builds the snippet
+  from text, and markup in a document shows as the text it is.
+- **Ask answers no longer render raw HTML.** An answer is model output and
+  can repeat text from the vault's documents; its Markdown is still
+  rendered, but HTML in it is shown as text and `javascript:` (and similar)
+  links are dropped instead of becoming clickable.
 - Require talkpipe 1.1.0 or later, which brings pymongo 4.18.2 and pypdf
   6.19.0 or later (crafted-PDF runtime and memory exhaustion advisories).
 - Add security floors for transitive dependencies: urllib3 2.8.0 (via
