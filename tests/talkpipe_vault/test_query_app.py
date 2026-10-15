@@ -1778,6 +1778,40 @@ def test_keyword_search_results_include_open_file_link(monkeypatch):
     assert "/original/source.pdf" not in response.text
 
 
+def test_search_highlighting_never_parses_snippet_text_as_html():
+    """Snippets are document text: highlighting must not turn it into markup.
+
+    Writing the snippet's text back through innerHTML made any HTML inside an
+    indexed document live in the results page (an <img onerror=...> ran).
+    """
+    client = TestClient(query.app)
+
+    for path in ("/search", "/keyword-search"):
+        response = client.get(path)
+
+        assert response.status_code == 200
+        assert "snippet.innerHTML" not in response.text
+        assert "snippet.replaceChildren(" in response.text
+
+
+def test_chat_answer_rendering_escapes_raw_html():
+    """Answers are model output that can echo document text: no raw HTML.
+
+    marked passes raw HTML through by default, and the answer is inserted with
+    innerHTML, so the page overrides marked's html and link renderers.
+    """
+    client = TestClient(query.app)
+
+    response = client.get("/chat")
+
+    assert response.status_code == 200
+    assert "marked.use(" in response.text
+    assert "html: function (token) { return escapeHtml(token.text); }" in (
+        response.text
+    )
+    assert "javascript|vbscript|data" in response.text
+
+
 def test_chat_page_offers_open_file_link():
     """Ask citations should link to the source document via /open-file."""
     client = TestClient(query.app)

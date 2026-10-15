@@ -174,9 +174,19 @@ document.addEventListener('DOMContentLoaded', function() {
             return;
         }
         const pattern = new RegExp('(' + normalizedTerms.map(escapeRegExp).join('|') + ')', 'gi');
+        // Snippets are document text, so build the highlight from text nodes:
+        // going through innerHTML would run any HTML the document contains.
+        // split() with one capture group puts the matches at the odd indexes.
         document.querySelectorAll('.snippet').forEach(function(snippet) {
-            const text = snippet.textContent;
-            snippet.innerHTML = text.replace(pattern, '<mark>$1</mark>');
+            const parts = snippet.textContent.split(pattern);
+            snippet.replaceChildren(...parts.map(function(part, index) {
+                if (index % 2 === 0) {
+                    return document.createTextNode(part);
+                }
+                const mark = document.createElement('mark');
+                mark.textContent = part;
+                return mark;
+            }));
         });
     }
 

@@ -22,6 +22,50 @@
 - Every tool call and decision is printed to the server console as it happens and listed under the results in a collapsible "Agent tool calls" panel, and the results note says how the run ended and how many chunks were kept and ignored. The option is hidden when the chat model cannot be set up as an agent model; plain search is unaffected.
 - Added the `vaultAgentSearch` segment (`pipelines/agent_search.py`), which exposes the same loop to TalkPipe pipelines and yields the kept chunks with the trace.
 
+### CI
+- The `dev` extra moves ruff to the 0.17 series (`>=0.17.0,<0.18`), with
+  the ruff-pre-commit hook on v0.17.0 to match. The code needed no changes
+  for the new release's rules or formatting.
+
+## 1.0.2 (2026-10-13)
+
+### Security
+- **HTML in an indexed document no longer runs in the browser.** Search and
+  Keyword Search highlighted the query terms in each result by writing the
+  snippet's text back as HTML, so markup inside a document became live in
+  the results page — an `<img onerror=…>` in a text file ran its script
+  when the file came up in a search. Highlighting now builds the snippet
+  from text, and markup in a document shows as the text it is.
+- **Ask answers no longer render raw HTML.** An answer is model output and
+  can repeat text from the vault's documents; its Markdown is still
+  rendered, but HTML in it is shown as text and `javascript:` (and similar)
+  links are dropped instead of becoming clickable.
+- Require talkpipe 1.1.0 or later, which brings pymongo 4.18.2 and pypdf
+  6.19.0 or later (crafted-PDF runtime and memory exhaustion advisories).
+- Add security floors for transitive dependencies: urllib3 2.8.0 (via
+  requests and other HTTP clients; proxy TLS and chunked-response
+  advisories) and, in the `dev` extra, virtualenv 21.7.13 (via pre-commit;
+  activation script and seed wheel advisories).
+
+### CI
+- All CodeQL steps use the same `github/codeql-action` release again
+  (4.38.3). Two dependency updates had left the `init` step one release
+  behind the others, and CodeQL refuses to run with mismatched versions.
+  Dependabot now updates the CodeQL steps together, in one PR.
+- The `dev` extra pins ruff to the 0.16 series again (`<0.17`), in step with
+  the ruff-pre-commit hook; a dependency update had widened it to `<0.18`.
+- Dependabot version-update PRs target `master` instead of the default
+  branch `stable`, which only ever points at a release. Security alerts
+  still come from `stable`, so they reflect what is released.
+- The security scanners run from a virtual environment of their own, and
+  the dependency scan is given the packages installed in the project's
+  environment. An advisory against one of the scanners' own dependencies
+  (`nltk`, which `safety` requires and vault does not) no longer fails the
+  build with nothing in the project to fix; the scan still fails on any
+  finding in what the project installs.
+- Steps that only work on GitHub (CodeQL, the container push, artifact
+  uploads, PyPI publishing) are skipped when the workflow runs elsewhere.
+
 ## 1.0.1 (2026-09-25)
 
 ### Terminal interface

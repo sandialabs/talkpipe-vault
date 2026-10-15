@@ -310,6 +310,26 @@
 requireValue('question-input', 'ask-btn');
 
 document.addEventListener('DOMContentLoaded', function() {
+    // The answer is model output, which can repeat text from indexed
+    // documents, and it is inserted with innerHTML: show raw HTML as text and
+    // drop links that would run script. Other Markdown renders as usual.
+    function escapeHtml(value) {
+        const div = document.createElement('div');
+        div.textContent = value;
+        return div.innerHTML;
+    }
+    if (typeof marked !== 'undefined') {
+        marked.use({
+            renderer: {
+                html: function (token) { return escapeHtml(token.text); },
+                link: function (token) {
+                    return /^\s*(javascript|vbscript|data):/i.test(token.href)
+                        ? escapeHtml(token.text) : false;
+                },
+            },
+        });
+    }
+
     const askForm = document.getElementById('ask-form');
     const questionInput = document.getElementById('question-input');
     const askBtn = document.getElementById('ask-btn');

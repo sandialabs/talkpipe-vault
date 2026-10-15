@@ -34,7 +34,7 @@ classifiers = [
 # not change what actually installs -- raise a floor when a new advisory
 # lands, do not lower one.
 dependencies = [
-    "talkpipe[all]>=1.0.0b5",  # floor: first release shipping py.typed and typed decorators
+    "talkpipe[all]>=1.1.0",  # security floor: brings pymongo>=4.18.2 and pypdf>=6.19.0
     # Agent-driven result selection on the Search page (llmAgent + tool
     # registry). Not yet on PyPI: resolved from the self-hosted package
     # registry through [tool.uv.index] below until the first release.
@@ -43,6 +43,7 @@ dependencies = [
     "fastapi[standard]>=0.109.1",  # security floor
     "uvicorn>=0.24.0",
     "jinja2>=3.1.6",  # security floor
+    "urllib3>=2.8.0",  # security floor (via requests, lancedb, sentry-sdk)
     "watchdog[watchmedo]",
     "textual>=8.0.0",  # terminal interface (vault-tui)
 ]
@@ -59,9 +60,10 @@ dev = [
     # new rules and mypy adds checks in minor releases, and CI resolves fresh,
     # so an open floor would turn a tool release into a red build. Bump the
     # pins deliberately (and the ruff-pre-commit rev with them).
-    "ruff>=0.16.3,<0.17",
+    "ruff>=0.17.0,<0.18",
     "mypy>=2.3,<3",
     "pre-commit>=4.0",
+    "virtualenv>=21.7.13",  # security floor (via pre-commit)
     "bandit>=1.7.7",
     # safety 3.8.1 is the first release whose metadata declares the typer it
     # can run on (<0.26). Older releases leave typer unbounded, so a fresh pip
@@ -73,7 +75,7 @@ dev = [
     # authlib cap once a safety release runs on authlib 1.8. Same pins in
     # `security` below.
     "safety>=3.8.1",
-    "authlib<1.8",
+    "authlib<1.9",
 ]
 test = [
     "pytest>=9.0.3",
@@ -85,7 +87,7 @@ test = [
 security = [
     "bandit>=1.7.7",
     "safety>=3.8.1",  # see the note in `dev`
-    "authlib<1.8",  # see the note in `dev`
+    "authlib<1.9",  # see the note in `dev`
 ]
 
 [project.urls]
