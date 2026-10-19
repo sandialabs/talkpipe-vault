@@ -70,7 +70,7 @@ dev = [
     # authlib cap once a safety release runs on authlib 1.8. Same pins in
     # `security` below.
     "safety>=3.8.1",
-    "authlib<1.9",
+    "authlib<1.10",
 ]
 test = [
     "pytest>=9.0.3",
@@ -82,7 +82,7 @@ test = [
 security = [
     "bandit>=1.7.7",
     "safety>=3.8.1",  # see the note in `dev`
-    "authlib<1.9",  # see the note in `dev`
+    "authlib<1.10",  # see the note in `dev`
 ]
 
 [project.urls]
