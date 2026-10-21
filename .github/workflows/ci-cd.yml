@@ -11,13 +11,6 @@ on:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
-  # Optional extra package index, supplied as repository Actions variables
-  # on hosts that carry packages not yet on PyPI (the self-hosted Gitea
-  # serves talkpipe-agents from its own PyPI registry). Unset on GitHub, so
-  # pip resolves from PyPI alone there. PIP_TRUSTED_HOST is needed because
-  # the index is plain http.
-  PIP_EXTRA_INDEX_URL: ${{ vars.PIP_EXTRA_INDEX_URL }}
-  PIP_TRUSTED_HOST: ${{ vars.PIP_TRUSTED_HOST }}
 
 jobs:
   test:

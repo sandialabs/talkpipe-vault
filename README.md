@@ -413,13 +413,6 @@ Two consequences worth remembering:
   nothing and fails only when `uv.lock` and `pyproject.toml` have drifted
   apart. If you change dependencies, run `uv lock` and commit the result.
 
-One temporary exception: `talkpipe-agents` (the agent search) has no PyPI
-release yet. Its wheel is served from the self-hosted Gitea's PyPI registry:
-`pyproject.toml` declares that index under `[tool.uv.index]` (explicit, so
-only `talkpipe-agents` resolves from it), and CI's pip reaches it through the
-`PIP_EXTRA_INDEX_URL` / `PIP_TRUSTED_HOST` repository variables. Remove the
-index, the source entry, and the variables once the first release is out.
-
 ## Releasing
 
 The release process — tag conventions, the manual application test that
