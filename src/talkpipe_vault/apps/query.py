@@ -95,7 +95,10 @@ SNIPPET_MAX_LENGTH = 300
 DEFAULT_CHUNK_SIZE = 300
 DEFAULT_SHINGLE_SIZE = 3
 DEFAULT_SHINGLE_OVERLAP = 1
-DEFAULT_RAG_RESULT_LIMIT = 5
+# Chunks Ask (and keyword search) retrieve when the Settings page sets none.
+# With the default 300x3 shingles, 5 chunks often held the right file but not
+# the passage the answer needed; 8 answered measurably better on a Q/A benchmark.
+DEFAULT_RAG_RESULT_LIMIT = 8
 # How many results the Semantic Search page shows. Unlike the Ask/keyword
 # count, this is fixed rather than configurable; both the plain and the
 # filtered semantic pipelines pass it explicitly, so the page's result count

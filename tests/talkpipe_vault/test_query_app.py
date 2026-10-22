@@ -407,6 +407,13 @@ def test_refresh_pipelines_applies_result_limit_to_keyword_search(monkeypatch):
     assert captured["chat"]["limit"] == 3
 
 
+def test_default_rag_result_limit_is_eight():
+    """Without a saved setting, Ask retrieves 8 chunks."""
+    query._state.rag_result_limit = None
+
+    assert query._effective_models(query._state)["rag_result_limit"] == 8
+
+
 def test_refresh_pipelines_keyword_search_defaults_result_limit(monkeypatch):
     """Without a saved setting, keyword search uses the default result count."""
     captured: dict[str, dict] = {}

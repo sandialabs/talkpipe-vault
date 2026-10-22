@@ -3,6 +3,7 @@
 ## In Development
 
 ### Search
+- **Ask now retrieves 8 chunks by default instead of 5.** With the default chunking, 5 chunks often included the right document but not the passage the answer needed, so answers left out key facts or said the notes did not cover them. On a 100-question benchmark of a personal notes wiki (mistral-small, the default embedder and template), the share of fully correct answers rose from 63% to 70% and answers that missed entirely fell from 7 to 1; 13 questions were answered better and 2 worse. The cost is a longer prompt: the median answer took about 18 s instead of 13 s. The Settings page's **Ask & Keyword Result Count** still overrides it, and keyword search and the keyword boost use the same count. Existing vaults need no re-indexing.
 - **Queries are now embedded as typed, without the `task: search result | query:` prefix.** That prefix is EmbeddingGemma's, left over from when it was the default embedder, and it makes the default model2vec embedder retrieve worse. On a 100-question benchmark of a personal notes wiki, the default index (potion-retrieval-32M, default chunking, 5 results) found a right source file for 93% of questions instead of 87%, with recall up from 0.73 to 0.81 and MRR from 0.67 to 0.72; nomic-embed-text improved slightly too. EmbeddingGemma models keep the prefix, and a configured `retrieval_template` is used unchanged. Existing vaults need no re-indexing: the template only shapes queries.
 
 ### Agent-Selected Search Results and Answers
