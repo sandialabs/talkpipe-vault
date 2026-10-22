@@ -22,6 +22,11 @@
 - Two new settings bound it, on Search and on Ask: **Agent Chunk Limit** (the most chunks one run may keep) and **Agent Search Iterations** (cap on agent turns per search or question).
 - Every tool call and decision is printed to the server console as it happens and listed under the results in a collapsible "Agent tool calls" panel, and the results note says how the run ended and how many chunks were kept and ignored. The option is hidden when the chat model cannot be set up as an agent model; plain search is unaffected.
 - Added the `vaultAgentSearch` segment (`pipelines/agent_search.py`), which exposes the same loop to TalkPipe pipelines and yields the kept chunks with the trace.
+- When the chat model cannot be run as an agent, the Search and Ask pages now say so where the agent option would be, with the reason and a pointer to Settings, instead of dropping the option without a word.
+- Agent-selected results are no longer described as "ranked by vector similarity, the closest 10 chunks"; the page says they are the agent's choice, in keep order. An agent run that kept nothing points at the agent's note and tool calls (and at the chat model) rather than suggesting a broader query.
+- A run that "stopped without saying it had enough" now says in its note that this is how models weak at tool calling end a run, and the nothing-to-answer message suggests a stronger tool-calling model. The Settings page says the agent runs on the chat model, which must support tool calling, and the README names the models that ran the agent cleanly in testing (the default `mistral-small` often does not).
+- The agent's keep and ignore lines in the tool-call trace name the document behind each chunk id.
+- `docs/AGENT_RETRIEVAL.md`: the first examples pass the chat model (a script does not see the Settings page's choice) and show how to run the ChatterLang version and print only the answer; the extension example reports through the trace, extends the default prompt, and shows `chatterlang_script --load-module` for loading a custom tool; the snippets that left out imports or test data are now complete. The Advanced Guide's segment list includes `vaultAgentSearch` and `vaultAgentChat`.
 
 ### CI
 - The `dev` extra moves ruff to the 0.17 series (`>=0.17.0,<0.18`), with

@@ -81,6 +81,7 @@ def reset_app_state(tmp_path, monkeypatch):
     query._state.filtered_keyword_search_pipeline = None
     query._state.agent_search_pipeline = None
     query._state.agent_chat_pipeline = None
+    query._state.agent_unavailable_reason = ""
     query._state.agent_search_iterations = None
     query._state.agent_search_result_count = None
     yield
@@ -121,6 +122,8 @@ def test_search_page_offers_agent_option_only_when_pipeline_exists(monkeypatch):
 
 
 def test_search_post_uses_agent_and_shows_trace(monkeypatch):
+    from talkpipe_vault.pipelines.agent_search import AgentSearchOutcome
+
     monkeypatch.setattr(query, "_refresh_pipelines", lambda force=False: None)
     monkeypatch.setattr(query, "_update_document_counts", lambda vault_path: None)
     plain_calls = []
@@ -142,6 +145,17 @@ def test_search_post_uses_agent_and_shows_trace(monkeypatch):
     assert "Agent judged it had enough" in response.text
     assert "Agent tool calls (2)" in response.text
     assert "keep c1" in response.text
+    # The agent's selection is not the plain search's similarity top-10.
+    assert "Chosen by the agent" in response.text
+    assert "Ranked by vector similarity" not in response.text
+
+    # An agent run that kept nothing points at the agent, not at the query.
+    query._state.agent_search_pipeline = lambda q: AgentSearchOutcome(
+        results=[], note="Agent hit the 8-iteration cap.", trace=["agent search"]
+    )
+    response = client.post("/search", data={"query": "podman", "use_agent": "1"})
+    assert "The agent kept no chunks" in response.text
+    assert "Use a broader phrase" not in response.text
 
     # Unchecked, the plain pipeline runs and no trace is rendered.
     response = client.post("/search", data={"query": "podman"})
@@ -312,6 +326,7 @@ def test_refresh_agent_pipelines_builds_both_from_one_segment(monkeypatch):
     assert built[0]["max_iterations"] == 4
     assert query._state.agent_search_pipeline is not None
     assert query._state.agent_chat_pipeline is not None
+    assert query._state.agent_unavailable_reason == ""
 
 
 def test_refresh_agent_pipelines_clears_both_on_a_bad_model(monkeypatch):
@@ -328,6 +343,15 @@ def test_refresh_agent_pipelines_clears_both_on_a_bad_model(monkeypatch):
 
     assert query._state.agent_search_pipeline is None
     assert query._state.agent_chat_pipeline is None
+    # ...and the pages say why, instead of dropping the option without a word.
+    assert query._state.agent_unavailable_reason == "no such model"
+    monkeypatch.setattr(query, "_refresh_pipelines", lambda force=False: None)
+    monkeypatch.setattr(query, "_update_document_counts", lambda vault_path: None)
+    client = TestClient(query.app)
+    for page in ("/search", "/chat"):
+        text = client.get(page).text
+        assert "unavailable with the current chat model" in text
+        assert "no such model" in text
 
 
 def test_health_identifies_the_app_without_a_vault():

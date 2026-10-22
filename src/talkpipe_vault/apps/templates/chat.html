@@ -51,6 +51,9 @@
             <button type="submit" id="ask-btn">Ask</button>
         </form>
         <p class="ask-hint">Press Enter to ask, or Shift+Enter for a new line.</p>
+        {% if not agent_chat_available and agent_unavailable_reason %}
+        <p class="ask-hint agent-unavailable">Use Agent is unavailable with the current chat model &mdash; choose one that supports tool calling on the <a href="/settings">Settings</a> page. ({{ agent_unavailable_reason }})</p>
+        {% endif %}
     </div>
 
     <div class="answer-section" id="answer-section" style="display: none;">

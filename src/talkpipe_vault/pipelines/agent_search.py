@@ -94,7 +94,16 @@ After calling enough_information, or once you are told to stop, reply with the s
 NO_CONTEXT_ANSWER = (
     "The agent did not find any chunk in this vault that answers the "
     "question, so there was nothing to answer from. Try rephrasing the "
-    "question, indexing more documents, or asking without the agent."
+    "question, indexing more documents, choosing a chat model with stronger "
+    "tool calling, or asking without the agent."
+)
+
+# Appended to the note of a run that ended without the agent's judgement, the
+# ceiling, or the turn cap: that is how a model weak at tool calling ends a
+# run, and nothing else on the page would tell the reader the model is why.
+WEAK_TOOL_CALLING_HINT = (
+    "Models weak at tool calling usually end a run this way; a chat model "
+    "with stronger tool calling may do better."
 )
 
 
@@ -327,6 +336,7 @@ class AgentVaultSearch(AbstractFieldSegment):
         # The four ways a run can end, most to least satisfying. The first is
         # the intended one; the rest are worth telling apart, because each
         # means the selection may be incomplete for a different reason.
+        hint = ""
         if session.enough:
             how = "judged it had enough to answer"
             if session.enough_reason:
@@ -337,10 +347,11 @@ class AgentVaultSearch(AbstractFieldSegment):
             how = f"hit the {self.max_iterations}-iteration cap"
         else:
             how = "stopped without saying it had enough"
+            hint = f" {WEAK_TOOL_CALLING_HINT}"
         note = (
             f"Agent {how}: kept {kept} chunk{'s' if kept != 1 else ''} after "
             f"{searches} search{'es' if searches != 1 else ''}, "
-            f"ignored {len(session.ignored)}."
+            f"ignored {len(session.ignored)}.{hint}"
         )
         session.tell(note)
         return AgentSearchOutcome(session.results, note, session.trace)

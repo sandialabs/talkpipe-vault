@@ -249,7 +249,8 @@ a plain one — only the retrieval in front differs. It emits an `AgentChatOutco
 and `_state.agent_chat_pipeline = segment.as_function(...)` — one embedder and one agent
 model, not two. The model is resolved eagerly, so a bad chat configuration leaves *both*
 unset and both checkboxes hidden (Search: **Let an agent select the results**; Ask:
-**Use Agent**), in the web interface and in the TUI (`#search-agent` / `#ask-agent`, shown
+**Use Agent**) — the web pages show `_state.agent_unavailable_reason` (the build error)
+in the checkbox's place — in the web interface and in the TUI (`#search-agent` / `#ask-agent`, shown
 from `status()["agent_search_available"]` / `["agent_chat_available"]`). Both interfaces
 render the trace in an "Agent tool calls" panel. Ask's **Use Agent** takes precedence over
 the keyword boost (the agent already has keyword search as a tool), and a requested-but-

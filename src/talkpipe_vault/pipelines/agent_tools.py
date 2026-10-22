@@ -213,11 +213,16 @@ class AgentSearchSession:
         self._by_key[key] = chunk.id
         return chunk
 
-    def _describe(self, chunk: _Chunk) -> str:
+    @staticmethod
+    def _title(chunk: _Chunk) -> str:
         doc = chunk.result.document or {}
-        title = str(
+        return str(
             doc.get("title") or doc.get("filename") or doc.get("source") or ""
         ).strip()
+
+    def _describe(self, chunk: _Chunk) -> str:
+        doc = chunk.result.document or {}
+        title = self._title(chunk)
         text = str(doc.get("content") or doc.get("shingle") or "").strip()
         text = " ".join(text.split())
         if len(text) > CHUNK_PREVIEW_CHARS:
@@ -337,7 +342,11 @@ class AgentSearchSession:
             self.ignored.add(chunk_id)
         reason = reason.strip().rstrip(".")
         why = f" — {reason}" if reason else ""
-        self.tell(f"agent · {verb} {chunk_id}{why}. {self._status_line()}")
+        # Name the document too: the trace is read by a person, who never
+        # saw which chunk the short id stands for.
+        title = self._title(chunk)
+        label = f" ({title})" if title else ""
+        self.tell(f"agent · {verb} {chunk_id}{label}{why}. {self._status_line()}")
         if self.at_capacity:
             return (
                 f"{verb.capitalize()} {chunk_id}. You have kept the maximum of "

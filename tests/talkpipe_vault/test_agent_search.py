@@ -69,6 +69,13 @@ class TestSessionTools:
         assert "[c3]\ngamma" in out
         assert "c4" not in out
 
+        # The trace a person reads names the document behind the short id.
+        session, told = _make_session(vector={"q": [_hit("a", "x", title="A.md")]})
+        tools = _tools(session)
+        tools["vector_search"](query="q")
+        tools["keep_chunk"](chunk_id="c1", reason="on topic")
+        assert any("keep c1 (A.md) — on topic" in line for line in told)
+
     def test_repeated_query_is_refused(self):
         session, _ = _make_session(vector={"q": [_hit("a", "x")]})
         tools = _tools(session)
@@ -344,6 +351,8 @@ class TestAgentVaultSearch:
 
         outcome = _ScriptedSearch(script, max_chunks=5).process_value("q")
         assert outcome.note.startswith("Agent stopped without saying it had enough")
+        # ...and says that the model is the likely cause.
+        assert agent_search.WEAK_TOOL_CALLING_HINT in outcome.note
 
     def test_agent_failure_keeps_what_was_selected(self):
         def script(tools: dict[str, Any]) -> None:

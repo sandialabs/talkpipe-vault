@@ -22,9 +22,11 @@ In Python:
 ```python
 from talkpipe_vault.pipelines.agent_search import AgentVaultChat
 
-ask = AgentVaultChat(vault_path="~/notes-vault").as_function(
-    single_in=True, single_out=True
-)
+ask = AgentVaultChat(
+    vault_path="~/notes-vault",
+    chat_source="ollama",
+    chat_model="qwen3:8b",  # a model that handles tool calls well — see below
+).as_function(single_in=True, single_out=True)
 outcome = ask("How did the treasury handle inflation in the 1970s?")
 
 outcome.response   # the answer, with a "Sources:" list appended
@@ -33,13 +35,29 @@ outcome.note       # one line: how the run ended (see "Reading the outcome")
 outcome.trace      # every tool call and decision, as printed to the console
 ```
 
-In ChatterLang, as a segment like any other:
+In ChatterLang, as a segment like any other — run it with TalkPipe's
+`chatterlang_script --script '<the script>'` (installed with the vault):
 
 ```
 INPUT FROM echo[data="How did the treasury handle inflation in the 1970s?"]
-| vaultAgentChat[vault_path="~/notes-vault"]
+| vaultAgentChat[vault_path="~/notes-vault", chat_source="ollama", chat_model="qwen3:8b"]
+| extractProperty[property="response"]
 | print
 ```
+
+`vaultAgentChat` emits the whole outcome; `extractProperty` keeps just the
+answer (drop it to print everything). The trace lines are printed to stdout
+as the agent works, ahead of the answer.
+
+**Pick the model.** The chat model defaults to TalkPipe's configuration
+(`TALKPIPE_CHAT_SOURCE` / `TALKPIPE_CHAT_MODEL`, or `chat_source` /
+`chat_model` in `~/.talkpipe.toml`) and then to the vault's default,
+`ollama` / `mistral-small` — which, as [Reading the outcome](#reading-the-outcome)
+explains, rarely keeps what it finds. A script does **not** see the model
+chosen on the web interface's Settings page, so pass `chat_model` (and
+`chat_source`) or set the configuration. The other parameters
+(`max_chunks`, `max_iterations`, `embedding_model`, …) are listed, with what
+each does, by `help(AgentVaultSearch)`.
 
 `vaultAgentSearch` is the same thing without the answering stage: it emits an
 `AgentSearchOutcome` (results, note, trace) and is what the Semantic Search
@@ -81,7 +99,7 @@ context, and a run that "succeeds" with none produces no answer at all.
 
 ## Reading the outcome
 
-`outcome.note` is one sentence and always names one of four endings. They
+`outcome.note` is one sentence and always names one of five endings. They
 mean different things about how complete the selection is, so an
 application should show it rather than swallow it:
 
@@ -90,16 +108,18 @@ application should show it rather than swallow it:
 | `Agent judged it had enough to answer (…)` | The intended ending. The parenthetical is the agent's own reason |
 | `Agent filled its N-chunk maximum` | Stopped by `max_chunks`. The selection may be cut off; raise the limit if answers look truncated |
 | `Agent hit the N-iteration cap` | Stopped by `max_iterations` before deciding |
-| `Agent stopped without saying it had enough` | The model ended its turn without calling `enough_information`. **This is what a model with weak tool-calling does** — it looks like a finished run but is not one |
+| `Agent stopped without saying it had enough` | The model ended its turn without calling `enough_information`. **This is what a model with weak tool-calling does** — it looks like a finished run but is not one, so the note goes on to say the model is the likely cause |
 | `The agent stopped with an error (…)` | An exception mid-run; what it had kept so far is returned |
 
 `AgentVaultChat` sends no RAG prompt when nothing was kept — `response` is
 then a fixed "nothing to answer from" message rather than an invented answer.
 
-The model matters. In testing, `gpt-oss` runs the loop cleanly; `mistral-small`
-searches but rarely calls `keep_chunk`; some models make no tool calls at
-all. All three end safely (the last two as "stopped without saying it had
-enough" or "nothing to answer from"), but only the first is useful.
+The model matters. In testing, `gpt-oss` and `qwen3:8b` run the loop
+cleanly; `mistral-small` (the vault's default chat model) searches but rarely
+calls `keep_chunk`; some models make no tool calls at all. All of them end
+safely (the weak ones as "stopped without saying it had enough" or "nothing
+to answer from"), but only the first kind is useful. The model is the chat
+model: on the web and terminal interfaces, the one chosen under Settings.
 
 ## Choosing tools and prompt
 
@@ -215,6 +235,9 @@ outcome, the note, and the `select_chunks`/`answer` split — subclass
 touches the vault, the embedder, and the models) and the three bindings:
 
 ```python
+from talkpipe_vault.pipelines.agent_search import AgentVaultSearch, build_agent_model
+
+
 class MyAgentSearch(AgentVaultSearch):
     def _bind_vault(self) -> None:
         build_agent_model(self.chat_source, self.chat_model)  # keep the up-front check
@@ -237,6 +260,7 @@ Register it with the decorator and it becomes available by name everywhere
 `tools=` is accepted, including ChatterLang:
 
 ```python
+# my_vault_tools.py
 from strands import tool as strands_tool
 from talkpipe_vault.pipelines.agent_tools import AgentSearchSession, vault_agent_tool, guard
 
@@ -249,6 +273,7 @@ def make_list_kept(session: AgentSearchSession):
         what the answer will be built from before deciding to stop."""
         if refusal := guard(session, "list_kept"):
             return refusal
+        session.tell(f"agent · list kept: {len(session.kept)} chunk(s)")
         return "\n".join(f"[{cid}]" for cid in session.kept) or "Nothing kept yet."
 
     return list_kept
@@ -266,7 +291,27 @@ Three things to keep:
   interfaces show and the console prints; a tool that acts silently is
   invisible to the person waiting.
 
-Then add the name to the prompt, or the model will not know it exists.
+Then add the name to the prompt, or the model will not know it exists — the
+simplest way is to extend the default one:
+
+```python
+from talkpipe_vault.pipelines.agent_search import RETRIEVAL_SYSTEM_PROMPT, AgentVaultSearch
+
+import my_vault_tools  # registers list_kept
+
+search = AgentVaultSearch(
+    vault_path="~/notes-vault",
+    chat_model="qwen3:8b",
+    tools="vector_search,keyword_search,extract_keywords,keep_chunk,"
+    "ignore_chunk,enough_information,list_kept",
+    system_prompt=RETRIEVAL_SYSTEM_PROMPT
+    + "\nCall list_kept before enough_information to review what you kept.",
+)
+```
+
+The tool exists once its module is imported. A ChatterLang script cannot
+import it, so name the file when you run the script:
+`chatterlang_script --load-module my_vault_tools.py --script '…'`.
 
 ## Configuration the vault applies
 
@@ -290,6 +335,14 @@ Every tool is a plain function once bound, so the whole loop is testable by
 calling them in order:
 
 ```python
+from talkpipe_vault.pipelines.agent_tools import (
+    AgentSearchSession,
+    build_tools,
+    parse_tool_names,
+)
+
+HITS = [{"doc_id": "a", "score": 1.0, "document": {"content": "…", "title": "a.md"}}]
+trace: list[str] = []
 session = AgentSearchSession(vector_search=lambda q: HITS, keyword_search=lambda q: [],
                              keyword_index_exists=lambda: False, extract_keywords=None,
                              max_chunks=5, tell=trace.append)

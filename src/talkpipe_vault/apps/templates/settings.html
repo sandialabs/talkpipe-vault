@@ -127,7 +127,7 @@
             </p>
         </fieldset>
         <fieldset>
-            <legend>Chat &mdash; Ask answers</legend>
+            <legend>Chat &mdash; Ask answers and the agent</legend>
             <label for="chat-source">Source</label>
             <select name="chat_source" id="chat-source">
                 {% for source in chat_sources %}
@@ -174,6 +174,12 @@
                 that turns out to be. On Ask, those chunks are the context the answer is
                 built from. The two limits below only bound a run that never reaches that
                 judgement; they are not targets to fill.
+            </p>
+            <p class="field-hint">
+                The agent runs on the chat model above, which must support tool calling.
+                A model that is weak at it tends to end a run without keeping what it
+                found &mdash; the result note then says it "stopped without saying it had
+                enough" &mdash; so if that keeps happening, try a stronger tool-calling model.
             </p>
             <label for="agent-search-result-count">Agent Chunk Limit</label>
             <input type="number" name="agent_search_result_count" id="agent-search-result-count" min="1"

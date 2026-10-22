@@ -266,6 +266,7 @@ class VaultService:
         state.filtered_keyword_search_pipeline = None
         state.agent_search_pipeline = None
         state.agent_chat_pipeline = None
+        state.agent_unavailable_reason = ""
         state.shingled_chunks_count = 0
         state.keyword_search_enabled = False
 

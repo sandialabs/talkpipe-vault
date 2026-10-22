@@ -132,6 +132,10 @@ class AppState:
         None
     )
     agent_chat_pipeline: Callable[[str], agent_search.AgentChatOutcome] | None = None
+    # Why the agent pipelines could not be built (empty when they were), so
+    # the pages can say why the option is missing instead of hiding it
+    # without a word.
+    agent_unavailable_reason: str = ""
     # Retrieval filter (issue #22): the open vault's script, whether it is
     # active (present + enabled + compiles), and the search-page pipelines
     # that apply it on demand. Each filtered pipeline returns
@@ -191,6 +195,7 @@ def _template_context(
         "result_filter_active": state.result_filter_active,
         "agent_search_available": state.agent_search_pipeline is not None,
         "agent_chat_available": state.agent_chat_pipeline is not None,
+        "agent_unavailable_reason": state.agent_unavailable_reason,
         # Fixed, unlike the configurable Ask/keyword count; pages that mention
         # how many semantic matches they show read it from here.
         "search_result_limit": DEFAULT_SEARCH_RESULT_LIMIT,
@@ -628,11 +633,13 @@ def _refresh_agent_pipelines(vault_path: str) -> None:
             max_iterations=_state.agent_search_iterations
             or DEFAULT_AGENT_SEARCH_ITERATIONS,
         )
-    except Exception:
+    except Exception as exc:
         logger.warning("Could not build the agent pipelines", exc_info=True)
         _state.agent_search_pipeline = None
         _state.agent_chat_pipeline = None
+        _state.agent_unavailable_reason = str(exc) or type(exc).__name__
         return
+    _state.agent_unavailable_reason = ""
     _state.agent_search_pipeline = segment.select_chunks
     _state.agent_chat_pipeline = segment.as_function(single_in=True, single_out=True)
 

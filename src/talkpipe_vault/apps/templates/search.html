@@ -14,6 +14,8 @@
                {% if use_agent %}checked{% endif %}>
         Let an agent select the results (iterative semantic + keyword search; slower)
     </label>
+    {% elif agent_unavailable_reason %}
+    <p class="search-hint agent-unavailable">Letting an agent select the results is unavailable with the current chat model &mdash; choose one that supports tool calling on the <a href="/settings">Settings</a> page. ({{ agent_unavailable_reason }})</p>
     {% endif %}
     {% if result_filter_active %}
     <label class="overwrite-option">
@@ -40,13 +42,24 @@
     <span>Refreshing vault connections and searching semantic matches...</span>
 </div>
 
+{% if agent_trace %}
+{# An agent run: its selection is neither ranked by similarity nor a fixed count. #}
+{% set results_note = "Chosen by the agent, in the order it kept them — the note above says how its run ended." %}
+{% set no_results_hint = "The agent kept no chunks. The note and the agent tool calls above show what it searched and why it stopped." %}
+{% set no_results_suggestions = [
+    "Rephrase the question.",
+    "Try a chat model with stronger tool calling (Settings).",
+    "Search without the agent.",
+] %}
+{% else %}
 {% set results_note = "Ranked by vector similarity: the closest " ~ search_result_limit ~ " chunks are always returned, so the last few can be weak matches — on a small vault, every chunk." %}
-{% set score_help = "Higher scores are more similar to your query." %}
 {% set no_results_hint = "Semantic search works best with a complete question or descriptive phrase." %}
 {% set no_results_suggestions = [
     "Use a broader phrase.",
     "Refresh the vault if files were just indexed.",
 ] %}
+{% endif %}
+{% set score_help = "Higher scores are more similar to your query." %}
 {% include "_search_results.html" %}
 
 <script>
