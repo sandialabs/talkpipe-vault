@@ -45,6 +45,7 @@ from functools import cached_property
 from typing import Annotated, Any
 
 from talkpipe.chatterlang import register_segment
+from talkpipe.data.extraction import ReadFile
 from talkpipe.llm.chat import LLMPrompt
 from talkpipe.pipe.basic import AbstractFieldSegment
 from talkpipe.pipelines.basic_rag import AppendRAGSources, ConstructRAGPrompt
@@ -88,6 +89,7 @@ Work iteratively:
 3. After each search, ask yourself what the question still needs. Could you answer it completely and accurately from the chunks you have kept so far? If some part is still missing - a fact, a date, a name, the other side of a comparison, a second document that should corroborate the first - search for that specific missing piece, using terms, names and phrasings you learned from the chunks you kept. Do not repeat a query you already ran.
 4. Stop by calling enough_information as soon as the chunks you have kept would let you answer the question well, saying in one short phrase what they cover. That judgement is the reason to stop - not the number of chunks you have collected. Keeping more chunks that add nothing is not better than stopping. If repeated searches keep turning up nothing new and the question still cannot be fully answered, call enough_information anyway and say what is missing.
 Use extract_keywords when you want a keyword query built for you: give it the question or a topic in plain language and it returns a keyword query to pass to keyword_search. You may also write keyword queries yourself.
+Use read_document when a chunk suggests its document holds more of the answer - the chunk is cut off, it is one step of a procedure or one item of a list, or its document is plainly where the question's topic is covered. It returns the document's text as a new chunk to keep or ignore; reading is not keeping.
 After calling enough_information, or once you are told to stop, reply with the single word: done."""
 
 # Shown instead of an answer when the agent kept nothing: the RAG prompt would
@@ -138,6 +140,11 @@ class AgentChatOutcome(AgentSearchOutcome):
     built from — plus the answer itself."""
 
     response: str = ""
+
+
+# Reads a document for the read_document tool through the registry indexing
+# reads with, so whatever could be indexed can be read back whole.
+_read_file = ReadFile(skip_errors=False).as_function(single_in=True)
 
 
 def _print_progress(message: str) -> None:
@@ -301,6 +308,16 @@ class AgentVaultSearch(AbstractFieldSegment):
     def extract_keywords(self, question: str) -> str:
         return str(self._extract_keywords(question))
 
+    def read_document(self, source: str) -> str:
+        # The source comes from a hit the vault returned, never from the
+        # agent, so only documents this vault indexed can be read — with the
+        # same extractors indexing used.
+        if not os.path.isfile(source):
+            raise FileNotFoundError(
+                f"{os.path.basename(source)} is not on this server's filesystem"
+            )
+        return "\n".join(item.content for item in _read_file(source))
+
     def make_session(self) -> AgentSearchSession:
         return AgentSearchSession(
             vector_search=self.vector_search,
@@ -310,6 +327,7 @@ class AgentVaultSearch(AbstractFieldSegment):
             max_chunks=self.max_chunks,
             tell=self.tell,
             rename_fields=self.rename_fields,
+            read_document=self.read_document,
         )
 
     def make_agent(self, session: AgentSearchSession) -> LLMAgent:

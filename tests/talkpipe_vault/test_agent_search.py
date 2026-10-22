@@ -38,6 +38,7 @@ def _make_session(
     index_exists: bool = True,
     extract_keywords: Any = None,
     max_chunks: int = 2,
+    read_document: Any = None,
 ) -> tuple[AgentSearchSession, list[str]]:
     told: list[str] = []
     vector = vector or {}
@@ -49,6 +50,7 @@ def _make_session(
         extract_keywords=extract_keywords,
         max_chunks=max_chunks,
         tell=told.append,
+        read_document=read_document,
     )
     return session, told
 
@@ -292,6 +294,91 @@ class TestSessionTools:
         assert "…" not in out
 
 
+class TestReadDocument:
+    """read_document loads the document behind a chunk the agent has seen,
+    as a new chunk that is kept or ignored like a search hit."""
+
+    def _session(self, text: str = "The whole document.", **kwargs: Any):
+        hits = {"q": [_hit("row1", "a chunk", title="guide.md", source="/d/guide.md")]}
+        read: list[str] = []
+
+        def reader(source: str) -> str:
+            read.append(source)
+            return text
+
+        session, told = _make_session(vector=hits, read_document=reader, **kwargs)
+        tools = _tools(session)
+        tools["vector_search"](query="q")
+        return session, told, tools, read
+
+    def test_the_document_becomes_a_keepable_chunk(self):
+        session, told, tools, read = self._session()
+        out = tools["read_document"](chunk_id="c1")
+        assert read == ["/d/guide.md"]
+        assert out.startswith("[c2] guide.md")
+        assert "The whole document." in out
+        assert any("read_document c1 (guide.md)" in line for line in told)
+
+        tools["keep_chunk"](chunk_id="c2", reason="the full procedure")
+        [kept] = session.results
+        assert kept.document["content"] == "The whole document."
+        assert kept.document["title"] == "guide.md"
+        # The source, not the chunk's row id, so the document can be opened
+        # from the citation.
+        assert kept.doc_id == "/d/guide.md"
+
+    def test_a_long_document_is_read_in_parts(self):
+        size = agent_tools.DOCUMENT_PART_CHARS
+        text = "a" * size + "b" * 10
+        _, _, tools, _ = self._session(text)
+        first = tools["read_document"](chunk_id="c1")
+        assert f"start={size}" in first
+        assert "b" not in first.split("\n\n", 1)[1]
+        second = tools["read_document"](chunk_id="c1", start=size)
+        assert "b" * 10 in second
+        assert "read on" not in second
+        assert "nothing from character" in tools["read_document"](
+            chunk_id="c1", start=size + 10
+        )
+
+    def test_rereading_a_part_returns_the_same_chunk(self):
+        _, _, tools, _ = self._session()
+        assert tools["read_document"](chunk_id="c1").startswith("[c2]")
+        assert tools["read_document"](chunk_id="c1").startswith("[c2]")
+
+    def test_an_unknown_chunk_id_is_refused_and_traced(self):
+        _, told, tools, read = self._session()
+        assert "Unknown chunk id" in tools["read_document"](chunk_id="c9")
+        assert read == []
+        assert "agent ✗ read_document refused: unknown chunk id 'c9'" in told
+
+    def test_without_a_reader_the_tool_says_so(self):
+        session, _ = _make_session(vector={"q": [_hit("a", "x", source="/d/a.md")]})
+        tools = _tools(session)
+        tools["vector_search"](query="q")
+        assert "unavailable" in tools["read_document"](chunk_id="c1")
+
+    def test_a_chunk_without_a_source_cannot_be_read(self):
+        session, _ = _make_session(
+            vector={"q": [_hit("a", "x")]}, read_document=lambda s: "text"
+        )
+        tools = _tools(session)
+        tools["vector_search"](query="q")
+        assert "no source document" in tools["read_document"](chunk_id="c1")
+
+    def test_a_failed_read_is_reported_to_the_agent(self):
+        def fail(source: str) -> str:
+            raise FileNotFoundError("guide.md is gone")
+
+        session, _ = _make_session(
+            vector={"q": [_hit("a", "x", source="/d/guide.md")]}, read_document=fail
+        )
+        tools = _tools(session)
+        tools["vector_search"](query="q")
+        assert "guide.md is gone" in tools["read_document"](chunk_id="c1")
+        assert session.trace[-1].endswith("failed: guide.md is gone")
+
+
 class _ScriptedSearch(AgentVaultSearch):
     """AgentVaultSearch with the vault, embedder, and model replaced: the
     agent loop is a script that calls the tools directly.
@@ -465,6 +552,15 @@ class TestAgentVaultSearch:
             )
         assert not missing.exists()
 
+    def test_read_document_uses_the_indexing_extractors(self, tmp_path):
+        doc = tmp_path / "notes.md"
+        doc.write_text("# Notes\n\nAll of it.\n")
+        segment = _ScriptedSearch(lambda _tools: None)
+        assert "All of it." in segment.read_document(str(doc))
+        # A document that moved since indexing is reported, not created.
+        with pytest.raises(FileNotFoundError, match=r"gone\.md"):
+            segment.read_document(str(tmp_path / "gone.md"))
+
     def test_as_function_yields_the_outcome(self):
         def script(tools: dict[str, Any]) -> None:
             tools["vector_search"](query="q")
@@ -604,12 +700,13 @@ class TestToolSelection:
     """Tools are picked by name, so a pipeline can add or drop one without
     touching the tool pack or the segment."""
 
-    def test_the_default_pack_is_the_six_vault_tools(self):
+    def test_the_default_pack_is_the_seven_vault_tools(self):
         session, _ = _make_session()
         assert set(_tools(session)) == {
             "vector_search",
             "keyword_search",
             "extract_keywords",
+            "read_document",
             "keep_chunk",
             "ignore_chunk",
             "enough_information",

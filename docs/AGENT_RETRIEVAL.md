@@ -8,7 +8,7 @@ Everything described here lives in two modules, split on purpose:
 
 | Module | Owns | Knows about |
 |---|---|---|
-| `talkpipe_vault/pipelines/agent_tools.py` | **What the tools do** — the six retrieval tools and the per-query state they share | Search callables you hand it. Nothing about agents, models, prompts, or vaults |
+| `talkpipe_vault/pipelines/agent_tools.py` | **What the tools do** — the seven retrieval tools and the per-query state they share | Search callables you hand it. Nothing about agents, models, prompts, or vaults |
 | `talkpipe_vault/pipelines/agent_search.py` | **The pipeline that runs them** — the `vaultAgentSearch` / `vaultAgentChat` segments | The vault on disk, the embedder, the RAG prompt, talkpipe-agents' `llmAgent` |
 
 If you want the tools in another application, you take the first module and
@@ -73,7 +73,7 @@ kept.
 
 ## How a run works
 
-The agent is talkpipe-agents' `llmAgent` segment. It is given six tools, all
+The agent is talkpipe-agents' `llmAgent` segment. It is given seven tools, all
 bound to one `AgentSearchSession` that holds that query's state:
 
 | Tool | What it does |
@@ -81,6 +81,7 @@ bound to one `AgentSearchSession` that holds that query's state:
 | `vector_search(query)` | Semantic search; returns chunks with short ids (`c1`, `c2`, …) |
 | `keyword_search(query)` | Full-text search (Whoosh syntax); says so if the vault has no index |
 | `extract_keywords(question)` | Asks an LLM to turn a plain-language question into a keyword query |
+| `read_document(chunk_id, start)` | Loads the whole document a chunk came from, as a new chunk to keep or ignore; long documents come in `DOCUMENT_PART_CHARS` (6000-character) parts, `start` picking which |
 | `keep_chunk(chunk_id, reason)` | The chunk contributes to the answer |
 | `ignore_chunk(chunk_id, reason)` | It does not |
 | `enough_information(reason)` | **How a run ends:** the agent's judgement that what it kept would answer the question well |
@@ -93,6 +94,16 @@ ignored chunk is lost to the answer — to refine its queries from what it
 learns, and — after each search — to ask what the question still lacks and
 search for that. It sees up to `CHUNK_PREVIEW_CHARS` (1000) characters of
 each chunk, enough for a whole chunk at the default indexing settings.
+
+`read_document` is for a hunch that a chunk's document holds more of the
+answer — the chunk is cut off, it is one step of a procedure, or its document
+is plainly where the topic is covered. The agent names a chunk it has seen,
+never a path, so it can only read documents the vault itself returned, and
+the vault reads them with the extractors indexing used. The part it reads is
+registered as a chunk like a search hit: reading is not keeping, and a kept
+part reaches the answer, and its citation opens the document, like any other.
+A document that is no longer where it was indexed is reported to the agent,
+not an error.
 
 **The stopping criterion is the agent's judgement, not a count.** A run ends
 when the agent calls `enough_information`. Two limits exist only to bound a
@@ -155,9 +166,20 @@ tools mix in with no code. An unknown name raises when the segment is built
 — for a ChatterLang script, at compile time — with both registries listed.
 `None` means the whole vault pack, in the order the table above lists it.
 
+Which generic tools suit a retrieval run: the ones that read nothing outside
+the vault and change nothing the vault was indexed from — `think`,
+`calculator`, `current_time`, `days_between`, `regex_extract`, and the
+notepad (`save_note`, `read_notes`, …, which only touch the agent's own
+state). `read_file`, `list_files`, and `search_files` read any path the
+process can, past the vault's path fences; `fetch_url` leaves the machine;
+`ask_user` has no user to ask behind the web interface. None of them is in
+the default pack: in trials with qwen3:8b, adding them made the agent keep
+the answer less often, not more — every extra tool is one more thing a
+small model can pick instead of the search it needed.
+
 `system_prompt` defaults to `agent_search.RETRIEVAL_SYSTEM_PROMPT`. If you
 change the tool set, change the prompt to match: the default prompt names
-all six tools and explains when to use each, and a model told about a tool
+all seven tools and explains when to use each, and a model told about a tool
 it does not have will try to call it.
 
 One deliberate limit: the web and terminal interfaces only ever request the
@@ -235,6 +257,11 @@ What the session needs from your callables:
   tool tells the agent to write its own query. The vault passes its
   `extractSearchKeywords` segment, which already falls back to the raw
   question when the model fails.
+- `read_document`: optional `(source: str) -> str`, the whole text of the
+  document a hit records as its `source` (or `path`). Leave it out and the
+  `read_document` tool tells the agent reading documents is unavailable.
+  The vault's binding refuses a file that is not there and reads the rest
+  with talkpipe's extractors.
 - `rename_fields`: optional `{"old": "new"}` applied to each document when
   a hit is registered (only when `new` is absent). The vault uses it to turn
   Whoosh's `path`/`filename` into `source`/`title` so keyword hits are
@@ -336,8 +363,8 @@ import my_vault_tools  # registers list_kept
 search = AgentVaultSearch(
     vault_path="~/notes-vault",
     chat_model="qwen3:8b",
-    tools="vector_search,keyword_search,extract_keywords,keep_chunk,"
-    "ignore_chunk,enough_information,list_kept",
+    tools="vector_search,keyword_search,extract_keywords,read_document,"
+    "keep_chunk,ignore_chunk,enough_information,list_kept",
     system_prompt=RETRIEVAL_SYSTEM_PROMPT
     + "\nCall list_kept before enough_information to review what you kept.",
 )

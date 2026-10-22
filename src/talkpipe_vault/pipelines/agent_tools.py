@@ -1,17 +1,20 @@
 """The vault's agent tool pack: retrieval tools an ``llmAgent`` can call.
 
-Six tools let an agent search a vault and decide, chunk by chunk, what a
+Seven tools let an agent search a vault and decide, chunk by chunk, what a
 question should be answered from:
 
 - ``vector_search`` / ``keyword_search`` — the vault's semantic and Whoosh
   searches, callable any number of times with any query;
 - ``extract_keywords`` — asks an LLM to distill a question into a Whoosh
   query, so the agent need not write Whoosh syntax itself;
+- ``read_document`` — loads the whole document a chunk came from (in parts,
+  when it is long), on the hunch that more of it is useful; what it returns
+  is a chunk like any other, so it is kept or ignored the same way;
 - ``keep_chunk`` / ``ignore_chunk`` — the decisions;
 - ``enough_information`` — how a run ends: the agent's own judgement that
   what it kept would answer the question well.
 
-All six need per-query state (which chunks have been seen, what was kept),
+All seven need per-query state (which chunks have been seen, what was kept),
 so they are **factories** returning tools bound to one
 :class:`AgentSearchSession` — the pattern talkpipe-agents documents for tool
 packs that need runtime state. ``TOOL_FACTORIES`` maps each name to its
@@ -53,6 +56,10 @@ logger = logging.getLogger(__name__)
 # pieces per shingle): the agent decides on what it can see, so a shorter
 # preview hides the part of a chunk that would have made it worth keeping.
 CHUNK_PREVIEW_CHARS = 1000
+# How much of a document one read_document call returns. Long documents are
+# read in parts of this size, so a single read cannot crowd the rest of the
+# run out of a small model's context window.
+DOCUMENT_PART_CHARS = 6000
 
 SearchFn = Callable[[str], Iterable[Any]]
 # A factory takes the session the tool will share and returns a Strands tool.
@@ -139,7 +146,9 @@ class AgentSearchSession:
     (SearchResult objects or dicts with doc_id/score/document);
     ``keyword_index_exists`` says whether keyword search can run at all;
     ``extract_keywords`` asks an LLM to turn a question into a keyword query
-    (None when no model is available).
+    (None when no model is available); ``read_document`` takes the source a
+    hit's document records (its ``source`` or ``path``) and returns that
+    document's whole text (None when documents cannot be read).
     """
 
     def __init__(
@@ -152,11 +161,13 @@ class AgentSearchSession:
         max_chunks: int,
         tell: Callable[[str], None],
         rename_fields: dict[str, str] | None = None,
+        read_document: Callable[[str], str] | None = None,
     ) -> None:
         self._vector_search = vector_search
         self._keyword_search = keyword_search
         self._keyword_index_exists = keyword_index_exists
         self._extract_keywords = extract_keywords
+        self._read_document = read_document
         self.max_chunks = max(1, max_chunks)
         self._tell = tell
         self._rename_fields = rename_fields or {}
@@ -208,11 +219,15 @@ class AgentSearchSession:
     def results(self) -> list[SearchResult]:
         return [self._chunks[cid].result for cid in self.kept]
 
-    def _register(self, entry: Any) -> _Chunk | None:
+    def _register(self, entry: Any, key: str | None = None) -> _Chunk | None:
         result = normalize_search_result(entry, self._rename_fields)
         if result is None:
             return None
-        key = result.doc_id or json.dumps(result.document, sort_keys=True, default=str)
+        key = (
+            key
+            or result.doc_id
+            or json.dumps(result.document, sort_keys=True, default=str)
+        )
         with self._register_lock:
             existing = self._by_key.get(key)
             if existing is not None:
@@ -333,20 +348,83 @@ class AgentSearchSession:
             "you want different terms."
         )
 
+    def _unknown_chunk(self, tool_name: str, chunk_id: str) -> str:
+        # Traced as well as returned: a model that guesses ids, or keeps a
+        # chunk in the same turn as the search that finds it, otherwise
+        # leaves a trace full of keep calls and nothing kept.
+        self.tell(f"agent ✗ {tool_name} refused: unknown chunk id {chunk_id!r}")
+        return (
+            f"Unknown chunk id {chunk_id!r}; use an id from a search result "
+            "you have already received (a search called in the same step "
+            "has not returned its ids yet)."
+        )
+
+    def read_document(self, chunk_id: str, start: int | None = None) -> str:
+        """Read the document *chunk_id* came from, one part at a time.
+
+        The part read is registered as a chunk of its own, so the agent keeps
+        or ignores it like a search hit and a kept part reaches the answer
+        (and its citations) like any other chunk. Only documents the vault
+        itself returned can be read: the agent names a chunk, never a path.
+        """
+        chunk_id = chunk_id.strip()
+        chunk = self._chunks.get(chunk_id)
+        if chunk is None:
+            return self._unknown_chunk("read_document", chunk_id)
+        doc = chunk.result.document or {}
+        source = str(doc.get("source") or doc.get("path") or "").strip()
+        if not source:
+            return f"{chunk_id} records no source document to read."
+        if self._read_document is None:
+            return "Reading whole documents is unavailable here."
+        title = self._title(chunk)
+        try:
+            text = self._read_document(source).strip()
+        except Exception as exc:
+            logger.warning("Agent document read failed", exc_info=True)
+            self.tell(f"agent ← read_document {chunk_id} ({title}) failed: {exc}")
+            return f"The document could not be read: {exc}"
+        start = max(0, start or 0)
+        if start >= len(text):
+            self.tell(f"agent ← read_document {chunk_id} ({title}): nothing at {start}")
+            return (
+                f"The document has {len(text)} characters; there is nothing "
+                f"from character {start} on."
+            )
+        part = text[start : start + DOCUMENT_PART_CHARS]
+        end = start + len(part)
+        fields = {
+            k: v
+            for k, v in doc.items()
+            if k not in {"content", "shingle", "shingle_text", "_doc_id", "doc_id"}
+        }
+        # The source as doc_id lets the interfaces open the cited document.
+        entry = SearchResult(
+            score=chunk.result.score,
+            doc_id=source,
+            document={**fields, "content": part},
+        )
+        new = self._register(entry, key=f"document:{source}:{start}")
+        if new is None:  # pragma: no cover - a SearchResult always normalizes
+            return "The document could not be read."
+        span = f"characters {start}-{end} of {len(text)}"
+        self.tell(f"agent ← read_document {chunk_id} ({title}): {span} as {new.id}")
+        more = (
+            f" Call read_document with start={end} to read on."
+            if end < len(text)
+            else ""
+        )
+        return (
+            f"[{new.id}] {title} — the document, {span}. Keep or ignore "
+            f"{new.id} like any chunk.{more}\n\n{part}"
+        )
+
     def decide(self, chunk_id: str, reason: str, *, keep: bool) -> str:
         chunk_id = chunk_id.strip()
         verb = "keep" if keep else "ignore"
         chunk = self._chunks.get(chunk_id)
         if chunk is None:
-            # Traced as well as returned: a model that guesses ids, or keeps a
-            # chunk in the same turn as the search that finds it, otherwise
-            # leaves a trace full of keep calls and nothing kept.
-            self.tell(f"agent ✗ {verb}_chunk refused: unknown chunk id {chunk_id!r}")
-            return (
-                f"Unknown chunk id {chunk_id!r}; use an id from a search result "
-                "you have already received (a search called in the same step "
-                "has not returned its ids yet)."
-            )
+            return self._unknown_chunk(f"{verb}_chunk", chunk_id)
         if chunk_id in self.kept:
             return f"{chunk_id} is already kept."
         if chunk_id in self.ignored:
@@ -466,6 +544,26 @@ def make_extract_keywords(session: AgentSearchSession) -> Any:
         return guard(session, "extract_keywords") or session.extract_keywords(question)
 
     return extract_keywords
+
+
+@vault_agent_tool("read_document")
+def make_read_document(session: AgentSearchSession) -> Any:
+    @strands_tool
+    def read_document(chunk_id: str, start: int | None = None) -> str:
+        """Read the whole document a chunk came from, when you suspect more
+        of it would help: the chunk is cut off, it is part of a list or a
+        procedure, or its document looks like the main place the question
+        is covered. Returns the document's text as a new chunk with its own
+        id, to keep or ignore like any other. Long documents come in parts.
+
+        Args:
+            chunk_id: The id of a chunk from that document, e.g. c3.
+            start: Character offset to read from; leave it out to read from
+                the beginning, or pass the offset a previous read gave.
+        """
+        return guard(session, "read_document") or session.read_document(chunk_id, start)
+
+    return read_document
 
 
 @vault_agent_tool("keep_chunk")

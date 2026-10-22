@@ -190,10 +190,14 @@ pipeline is a `cached_property` — so there is one parameter list, not two to k
 The Ask route and `VaultService.ask` share `query._answer_with_agent` and the
 `AGENT_*_NOTE` constants; do not re-inline that branch in either.
 
-`agent_tools.py` — six tools, all needing per-query state, so each is a **factory**
+`agent_tools.py` — seven tools, all needing per-query state, so each is a **factory**
 returning a tool bound to one `AgentSearchSession` (the pattern talkpipe-agents documents
-for stateful packs): `vector_search`, `keyword_search`, `extract_keywords`, `keep_chunk`,
-`ignore_chunk`, `enough_information`. `@vault_agent_tool("name")` registers a factory in
+for stateful packs): `vector_search`, `keyword_search`, `extract_keywords`,
+`read_document`, `keep_chunk`, `ignore_chunk`, `enough_information`. `read_document` takes
+a chunk id, never a path: it reads the `source` that chunk records (through the session's
+injected `read_document` callable; `AgentVaultSearch.read_document` uses talkpipe's
+`ReadFile`, i.e. the indexing extractors) and registers the part read as a new chunk to
+keep or ignore. `@vault_agent_tool("name")` registers a factory in
 `TOOL_FACTORIES`, mirroring talkpipe-agents' own name registry; `build_tools(session,
 names)` resolves a name list against it and **falls through to `resolve_agent_tools` for
 anything it does not own**, so a pipeline can mix in generic tools (`think`, `calculator`,
