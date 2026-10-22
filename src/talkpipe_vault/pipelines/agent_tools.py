@@ -48,8 +48,11 @@ from .searching_and_prompting import normalize_search_result
 
 logger = logging.getLogger(__name__)
 
-# How much of a chunk the agent is shown when a search returns it.
-CHUNK_PREVIEW_CHARS = 500
+# How much of a chunk the agent is shown when a search returns it. Enough
+# for a whole chunk at the default indexing settings (three 300-character
+# pieces per shingle): the agent decides on what it can see, so a shorter
+# preview hides the part of a chunk that would have made it worth keeping.
+CHUNK_PREVIEW_CHARS = 1000
 
 SearchFn = Callable[[str], Iterable[Any]]
 # A factory takes the session the tool will share and returns a Strands tool.
@@ -385,7 +388,8 @@ class AgentSearchSession:
             self.tell("agent ✗ enough_information refused: nothing kept yet")
             return (
                 "You have not kept any chunk yet, so there is nothing to answer "
-                "from. Keep searching, and keep the chunks the answer needs."
+                "from. Keep searching, and keep the chunks that help answer "
+                "the question, even if only in part."
             )
         self.enough = True
         self.enough_reason = reason
@@ -468,8 +472,9 @@ def make_extract_keywords(session: AgentSearchSession) -> Any:
 def make_keep_chunk(session: AgentSearchSession) -> Any:
     @strands_tool
     def keep_chunk(chunk_id: str, reason: str = "") -> str:
-        """Keep a chunk: it contributes information the answer needs.
-        Kept chunks are what the question will be answered from.
+        """Keep a chunk: it holds information that helps answer the
+        question, even if only part of it. Kept chunks are the only thing
+        the question will be answered from.
 
         Args:
             chunk_id: The id shown with the chunk, e.g. c3.
@@ -486,8 +491,8 @@ def make_keep_chunk(session: AgentSearchSession) -> Any:
 def make_ignore_chunk(session: AgentSearchSession) -> Any:
     @strands_tool
     def ignore_chunk(chunk_id: str, reason: str = "") -> str:
-        """Ignore a chunk: it is not relevant to the question and must
-        not be shown to the user.
+        """Ignore a chunk: it is about something other than the question,
+        so nothing in it would help the answer.
 
         Args:
             chunk_id: The id shown with the chunk, e.g. c3.

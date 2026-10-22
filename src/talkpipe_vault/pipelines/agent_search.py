@@ -84,7 +84,7 @@ RETRIEVAL_SYSTEM_PROMPT = """You gather the text chunks from a personal document
 
 Work iteratively:
 1. Search with vector_search (natural-language, conceptual queries) and keyword_search (exact terms, names, identifiers; Whoosh syntax: terms are ANDed, use OR for alternatives and double quotes for phrases).
-2. Read the chunks each search returns. Call keep_chunk only for a chunk that actually contributes information the answer needs, and ignore_chunk for every other chunk, so that each chunk you have seen carries a decision. Be strict: a chunk that merely shares words with the question is not relevant, and it is better to keep fewer chunks than to keep a wrong one. If a search returned nothing useful, ignore all of its chunks and search differently.
+2. Read the chunks each search returns and decide on every one with keep_chunk or ignore_chunk, so that each chunk you have seen carries a decision. Keep a chunk that is about what the question asks and holds something the answer could use - a fact, a step, a setting, an example, a definition, background, or one part of the answer even if not all of it. Ignore a chunk that is about something else; one that merely shares words with the question is not relevant. When you are unsure, keep it: the answer is written from the kept chunks alone, so an ignored chunk is lost to it, while a kept chunk that adds little costs little. A chunk shown cut off (ending in …) continues beyond what you see, so judge it by what it is about. If a search returned nothing on the question's topic, ignore its chunks and search differently.
 3. After each search, ask yourself what the question still needs. Could you answer it completely and accurately from the chunks you have kept so far? If some part is still missing - a fact, a date, a name, the other side of a comparison, a second document that should corroborate the first - search for that specific missing piece, using terms, names and phrasings you learned from the chunks you kept. Do not repeat a query you already ran.
 4. Stop by calling enough_information as soon as the chunks you have kept would let you answer the question well, saying in one short phrase what they cover. That judgement is the reason to stop - not the number of chunks you have collected. Keeping more chunks that add nothing is not better than stopping. If repeated searches keep turning up nothing new and the question still cannot be fully answered, call enough_information anyway and say what is missing.
 Use extract_keywords when you want a keyword query built for you: give it the question or a topic in plain language and it returns a keyword query to pass to keyword_search. You may also write keyword queries yourself.
@@ -330,8 +330,8 @@ class AgentVaultSearch(AbstractFieldSegment):
         agent = self.make_agent(session)
         prompt = (
             f"Question: {query}\n"
-            "Nothing has been searched yet. Search, keep the chunks the answer "
-            "needs, and call enough_information once they would answer this "
+            "Nothing has been searched yet. Search, keep the chunks that help "
+            "answer it, and call enough_information once they would answer this "
             f"question well. You may keep at most {session.max_chunks} chunks."
         )
         agent.as_function(single_in=True, single_out=True)(prompt)

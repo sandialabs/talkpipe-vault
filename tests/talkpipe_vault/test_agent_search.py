@@ -279,6 +279,18 @@ class TestSessionTools:
         assert "x" * agent_tools.CHUNK_PREVIEW_CHARS + "…" in out
         assert "x" * (agent_tools.CHUNK_PREVIEW_CHARS + 1) not in out
 
+    def test_default_sized_chunk_is_shown_whole(self):
+        """The agent decides on what it sees, so a chunk indexed with the
+        default settings (a shingle of several pieces) must not be clipped."""
+        from talkpipe_vault.apps.query import DEFAULT_CHUNK_SIZE, DEFAULT_SHINGLE_SIZE
+
+        pieces = ["y" * DEFAULT_CHUNK_SIZE] * DEFAULT_SHINGLE_SIZE
+        text = " ".join(pieces)
+        session, _ = _make_session(vector={"q": [_hit("a", text)]})
+        out = _tools(session)["vector_search"](query="q")
+        assert text in out
+        assert "…" not in out
+
 
 class _ScriptedSearch(AgentVaultSearch):
     """AgentVaultSearch with the vault, embedder, and model replaced: the

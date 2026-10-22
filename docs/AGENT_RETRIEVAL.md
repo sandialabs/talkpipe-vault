@@ -87,9 +87,12 @@ bound to one `AgentSearchSession` that holds that query's state:
 
 Chunks are deduplicated across searches by `doc_id` (falling back to the
 document's content), so a chunk found twice keeps its id and its decision.
-The agent is told to decide on every chunk it sees, to refine its queries
-from what it learns, and — after each search — to ask what the question
-still lacks and search for that.
+The agent is told to decide on every chunk it sees — keeping one that would
+help answer even part of the question, and keeping it when unsure, since an
+ignored chunk is lost to the answer — to refine its queries from what it
+learns, and — after each search — to ask what the question still lacks and
+search for that. It sees up to `CHUNK_PREVIEW_CHARS` (1000) characters of
+each chunk, enough for a whole chunk at the default indexing settings.
 
 **The stopping criterion is the agent's judgement, not a count.** A run ends
 when the agent calls `enough_information`. Two limits exist only to bound a
