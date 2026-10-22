@@ -230,7 +230,8 @@ stopped without saying it had enough — because each means something different 
 complete the selection is; the last is what weaker tool-calling models do. The outcome is an
 `AgentSearchOutcome(results, note, trace)`: kept chunks as `SearchResult` in keep order, a
 note on how it ended, and the tool-call trace, which is also printed (`progress`, stdout
-by default) so the agent's behavior is visible on the server console. `extract_keywords` is the LLM
+by default) so the agent's behavior is visible on the server console; a keyword-only
+`error` holds the exception text when the run failed (`""` otherwise). `extract_keywords` is the LLM
 keyword distillation the Ask page's keyword boost uses (the `ExtractSearchKeywords`
 segment): the agent hands it a plain-language question and gets back a Whoosh query to
 pass to `keyword_search`, rather than having to write Whoosh syntax itself. The agent
@@ -242,7 +243,12 @@ feeds the kept chunks to the same `ConstructRAGPrompt` → `LLMPrompt` → `Appe
 stages `vaultChat` ends with, so an agent-gathered answer is worded and cited exactly like
 a plain one — only the retrieval in front differs. It emits an `AgentChatOutcome` (an
 `AgentSearchOutcome` plus `response`); when the agent kept nothing, no prompt is sent and
-`NO_CONTEXT_ANSWER` is returned instead of asking a model to answer from an empty context.
+`NO_CONTEXT_ANSWER` is returned instead of asking a model to answer from an empty context
+(`AGENT_ERROR_ANSWER` when the run failed before keeping anything — the vault was never
+searched, so the answer must not blame it). `_bind_vault` refuses a vault path that does not
+exist, so a typo fails at construction instead of creating an empty folder. Strands runs one
+turn's tool calls concurrently in threads, so `AgentSearchSession._register` assigns chunk ids
+under a lock; an unknown chunk id passed to keep/ignore is refused *and* traced.
 
 **Both pages are driven by one segment.** `_refresh_agent_pipelines` builds a single
 `AgentVaultChat` per refresh and sets `_state.agent_search_pipeline = segment.select_chunks`

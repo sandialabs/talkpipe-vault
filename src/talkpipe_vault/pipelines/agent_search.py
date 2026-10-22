@@ -58,6 +58,7 @@ from .config import (
     RAG_SYSTEM_PROMPT,
     get_chat_model,
     get_chat_source,
+    get_vector_db_path,
     get_whoosh_index_path,
 )
 from .searching_and_prompting import (
@@ -98,6 +99,15 @@ NO_CONTEXT_ANSWER = (
     "tool calling, or asking without the agent."
 )
 
+# Shown instead of an answer when the run failed before keeping anything: the
+# agent never got to look, so the vault and the question are not the problem.
+AGENT_ERROR_ANSWER = (
+    "The agent stopped with an error before it kept any chunk, so there was "
+    "nothing to answer from; the note says what went wrong. Check that the "
+    "chat model is available and supports tool calling, or ask without the "
+    "agent."
+)
+
 # Appended to the note of a run that ended without the agent's judgement, the
 # ceiling, or the turn cap: that is how a model weak at tool calling ends a
 # run, and nothing else on the page would tell the reader the model is why.
@@ -116,6 +126,9 @@ class AgentSearchOutcome:
     results: list[SearchResult]
     note: str
     trace: list[str] = field(default_factory=list)
+    # The exception text when the run stopped with an error, else "".
+    # Keyword-only, so AgentChatOutcome's positional fields are unchanged.
+    error: str = field(default="", kw_only=True)
 
 
 @dataclass
@@ -205,7 +218,12 @@ class AgentVaultSearch(AbstractFieldSegment):
         max_keywords: Annotated[
             int, "Maximum terms in a query built by the extract_keywords tool."
         ] = DEFAULT_MAX_KEYWORDS,
-        progress: Callable[[str], None] | None = None,
+        progress: Annotated[
+            Callable[[str], None] | None,
+            "Called with each trace line as the agent works (tool calls, "
+            "decisions, how the run ended). None prints them to stdout; pass "
+            "a logger method, a list's append, or a no-op to keep them off it.",
+        ] = None,
     ) -> None:
         super().__init__(field=field, set_as=set_as, multi_emit=multi_emit)
         self.vault_path = vault_path
@@ -239,7 +257,16 @@ class AgentVaultSearch(AbstractFieldSegment):
         constructor otherwise. The agent model is resolved here rather than
         per query so a bad chat configuration fails the build, where the app
         can fall back to plain search, instead of failing mid-search.
+        A vault path that does not exist is refused here too: searching it
+        would create an empty folder and send the agent through a whole run
+        of empty searches before anyone saw the typo.
         """
+        if not os.path.isdir(get_vector_db_path(self.vault_path)):
+            raise ValueError(
+                f"No vault at {self.vault_path!r}: the folder does not exist. "
+                "Check the path, or build the vault first (makevectordatabase "
+                "or the Vaults & Documents page)."
+            )
         build_agent_model(self.chat_source, self.chat_model)
         self._vector_search = VaultSearch(
             vault_path=self.vault_path,
@@ -329,8 +356,12 @@ class AgentVaultSearch(AbstractFieldSegment):
         except Exception as exc:
             logger.warning("Agent search failed", exc_info=True)
             session.tell(f"agent search failed: {exc}")
-            note = f"The agent stopped with an error ({exc}); showing what it kept."
-            return AgentSearchOutcome(session.results, note, session.trace)
+            note = f"The agent stopped with an error ({exc}); " + (
+                "showing what it kept." if session.kept else "it kept nothing."
+            )
+            return AgentSearchOutcome(
+                session.results, note, session.trace, error=str(exc) or repr(exc)
+            )
         kept = len(session.kept)
         searches = len(session.queries_run)
         # The four ways a run can end, most to least satisfying. The first is
@@ -412,9 +443,14 @@ class AgentVaultChat(AgentVaultSearch):
 
     def process_value(self, value: str) -> AgentChatOutcome:
         outcome = self.select_chunks(value)
-        response = (
-            self.answer(value, outcome.results)
-            if outcome.results
-            else NO_CONTEXT_ANSWER
+        if outcome.results:
+            response = self.answer(value, outcome.results)
+        else:
+            response = AGENT_ERROR_ANSWER if outcome.error else NO_CONTEXT_ANSWER
+        return AgentChatOutcome(
+            outcome.results,
+            outcome.note,
+            outcome.trace,
+            response,
+            error=outcome.error,
         )
-        return AgentChatOutcome(outcome.results, outcome.note, outcome.trace, response)

@@ -47,7 +47,13 @@ INPUT FROM echo[data="How did the treasury handle inflation in the 1970s?"]
 
 `vaultAgentChat` emits the whole outcome; `extractProperty` keeps just the
 answer (drop it to print everything). The trace lines are printed to stdout
-as the agent works, ahead of the answer.
+as the agent works, ahead of the answer — a ChatterLang script cannot turn
+that off, so its output always carries them.
+
+**Keep the trace off stdout** in your own program by passing `progress`, a
+callable that receives each trace line: `progress=logging.getLogger("my_app").info`,
+a list's `append`, or `lambda line: None` to drop them. `outcome.trace` holds
+the lines either way.
 
 **Pick the model.** The chat model defaults to TalkPipe's configuration
 (`TALKPIPE_CHAT_SOURCE` / `TALKPIPE_CHAT_MODEL`, or `chat_source` /
@@ -109,10 +115,12 @@ application should show it rather than swallow it:
 | `Agent filled its N-chunk maximum` | Stopped by `max_chunks`. The selection may be cut off; raise the limit if answers look truncated |
 | `Agent hit the N-iteration cap` | Stopped by `max_iterations` before deciding |
 | `Agent stopped without saying it had enough` | The model ended its turn without calling `enough_information`. **This is what a model with weak tool-calling does** — it looks like a finished run but is not one, so the note goes on to say the model is the likely cause |
-| `The agent stopped with an error (…)` | An exception mid-run; what it had kept so far is returned |
+| `The agent stopped with an error (…)` | An exception mid-run — often the model server refusing the request (model not pulled, or no tool calling for that model). What it had kept so far is returned, and `outcome.error` holds the exception text (it is `""` for every other ending) |
 
 `AgentVaultChat` sends no RAG prompt when nothing was kept — `response` is
-then a fixed "nothing to answer from" message rather than an invented answer.
+then a fixed "nothing to answer from" message rather than an invented answer
+(`NO_CONTEXT_ANSWER`, or `AGENT_ERROR_ANSWER` when the run failed before
+keeping anything, since then the vault was never searched).
 
 The model matters. In testing, `gpt-oss` and `qwen3:8b` run the loop
 cleanly; `mistral-small` (the vault's default chat model) searches but rarely
@@ -120,6 +128,9 @@ calls `keep_chunk`; some models make no tool calls at all. All of them end
 safely (the weak ones as "stopped without saying it had enough" or "nothing
 to answer from"), but only the first kind is useful. The model is the chat
 model: on the web and terminal interfaces, the one chosen under Settings.
+Trace lines like `agent ✗ keep_chunk refused: unknown chunk id 'c1'` are the
+signature of a model that keeps chunks before reading them — guessing ids, or
+sending the keep in the same step as the search that would return them.
 
 ## Choosing tools and prompt
 
@@ -187,15 +198,16 @@ session = AgentSearchSession(
 )
 
 agent = LLMAgent(
-    model="gpt-oss:latest",
+    model="qwen3:8b",
     source="ollama",
     system_prompt=RETRIEVAL_SYSTEM_PROMPT,
     tools=build_tools(session, parse_tool_names(None)),
     max_turns=8,
     progress=session.tell,
 )
+question = "How did the treasury handle inflation in the 1970s?"
 agent.as_function(single_in=True, single_out=True)(
-    "Question: …\nSearch, keep the chunks the answer needs, and call "
+    f"Question: {question}\nSearch, keep the chunks the answer needs, and call "
     "enough_information once they would answer it well."
 )
 
@@ -225,9 +237,12 @@ What the session needs from your callables:
   Whoosh's `path`/`filename` into `source`/`title` so keyword hits are
   citable.
 
-**A session is one query's state and is not thread-safe.** Build one per
-query, as the vault segments do in `make_session()`; the segment itself can
-be shared, and the web app builds one and serves both pages from it.
+**A session is one query's state.** Build one per query, as the vault
+segments do in `make_session()`; the segment itself can be shared, and the
+web app builds one and serves both pages from it. Within a query, Strands runs
+the tool calls of one model step concurrently, in threads. The session's
+own bookkeeping allows for that, but your search callables may be called from
+several threads at once, so they must tolerate it.
 
 To reuse the vault's *segments* with your own backend instead — keeping the
 outcome, the note, and the `select_chunks`/`answer` split — subclass
@@ -246,6 +261,22 @@ class MyAgentSearch(AgentVaultSearch):
     def vector_search(self, query): ...
     def keyword_index_exists(self): ...
     def keyword_search(self, query): ...
+```
+
+`vault_path` is still required, but once `_bind_vault` is overridden it is
+only a label — nothing opens it. For answers as well as the selection, mix the
+subclass into `AgentVaultChat`, which adds the RAG answering stage and no
+parameters:
+
+```python
+from talkpipe_vault.pipelines.agent_search import AgentVaultChat
+
+
+class MyAgentChat(MyAgentSearch, AgentVaultChat):
+    pass
+
+
+ask = MyAgentChat(vault_path="my-backend", chat_model="qwen3:8b")
 ```
 
 This is exactly how the test suite runs the segments without a vault or an

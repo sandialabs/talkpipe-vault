@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any
@@ -167,6 +168,10 @@ class AgentSearchSession:
         # number of chunks, is the run's stopping criterion.
         self.enough = False
         self.enough_reason = ""
+        # Strands runs the tool calls of one model turn concurrently, in
+        # threads, so two searches can register hits at the same moment;
+        # the lock keeps them from handing out the same chunk id.
+        self._register_lock = threading.Lock()
 
     # -- bookkeeping ---------------------------------------------------------
 
@@ -205,13 +210,14 @@ class AgentSearchSession:
         if result is None:
             return None
         key = result.doc_id or json.dumps(result.document, sort_keys=True, default=str)
-        existing = self._by_key.get(key)
-        if existing is not None:
-            return self._chunks[existing]
-        chunk = _Chunk(id=f"c{len(self._chunks) + 1}", result=result, key=key)
-        self._chunks[chunk.id] = chunk
-        self._by_key[key] = chunk.id
-        return chunk
+        with self._register_lock:
+            existing = self._by_key.get(key)
+            if existing is not None:
+                return self._chunks[existing]
+            chunk = _Chunk(id=f"c{len(self._chunks) + 1}", result=result, key=key)
+            self._chunks[chunk.id] = chunk
+            self._by_key[key] = chunk.id
+            return chunk
 
     @staticmethod
     def _title(chunk: _Chunk) -> str:
@@ -326,10 +332,18 @@ class AgentSearchSession:
 
     def decide(self, chunk_id: str, reason: str, *, keep: bool) -> str:
         chunk_id = chunk_id.strip()
+        verb = "keep" if keep else "ignore"
         chunk = self._chunks.get(chunk_id)
         if chunk is None:
-            return f"Unknown chunk id {chunk_id!r}; use an id from a search result."
-        verb = "keep" if keep else "ignore"
+            # Traced as well as returned: a model that guesses ids, or keeps a
+            # chunk in the same turn as the search that finds it, otherwise
+            # leaves a trace full of keep calls and nothing kept.
+            self.tell(f"agent ✗ {verb}_chunk refused: unknown chunk id {chunk_id!r}")
+            return (
+                f"Unknown chunk id {chunk_id!r}; use an id from a search result "
+                "you have already received (a search called in the same step "
+                "has not returned its ids yet)."
+            )
         if chunk_id in self.kept:
             return f"{chunk_id} is already kept."
         if chunk_id in self.ignored:

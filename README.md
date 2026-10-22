@@ -262,9 +262,12 @@ script syntax is in the Advanced Guide under
   default, `mistral-small`, often stops without keeping what it found (the
   results note then says it "stopped without saying it had enough"); in
   testing, `qwen3:8b` and `gpt-oss` ran the agent cleanly. When the chat
-  model cannot be run as an agent at all, the page says so in place of the
-  checkbox. To use the agent's tools in your own application, or over
-  your own search backend, see the
+  provider cannot run an agent at all (`eliza`, for instance), the page says
+  so in place of the checkbox. Whether a particular model can call tools only
+  shows when a search runs — the **Configuration status** panel tests a plain
+  chat exchange — so a model or server without tool calling ends the run with
+  an error note quoting what the server said. To use the agent's tools in
+  your own application, or over your own search backend, see the
   [agent retrieval developer's guide](docs/AGENT_RETRIEVAL.md).
 - **Keyword Search** — boolean and phrase queries, over a separate full-text
   index you build once with the button on that page (the page says so, and

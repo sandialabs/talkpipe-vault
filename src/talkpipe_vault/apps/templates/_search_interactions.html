@@ -198,6 +198,12 @@ document.addEventListener('DOMContentLoaded', function() {
             }
             btn.disabled = true;
             btn.textContent = 'Searching...';
+            // An agent run is many searches and model turns, not one lookup.
+            const agentToggle = form.elements.namedItem('use_agent');
+            if (agentToggle && agentToggle.checked) {
+                loading.querySelector('span').textContent =
+                    'Agent is searching the vault and choosing chunks. This takes a while...';
+            }
             loading.style.display = 'flex';
         });
     }

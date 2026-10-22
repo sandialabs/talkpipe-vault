@@ -9,6 +9,8 @@ embedder, or an LLM.
 
 from __future__ import annotations
 
+import sys
+import threading
 from typing import Any
 
 import pytest
@@ -156,6 +158,65 @@ class TestSessionTools:
         assert not session.enough
         assert not session.should_stop
         assert "refused" in told[-1]
+
+    def test_an_unknown_chunk_id_is_refused_in_the_trace_too(self):
+        """A model that keeps a chunk before any search has returned it (a
+        guessed id, or a keep sent in the same turn as the search) must leave
+        a visible refusal, not a keep call with no outcome."""
+        session, told = _make_session(vector={"q": [_hit("a", "one")]})
+        tools = _tools(session)
+
+        out = tools["keep_chunk"](chunk_id="c1", reason="guessed")
+        assert "already received" in out
+        assert told[-1] == "agent ✗ keep_chunk refused: unknown chunk id 'c1'"
+        tools["ignore_chunk"](chunk_id="volcker.md")
+        assert told[-1] == (
+            "agent ✗ ignore_chunk refused: unknown chunk id 'volcker.md'"
+        )
+        assert session.kept == []
+        assert not session.ignored
+
+    def test_concurrent_searches_never_share_a_chunk_id(self):
+        """Strands runs one turn's tool calls in parallel threads, so searches
+        can register hits at the same moment; each chunk keeps its own id."""
+        workers = 8
+        per_search = 500
+        start = threading.Barrier(workers)
+
+        def search(query: str) -> list[Any]:
+            start.wait()
+            return [_hit(f"{query}-{n}", query) for n in range(per_search)]
+
+        session = AgentSearchSession(
+            vector_search=search,
+            keyword_search=lambda q: [],
+            keyword_index_exists=lambda: False,
+            extract_keywords=None,
+            max_chunks=1,
+            tell=lambda _m: None,
+        )
+        tools = _tools(session)
+        threads = [
+            threading.Thread(target=tools["vector_search"], kwargs={"query": f"q{i}"})
+            for i in range(workers)
+        ]
+        # Switch threads as often as possible so an unguarded id assignment
+        # would actually interleave.
+        interval = sys.getswitchinterval()
+        sys.setswitchinterval(1e-6)
+        try:
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+        finally:
+            sys.setswitchinterval(interval)
+
+        ids = list(session._chunks)
+        assert len(ids) == workers * per_search
+        assert sorted(ids, key=lambda cid: int(cid[1:])) == [
+            f"c{n}" for n in range(1, workers * per_search + 1)
+        ]
 
     def test_keeping_an_ignored_chunk_reverses_the_decision(self):
         session, _ = _make_session(vector={"q": [_hit("a", "one")]}, max_chunks=5)
@@ -363,6 +424,34 @@ class TestAgentVaultSearch:
         outcome = _ScriptedSearch(script).process_value("q")
         assert [r.doc_id for r in outcome.results] == ["b"]
         assert "model unreachable" in outcome.note
+        assert outcome.note.endswith("showing what it kept.")
+        assert outcome.error == "model unreachable"
+
+    def test_agent_failure_before_keeping_anything_says_so(self):
+        def script(tools: dict[str, Any]) -> None:
+            raise RuntimeError("tools param requires --jinja flag")
+
+        outcome = _ScriptedSearch(script).process_value("q")
+        assert outcome.results == []
+        assert outcome.note.startswith("The agent stopped with an error (")
+        assert outcome.note.endswith("it kept nothing.")
+        assert outcome.error == "tools param requires --jinja flag"
+
+    def test_a_run_that_did_not_fail_has_no_error(self):
+        def script(tools: dict[str, Any]) -> None:
+            tools["vector_search"](query="q")
+
+        assert _ScriptedSearch(script).process_value("q").error == ""
+
+    def test_a_missing_vault_is_refused_when_the_segment_is_built(self, tmp_path):
+        """A mistyped vault path must fail up front -- not create an empty
+        folder and send the agent through a run of empty searches."""
+        missing = tmp_path / "no-such-vault"
+        with pytest.raises(ValueError, match=r"No vault at .*no-such-vault"):
+            AgentVaultSearch(
+                vault_path=str(missing), chat_model="m", chat_source="ollama"
+            )
+        assert not missing.exists()
 
     def test_as_function_yields_the_outcome(self):
         def script(tools: dict[str, Any]) -> None:
@@ -422,6 +511,22 @@ class TestAgentVaultChat:
         assert segment.answered == []
         assert outcome.results == []
         assert outcome.response == agent_search.NO_CONTEXT_ANSWER
+        assert outcome.error == ""
+
+    def test_a_failed_run_is_not_answered_as_an_empty_vault(self):
+        """An agent that errored before searching never looked at the vault;
+        the answer must not blame the vault or the question."""
+
+        def script(tools: dict[str, Any]) -> None:
+            raise RuntimeError("model 'x' not found")
+
+        segment = _ScriptedChat(script)
+        outcome = segment.process_value("q")
+
+        assert segment.answered == []
+        assert outcome.response == agent_search.AGENT_ERROR_ANSWER
+        assert outcome.error == "model 'x' not found"
+        assert "model 'x' not found" in outcome.note
 
     def test_as_function_yields_the_outcome(self):
         def script(tools: dict[str, Any]) -> None:
