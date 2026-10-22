@@ -1801,7 +1801,7 @@ def _record_vault_embedding_config(
     wrote its vectors.
     """
     try:
-        retrieval_template = get_retrieval_template()
+        retrieval_template = get_retrieval_template(embedding_model)
     except Exception:  # pragma: no cover - defensive; config read is cheap
         retrieval_template = None
     vault_metadata.record_embedding_config(

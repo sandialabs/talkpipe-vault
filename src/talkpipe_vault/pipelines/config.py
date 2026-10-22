@@ -27,6 +27,8 @@ Supported Configuration Keys:
 - retrieval_template: Template for formatting search queries before embedding
   Alternative keys: RETRIEVAL_TEMPLATE
   Placeholders: {query}
+  Unset, queries are embedded as is, except for EmbeddingGemma models, which
+  get the task prefix they were trained with.
 
 Configuration can be set via:
 1. TalkPipe config file (~/.talkpipe.toml):
@@ -45,7 +47,8 @@ Configuration can be set via:
    CHAT_SOURCE="ollama"
    DOCUMENT_TEMPLATE="title: {title} | text: {content}"
    SHINGLE_TEMPLATE="title: {title} | text: {shingle}"
-   RETRIEVAL_TEMPLATE="task: search result | query: {query}"
+   RETRIEVAL_TEMPLATE="{query}"
+   (EmbeddingGemma: "task: search result | query: {query}")
 """
 
 import os
@@ -226,7 +229,11 @@ Reply with only the keywords, one per line. Do not number them, do not add bulle
 # Default template values (used if not specified in TalkPipe config)
 DOCUMENT_TEMPLATE = """title: {title} | text: {content}"""
 SHINGLE_TEMPLATE = """title: {title} | text: {shingle}"""
-RETRIEVAL_TEMPLATE = """task: search result | query: {query}"""
+RETRIEVAL_TEMPLATE = """{query}"""
+# EmbeddingGemma's query prefix, the default back when it was the default
+# embedder. Other embedders retrieve worse with it, so it now applies only to
+# EmbeddingGemma models.
+EMBEDDINGGEMMA_RETRIEVAL_TEMPLATE = """task: search result | query: {query}"""
 
 
 def get_document_template() -> str:
@@ -245,11 +252,22 @@ def get_shingle_template() -> str:
     )
 
 
-def get_retrieval_template() -> str:
+def get_retrieval_template(embedding_model: str | None = None) -> str:
     """Template for formatting search queries before embedding (placeholder
-    {query}); see module docstring for key precedence."""
+    {query}); see module docstring for key precedence.
+
+    The default depends on the embedding model the queries go to
+    (``embedding_model``, else the configured one): EmbeddingGemma models get
+    their task prefix, every other model the bare query.
+    """
+    model = embedding_model if embedding_model is not None else get_embedding_model()
+    default = (
+        EMBEDDINGGEMMA_RETRIEVAL_TEMPLATE
+        if "embeddinggemma" in model.lower()
+        else RETRIEVAL_TEMPLATE
+    )
     return _get_talkpipe_config_value(
         "retrieval_template",
-        RETRIEVAL_TEMPLATE,
+        default,
         alternative_keys=["RETRIEVAL_TEMPLATE"],
     )

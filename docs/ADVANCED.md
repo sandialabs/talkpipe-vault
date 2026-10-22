@@ -227,7 +227,7 @@ export OPENAI_API_KEY="sk-your-key-here"
 | `chat_source` | `CHAT_SOURCE`, `default_model_source` | Provider for chat model (`ollama`, `openai`, `anthropic`, `eliza`) | `ollama` |
 | `document_template` | `DOCUMENT_TEMPLATE` | Formats full documents before embedding. Placeholders: `{title}`, `{content}` | `"title: {title} \| text: {content}"` |
 | `shingle_template` | `SHINGLE_TEMPLATE` | Formats shingled chunks before embedding. Placeholders: `{title}`, `{shingle}` | `"title: {title} \| text: {shingle}"` |
-| `retrieval_template` | `RETRIEVAL_TEMPLATE` | Formats search queries before embedding. Placeholder: `{query}` | `"task: search result \| query: {query}"` |
+| `retrieval_template` | `RETRIEVAL_TEMPLATE` | Formats search queries before embedding. Placeholder: `{query}`. Set it when your embedder was trained with a query prefix (e.g. `"search_query: {query}"`) | `"{query}"`; for EmbeddingGemma models `"task: search result \| query: {query}"` |
 
 ### Provider notes
 

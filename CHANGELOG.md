@@ -2,6 +2,9 @@
 
 ## In Development
 
+### Search
+- **Queries are now embedded as typed, without the `task: search result | query:` prefix.** That prefix is EmbeddingGemma's, left over from when it was the default embedder, and it makes the default model2vec embedder retrieve worse. On a 100-question benchmark of a personal notes wiki, the default index (potion-retrieval-32M, default chunking, 5 results) found a right source file for 93% of questions instead of 87%, with recall up from 0.73 to 0.81 and MRR from 0.67 to 0.72; nomic-embed-text improved slightly too. EmbeddingGemma models keep the prefix, and a configured `retrieval_template` is used unchanged. Existing vaults need no re-indexing: the template only shapes queries.
+
 ### Agent-Selected Search Results and Answers
 - **The retrieval agent can read a whole document.** A new `read_document` tool loads the document behind a chunk the agent has already seen — when the chunk is cut off, is one step of a procedure, or comes from the document plainly about the question — and hands it back as a chunk of its own to keep or ignore; long documents come in 6000-character parts. The agent names a chunk, never a path, so only documents the vault returned can be read, through the same extractors indexing used. It is part of the default tool pack and the retrieval prompt says when to use it. Small models (qwen3:8b) rarely call it unprompted: the tool is there for the hunch, not yet a habit.
 - `talkpipe-agents` now comes from PyPI (0.1.0 or later, its first release); the package-registry index, its source entry and the CI index variables are gone.

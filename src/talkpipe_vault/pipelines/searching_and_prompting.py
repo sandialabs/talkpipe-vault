@@ -529,7 +529,7 @@ class VaultSearch(AbstractFieldSegment):
             embedding_model, embedding_source
         )
 
-        retrieval_template = get_retrieval_template()
+        retrieval_template = get_retrieval_template(embedding_model)
         ensure_supported_vault_layout(vault_path)
 
         self.vault_path = vault_path
@@ -645,7 +645,7 @@ class VaultChat(AbstractFieldSegment):
         chat_model = chat_model if chat_model is not None else get_chat_model()
         chat_source = chat_source if chat_source is not None else get_chat_source()
 
-        retrieval_template = get_retrieval_template()
+        retrieval_template = get_retrieval_template(embedding_model)
         ensure_supported_vault_layout(vault_path)
 
         self.vault_path = vault_path

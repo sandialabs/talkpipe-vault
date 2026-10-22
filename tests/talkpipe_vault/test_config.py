@@ -4,10 +4,12 @@ import os
 
 import pytest
 
+from talkpipe_vault.pipelines import config
 from talkpipe_vault.pipelines.config import (
     FULLTEXT_VAULT_SUBDIR,
     VECTOR_VAULT_SUBDIR,
     ensure_supported_vault_layout,
+    get_retrieval_template,
     get_vault_paths,
     get_vector_db_path,
     resolve_embedding_config,
@@ -83,3 +85,37 @@ class TestVaultLayoutValidation:
     def test_allows_direct_lancedb_layout(self, tmp_path):
         """Direct LanceDB path without vector_vault should pass validation."""
         ensure_supported_vault_layout(str(tmp_path))
+
+
+class TestRetrievalTemplate:
+    """Tests for the retrieval template default and its EmbeddingGemma fallback."""
+
+    def test_default_is_the_bare_query(self, monkeypatch):
+        monkeypatch.setattr(config, "get_config", dict)
+        assert get_retrieval_template("minishlab/potion-retrieval-32M") == "{query}"
+
+    def test_default_follows_configured_embedder(self, monkeypatch):
+        monkeypatch.setattr(config, "get_config", dict)
+        assert get_retrieval_template() == "{query}"
+
+    @pytest.mark.parametrize(
+        "model", ["embeddinggemma", "embeddinggemma:300m", "google/EmbeddingGemma-300m"]
+    )
+    def test_embeddinggemma_keeps_its_task_prefix(self, monkeypatch, model):
+        monkeypatch.setattr(config, "get_config", dict)
+        assert get_retrieval_template(model) == "task: search result | query: {query}"
+
+    def test_configured_embeddinggemma_keeps_its_task_prefix(self, monkeypatch):
+        monkeypatch.setattr(
+            config, "get_config", lambda: {"embedding_model": "embeddinggemma"}
+        )
+        assert get_retrieval_template() == "task: search result | query: {query}"
+
+    def test_explicit_template_wins_for_any_model(self, monkeypatch):
+        monkeypatch.setattr(
+            config,
+            "get_config",
+            lambda: {"vault": {"retrieval_template": "q: {query}"}},
+        )
+        assert get_retrieval_template("embeddinggemma") == "q: {query}"
+        assert get_retrieval_template("nomic-embed-text") == "q: {query}"
