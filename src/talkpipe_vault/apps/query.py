@@ -107,6 +107,11 @@ DEFAULT_RAG_RESULT_LIMIT = 8
 DEFAULT_SEARCH_RESULT_LIMIT = 10
 DEFAULT_AGENT_SEARCH_ITERATIONS = agent_search.DEFAULT_MAX_ITERATIONS
 DEFAULT_AGENT_SEARCH_RESULT_COUNT = agent_search.DEFAULT_MAX_CHUNKS
+# Extra Effort multiplies the agent's iteration cap for one question. On the
+# vault-tune benchmark doubling it (8 -> 16) lifted a strong tool-calling model
+# on multi-step questions and changed little for weaker ones, so it is an
+# opt-in per question rather than a higher default.
+EXTRA_EFFORT_ITERATION_FACTOR = 2
 
 
 @dataclass
@@ -135,6 +140,14 @@ class AppState:
         None
     )
     agent_chat_pipeline: Callable[[str], agent_search.AgentChatOutcome] | None = None
+    # The same two with EXTRA_EFFORT_ITERATION_FACTOR times the iteration cap,
+    # behind the pages' Extra Effort checkbox; set and cleared with the above.
+    agent_search_extra_pipeline: (
+        Callable[[str], agent_search.AgentSearchOutcome] | None
+    ) = None
+    agent_chat_extra_pipeline: Callable[[str], agent_search.AgentChatOutcome] | None = (
+        None
+    )
     # Why the agent pipelines could not be built (empty when they were), so
     # the pages can say why the option is missing instead of hiding it
     # without a word.
@@ -199,6 +212,10 @@ def _template_context(
         "agent_search_available": state.agent_search_pipeline is not None,
         "agent_chat_available": state.agent_chat_pipeline is not None,
         "agent_unavailable_reason": state.agent_unavailable_reason,
+        "extra_effort_iterations": (
+            state.agent_search_iterations or DEFAULT_AGENT_SEARCH_ITERATIONS
+        )
+        * EXTRA_EFFORT_ITERATION_FACTOR,
         # Fixed, unlike the configurable Ask/keyword count; pages that mention
         # how many semantic matches they show read it from here.
         "search_result_limit": DEFAULT_SEARCH_RESULT_LIMIT,
@@ -578,34 +595,61 @@ AGENT_UNAVAILABLE_NOTE = "the agent is unavailable right now — answered withou
 AGENT_FILTER_NOTE = (
     "the vault's retrieval filter does not apply to the agent's selection"
 )
+EXTRA_EFFORT_NOTE = "Extra Effort"
 AGENT_SEARCH_FILTER_NOTE = (
     "The custom transform does not apply to the agent's selection and was not run."
 )
 
 
 def _answer_with_agent(
-    state: AppState, message: str
+    state: AppState, message: str, extra_effort: bool = False
 ) -> tuple[str, list[dict[str, Any]], list[str], str]:
     """Answer *message* through the agent pipeline.
 
     Returns (response, citations, trace, note): the answer, the chunks the
     agent kept — exactly the RAG context, so they are the citations — the
     tool-call trace, and the note on how the run ended. Both interfaces call
-    this so their agent branches cannot drift apart.
+    this so their agent branches cannot drift apart. *extra_effort* runs the
+    agent with the raised iteration cap.
     """
     pipeline = state.agent_chat_pipeline
+    if extra_effort and state.agent_chat_extra_pipeline:
+        pipeline = state.agent_chat_extra_pipeline
     if pipeline is None:
         # Callers check availability first; this is the type-narrowing guard,
         # written as a real check rather than an assert so it survives -O and
         # satisfies bandit (B101).
         raise RuntimeError("the agent pipeline is not available")
     outcome = pipeline(message)
+    note = outcome.note
+    if pipeline is state.agent_chat_extra_pipeline:
+        note = _prefix_note(note, EXTRA_EFFORT_NOTE)
     return (
         outcome.response,
         _process_semantic_results(outcome.results),
         outcome.trace,
-        outcome.note,
+        note,
     )
+
+
+def _select_with_agent(
+    state: AppState, text: str, extra_effort: bool = False
+) -> agent_search.AgentSearchOutcome:
+    """Run the Search page's agent selection for *text*.
+
+    The Search route and ``VaultService.search`` share it, as they share
+    ``_answer_with_agent``. *extra_effort* runs the agent with the raised
+    iteration cap, and the outcome's note then says so.
+    """
+    pipeline = state.agent_search_pipeline
+    if extra_effort and state.agent_search_extra_pipeline:
+        pipeline = state.agent_search_extra_pipeline
+    if pipeline is None:
+        raise RuntimeError("the agent pipeline is not available")
+    outcome = pipeline(text)
+    if pipeline is state.agent_search_extra_pipeline:
+        outcome.note = f"{EXTRA_EFFORT_NOTE}: {outcome.note}"
+    return outcome
 
 
 def _prefix_note(note: str, prefix: str) -> str:
@@ -640,11 +684,20 @@ def _refresh_agent_pipelines(vault_path: str) -> None:
         logger.warning("Could not build the agent pipelines", exc_info=True)
         _state.agent_search_pipeline = None
         _state.agent_chat_pipeline = None
+        _state.agent_search_extra_pipeline = None
+        _state.agent_chat_extra_pipeline = None
         _state.agent_unavailable_reason = str(exc) or type(exc).__name__
         return
     _state.agent_unavailable_reason = ""
     _state.agent_search_pipeline = segment.select_chunks
     _state.agent_chat_pipeline = segment.as_function(single_in=True, single_out=True)
+    extra = segment.with_max_iterations(
+        segment.max_iterations * EXTRA_EFFORT_ITERATION_FACTOR
+    )
+    _state.agent_search_extra_pipeline = extra.select_chunks
+    _state.agent_chat_extra_pipeline = extra.as_function(
+        single_in=True, single_out=True
+    )
 
 
 def _refresh_filtered_search_pipelines(
@@ -2571,6 +2624,7 @@ async def search_results(
     query: Annotated[str, Form()] = "",
     apply_filter: Annotated[str, Form()] = "",
     use_agent: Annotated[str, Form()] = "",
+    use_extra_effort: Annotated[str, Form()] = "",
     state: AppState = Depends(get_state),
 ) -> HTMLResponse:
     """
@@ -2582,6 +2636,8 @@ async def search_results(
           the results (only honored while a filter is active)
         - use_agent: str - If truthy, let the agent select the results
           (only honored while the agent pipeline is available)
+        - use_extra_effort: str - If truthy (with use_agent), let the agent
+          take EXTRA_EFFORT_ITERATION_FACTOR times as many iterations
 
     Returns HTML page with search results containing path, filename, snippet, and score.
     """
@@ -2598,7 +2654,9 @@ async def search_results(
             _update_document_counts(state.vault_path)
             # Perform search with refreshed pipeline
             if use_agent and state.agent_search_pipeline:
-                agent_outcome = state.agent_search_pipeline(query)
+                agent_outcome = _select_with_agent(
+                    state, query, extra_effort=bool(use_extra_effort)
+                )
                 results = _process_semantic_results(agent_outcome.results)
                 filter_note = agent_outcome.note
                 agent_trace = agent_outcome.trace
@@ -2629,6 +2687,7 @@ async def search_results(
             error=error,
             apply_filter=bool(apply_filter),
             use_agent=bool(use_agent),
+            use_extra_effort=bool(use_extra_effort),
             filter_note=filter_note,
             agent_trace=agent_trace,
         ),
@@ -2885,6 +2944,7 @@ async def chat_response(
     message: Annotated[str, Form()] = "",
     use_keyword_search: Annotated[str, Form()] = "",
     use_agent: Annotated[str, Form()] = "",
+    use_extra_effort: Annotated[str, Form()] = "",
     state: AppState = Depends(get_state),
 ) -> HTMLResponse:
     """
@@ -2898,6 +2958,8 @@ async def chat_response(
           answers from (only honored while the agent pipeline is available;
           takes precedence over use_keyword_search, whose keyword search the
           agent already has as a tool)
+        - use_extra_effort: str - If truthy (with use_agent), let the agent
+          take EXTRA_EFFORT_ITERATION_FACTOR times as many iterations
 
     Returns HTML page with the question and AI-generated answer.
     """
@@ -2930,7 +2992,7 @@ async def chat_response(
             result: str | dict[str, Any]
             if use_agent and state.agent_chat_pipeline:
                 response, citations, agent_trace, retrieval_note = _answer_with_agent(
-                    state, message
+                    state, message, extra_effort=bool(use_extra_effort)
                 )
                 answered_by_agent = True
             elif use_keyword_search and state.keyword_chat_pipeline:
@@ -3042,6 +3104,7 @@ async def chat_response(
             error=error,
             answered_by=answered_by,
             use_agent=bool(use_agent),
+            use_extra_effort=bool(use_extra_effort),
             agent_trace=agent_trace,
         ),
     )
@@ -3120,6 +3183,8 @@ def run_app(
             _state.filtered_keyword_search_pipeline = None
             _state.agent_search_pipeline = None
             _state.agent_chat_pipeline = None
+            _state.agent_search_extra_pipeline = None
+            _state.agent_chat_extra_pipeline = None
         user_settings.remember_vault(vault_path)
     if open_browser:
         _launch_browser_when_ready(host, port)

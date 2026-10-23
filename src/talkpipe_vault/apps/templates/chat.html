@@ -47,6 +47,10 @@
                 <input type="checkbox" id="use-agent" name="use_agent" value="on"{% if use_agent %} checked{% endif %}>
                 <span>Use Agent (let an agent gather the context; slower)</span>
             </label>
+            <label class="keyword-toggle" title="Lets the agent take up to {{ extra_effort_iterations }} iterations to follow questions that need several lookups. Slower; helps most with models strong at tool calling. Needs Use Agent.">
+                <input type="checkbox" id="use-extra-effort" name="use_extra_effort" value="on"{% if use_extra_effort %} checked{% endif %}{% if not use_agent %} disabled{% endif %}>
+                <span>Extra Effort (more agent iterations for multi-step questions)</span>
+            </label>
             {% endif %}
             <button type="submit" id="ask-btn">Ask</button>
         </form>
@@ -537,6 +541,15 @@ document.addEventListener('DOMContentLoaded', function() {
         answerSection.style.display = 'block';
     }
 
+    // Extra Effort only changes an agent run, so it is greyed out without one.
+    const agentCheckbox = document.getElementById('use-agent');
+    const extraCheckbox = document.getElementById('use-extra-effort');
+    if (agentCheckbox && extraCheckbox) {
+        agentCheckbox.addEventListener('change', function() {
+            extraCheckbox.disabled = !agentCheckbox.checked;
+        });
+    }
+
     // Handle form submission
     askForm.addEventListener('submit', async function(e) {
         e.preventDefault();
@@ -562,6 +575,10 @@ document.addEventListener('DOMContentLoaded', function() {
             const agentToggle = document.getElementById('use-agent');
             if (agentToggle && agentToggle.checked) {
                 formData.append('use_agent', 'on');
+                const extraToggle = document.getElementById('use-extra-effort');
+                if (extraToggle && extraToggle.checked) {
+                    formData.append('use_extra_effort', 'on');
+                }
             }
 
             const response = await fetch('/chat', {

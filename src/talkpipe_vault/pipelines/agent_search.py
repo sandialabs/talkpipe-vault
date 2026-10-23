@@ -37,12 +37,13 @@ collected in the outcome's ``trace`` for the results page.
 
 from __future__ import annotations
 
+import copy
 import logging
 import os
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from functools import cached_property
-from typing import Annotated, Any
+from typing import Annotated, Any, Self
 
 from talkpipe.chatterlang import register_segment
 from talkpipe.data.extraction import ReadFile
@@ -289,6 +290,17 @@ class AgentVaultSearch(AbstractFieldSegment):
             chat_source=self.chat_source,
             max_keywords=self.max_keywords,
         ).as_function(single_in=True, single_out=True)
+
+    def with_max_iterations(self, max_iterations: int) -> Self:
+        """A copy of this segment that may take *max_iterations* turns.
+
+        The copy shares the vault, embedder and model bindings, which hold no
+        per-query state, so the app can offer a longer run (Extra Effort)
+        next to the normal one without opening the vault twice.
+        """
+        clone = copy.copy(self)
+        clone.max_iterations = max(1, max_iterations)
+        return clone
 
     # -- search bindings (overridable for tests) -----------------------------
 

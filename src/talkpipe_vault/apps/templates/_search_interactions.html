@@ -191,6 +191,14 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     if (form) {
+        // Extra Effort only changes an agent run, so it is greyed out without one.
+        const agentBox = form.elements.namedItem('use_agent');
+        const extraBox = form.elements.namedItem('use_extra_effort');
+        if (agentBox && extraBox) {
+            agentBox.addEventListener('change', function() {
+                extraBox.disabled = !agentBox.checked;
+            });
+        }
         form.addEventListener('submit', function(e) {
             if (btn.disabled || !input.value.trim()) {
                 e.preventDefault();

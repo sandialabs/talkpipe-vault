@@ -109,7 +109,9 @@ not an error.
 when the agent calls `enough_information`. Two limits exist only to bound a
 run that never gets there: `max_chunks` (the most chunks one run may keep;
 Settings → *Agent Chunk Limit*) and `max_iterations` (agent turns; Settings
-→ *Agent Search Iterations*). Once either the judgement is made or the chunk
+→ *Agent Search Iterations*; the Search and Ask pages' *Extra Effort* box
+doubles it for one question, via `with_max_iterations`, a copy of the
+segment that shares its vault and model bindings). Once either the judgement is made or the chunk
 ceiling is full, every tool refuses further calls with the same short message
 telling the model to stop — the rule is enforced inside the tools, so it
 holds behind any agent, not just the one the vault builds.

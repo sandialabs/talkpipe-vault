@@ -904,6 +904,13 @@ class VaultApp(App[None]):
                 "Apply retrieval filter", False, id="search-filter", classes="hidden"
             )
             yield Checkbox("Use Agent", False, id="search-agent", classes="hidden")
+            yield Checkbox(
+                "Extra Effort",
+                False,
+                id="search-extra",
+                classes="hidden",
+                disabled=True,
+            )
             yield Button("Copy All", id="search-copy-all")
             yield Static("", id="search-note", classes="status-line")
         yield Collapsible(
@@ -948,6 +955,9 @@ class VaultApp(App[None]):
                 "Boost with keyword search", False, id="ask-keyword", classes="hidden"
             )
             yield Checkbox("Use Agent", False, id="ask-agent", classes="hidden")
+            yield Checkbox(
+                "Extra Effort", False, id="ask-extra", classes="hidden", disabled=True
+            )
             yield Static(
                 "Keyword boost: build a full-text index on Keywords (F4)",
                 id="ask-keyword-hint",
@@ -1179,7 +1189,13 @@ class VaultApp(App[None]):
         self.query_one("#search-agent", Checkbox).set_class(
             not status["agent_search_available"], "hidden"
         )
+        self.query_one("#search-extra", Checkbox).set_class(
+            not status["agent_search_available"], "hidden"
+        )
         self.query_one("#ask-agent", Checkbox).set_class(
+            not status["agent_chat_available"], "hidden"
+        )
+        self.query_one("#ask-extra", Checkbox).set_class(
             not status["agent_chat_available"], "hidden"
         )
         self.query_one("#ask-keyword-hint", Static).set_class(
@@ -1563,13 +1579,31 @@ class VaultApp(App[None]):
             else "Searching…"
         )
         self._search_worker(
-            text, self.query_one("#search-filter", Checkbox).value, use_agent
+            text,
+            self.query_one("#search-filter", Checkbox).value,
+            use_agent,
+            use_agent and self.query_one("#search-extra", Checkbox).value,
         )
 
+    @on(Checkbox.Changed, "#search-agent")
+    @on(Checkbox.Changed, "#ask-agent")
+    def _agent_toggled(self, event: Checkbox.Changed) -> None:
+        # Extra Effort only changes an agent run, so it is greyed out without
+        # one, as on the web pages.
+        extra_id = (
+            "#search-extra" if event.checkbox.id == "search-agent" else "#ask-extra"
+        )
+        self.query_one(extra_id, Checkbox).disabled = not event.value
+
     @work(thread=True, exclusive=True, group="search")
-    def _search_worker(self, text: str, apply_filter: bool, use_agent: bool) -> None:
+    def _search_worker(
+        self, text: str, apply_filter: bool, use_agent: bool, extra_effort: bool
+    ) -> None:
         outcome = self.service.semantic_search(
-            text, apply_filter=apply_filter, use_agent=use_agent
+            text,
+            apply_filter=apply_filter,
+            use_agent=use_agent,
+            extra_effort=extra_effort,
         )
         self.call_from_thread(self._show_search, "search", outcome, text)
 
@@ -1700,6 +1734,7 @@ class VaultApp(App[None]):
             self.query_one("#ask-keyword", Checkbox).value,
             use_agent,
             self._ask_generation,
+            use_agent and self.query_one("#ask-extra", Checkbox).value,
         )
 
     def ask_running(self) -> bool:
@@ -1746,10 +1781,18 @@ class VaultApp(App[None]):
 
     @work(thread=True, exclusive=True, group="ask")
     def _ask_worker(
-        self, question: str, keyword: bool, agent: bool, generation: int
+        self,
+        question: str,
+        keyword: bool,
+        agent: bool,
+        generation: int,
+        extra_effort: bool = False,
     ) -> None:
         outcome = self.service.ask(
-            question, use_keyword_search=keyword, use_agent=agent
+            question,
+            use_keyword_search=keyword,
+            use_agent=agent,
+            extra_effort=extra_effort,
         )
         self.call_from_thread(self._show_answer, outcome, generation)
 

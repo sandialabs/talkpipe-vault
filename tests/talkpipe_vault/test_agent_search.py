@@ -439,6 +439,17 @@ class TestAgentIsAnLLMAgent:
             agent_tools.vault_agent_tool_names()
         )
 
+    def test_with_max_iterations_raises_the_cap_on_a_copy(self):
+        """Extra Effort: same bindings, more turns, original untouched."""
+        segment = _ScriptedSearch(lambda _tools: None, max_iterations=5)
+        extra = segment.with_max_iterations(10)
+
+        assert extra is not segment
+        assert segment.max_iterations == 5
+        assert extra.make_agent(extra.make_session()).max_turns == 10
+        assert extra._extract_keywords is segment._extract_keywords
+        assert segment.with_max_iterations(0).max_iterations == 1
+
     def test_the_tools_parameter_selects_what_the_agent_gets(self):
         segment = _ScriptedSearch(lambda _tools: None, tools="vector_search,think")
         agent = segment.make_agent(segment.make_session())

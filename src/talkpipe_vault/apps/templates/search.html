@@ -14,6 +14,11 @@
                {% if use_agent %}checked{% endif %}>
         Let an agent select the results (iterative semantic + keyword search; slower)
     </label>
+    <label class="overwrite-option" title="Lets the agent take up to {{ extra_effort_iterations }} iterations to follow questions that need several lookups. Slower; helps most with models strong at tool calling. Needs the agent option above.">
+        <input type="checkbox" name="use_extra_effort" value="1" form="search-form"
+               {% if use_extra_effort %}checked{% endif %}{% if not use_agent %} disabled{% endif %}>
+        Extra Effort (more agent iterations for multi-step questions)
+    </label>
     {% elif agent_unavailable_reason %}
     <p class="search-hint agent-unavailable">Letting an agent select the results is unavailable with the current chat model &mdash; choose one that supports tool calling on the <a href="/settings">Settings</a> page. ({{ agent_unavailable_reason }})</p>
     {% endif %}

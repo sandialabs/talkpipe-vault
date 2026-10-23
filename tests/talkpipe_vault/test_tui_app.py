@@ -811,6 +811,49 @@ async def test_ask_use_agent_checkbox_answers_through_the_agent(
         assert "keep c1" in _text(app.query_one("#ask-trace-body", Static))
 
 
+async def test_ask_extra_effort_is_greyed_out_until_use_agent_is_ticked(
+    sample_vault, monkeypatch
+):
+    def _extra(message):
+        outcome = _agent_chat_outcome(message)
+        outcome.response = f"Extra-effort answer to {message}"
+        return outcome
+
+    app = VaultApp(VaultService(), vault_path=sample_vault)
+    async with app.run_test(size=SIZE) as pilot:
+        await _wait_workers(app, pilot)
+        monkeypatch.setattr(
+            app.service.state, "chat_pipeline", lambda q: "Plain answer."
+        )
+        monkeypatch.setattr(
+            app.service.state, "agent_chat_pipeline", _agent_chat_outcome
+        )
+        monkeypatch.setattr(app.service.state, "agent_chat_extra_pipeline", _extra)
+        monkeypatch.setattr(app.service.state, "last_refresh_time", float("inf"))
+        app.refresh_status()
+        await _settle(pilot)
+
+        extra_box = app.query_one("#ask-extra", Checkbox)
+        assert not extra_box.has_class("hidden")
+        assert extra_box.disabled
+
+        app.query_one("#ask-agent", Checkbox).value = True
+        await _settle(pilot)
+        assert not extra_box.disabled
+        extra_box.value = True
+        app.query_one("#question", TextArea).load_text("What is this?")
+        app.query_one("#ask-go", Button).press()
+        await _wait_workers(app, pilot)
+        await _settle(pilot)
+
+        assert "Extra-effort answer to What is this?" in _answer_source(app)
+        assert "Extra Effort" in _text(app.query_one("#answer-meta", Static))
+
+        app.query_one("#ask-agent", Checkbox).value = False
+        await _settle(pilot)
+        assert extra_box.disabled
+
+
 async def test_ask_agent_checkbox_is_hidden_without_the_pipeline(
     sample_vault, monkeypatch
 ):

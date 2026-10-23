@@ -266,6 +266,8 @@ class VaultService:
         state.filtered_keyword_search_pipeline = None
         state.agent_search_pipeline = None
         state.agent_chat_pipeline = None
+        state.agent_search_extra_pipeline = None
+        state.agent_chat_extra_pipeline = None
         state.agent_unavailable_reason = ""
         state.shingled_chunks_count = 0
         state.keyword_search_enabled = False
@@ -562,7 +564,12 @@ class VaultService:
     # -- search -------------------------------------------------------------------
 
     def semantic_search(
-        self, text: str, *, apply_filter: bool = False, use_agent: bool = False
+        self,
+        text: str,
+        *,
+        apply_filter: bool = False,
+        use_agent: bool = False,
+        extra_effort: bool = False,
     ) -> dict[str, Any]:
         state = self.state
         if not state.vault_path:
@@ -579,7 +586,9 @@ class VaultService:
             note = ""
             trace: list[str] = []
             if use_agent and state.agent_search_pipeline:
-                outcome = state.agent_search_pipeline(text)
+                outcome = query._select_with_agent(
+                    state, text, extra_effort=extra_effort
+                )
                 results = query._process_semantic_results(outcome.results)
                 note = outcome.note
                 trace = outcome.trace
@@ -682,12 +691,14 @@ class VaultService:
         *,
         use_keyword_search: bool = False,
         use_agent: bool = False,
+        extra_effort: bool = False,
     ) -> dict[str, Any]:
         """Answer a question with citations (``POST /chat``).
 
         With ``use_agent``, the agent gathers the context it answers from
         instead of a single retrieval; the tool calls it made come back as
         ``trace`` so the terminal can show them the way the web page does.
+        ``extra_effort`` raises the agent's iteration cap for this question.
         """
         state = self.state
         if not state.vault_path:
@@ -709,7 +720,7 @@ class VaultService:
             result: str | dict[str, Any]
             if use_agent and state.agent_chat_pipeline:
                 response, citations, trace, retrieval_note = query._answer_with_agent(
-                    state, message
+                    state, message, extra_effort=extra_effort
                 )
                 answered_by_agent = True
             elif use_keyword_search and state.keyword_chat_pipeline:

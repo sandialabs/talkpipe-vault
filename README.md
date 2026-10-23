@@ -290,6 +290,12 @@ script syntax is in the Advanced Guide under
   which are also the citations. Its tool calls are listed under the answer.
   It takes considerably longer than a plain question, and it supersedes the
   keyword boost (the agent already has keyword search as one of its tools).
+  Next to it, **Extra Effort** (greyed out until Use Agent is ticked) lets
+  the agent take twice its usual iterations — 16 instead of 8 with the
+  default Agent Search Iterations — for questions that need one fact to find
+  the next. It helps a model that is strong at tool calling; with weaker ones
+  it mostly makes the answer slower. Semantic Search and the terminal
+  interface offer the same box.
 
 Every search result and Ask citation has an **Open** link that fetches the
 original document from the server — PDFs, images, and plain text open right

@@ -1,6 +1,7 @@
 """Unit tests for the vault query web app."""
 
 import os
+import re
 import time
 from types import SimpleNamespace
 
@@ -81,6 +82,8 @@ def reset_app_state(tmp_path, monkeypatch):
     query._state.filtered_keyword_search_pipeline = None
     query._state.agent_search_pipeline = None
     query._state.agent_chat_pipeline = None
+    query._state.agent_search_extra_pipeline = None
+    query._state.agent_chat_extra_pipeline = None
     query._state.agent_unavailable_reason = ""
     query._state.agent_search_iterations = None
     query._state.agent_search_result_count = None
@@ -308,6 +311,12 @@ def test_refresh_agent_pipelines_builds_both_from_one_segment(monkeypatch):
     class _FakeAgentChat:
         def __init__(self, **kwargs):
             built.append(kwargs)
+            self.max_iterations = kwargs["max_iterations"]
+
+        def with_max_iterations(self, max_iterations):
+            clone = _FakeAgentChat.__new__(_FakeAgentChat)
+            clone.max_iterations = max_iterations
+            return clone
 
         def select_chunks(self, value):
             return value
@@ -326,6 +335,11 @@ def test_refresh_agent_pipelines_builds_both_from_one_segment(monkeypatch):
     assert built[0]["max_iterations"] == 4
     assert query._state.agent_search_pipeline is not None
     assert query._state.agent_chat_pipeline is not None
+    # Extra Effort is a copy of the same segment with twice the turns, not a
+    # second segment with its own embedder.
+    assert query._state.agent_search_extra_pipeline is not None
+    assert query._state.agent_chat_extra_pipeline is not None
+    assert query._state.agent_search_extra_pipeline.__self__.max_iterations == 8
     assert query._state.agent_unavailable_reason == ""
 
 
@@ -338,11 +352,15 @@ def test_refresh_agent_pipelines_clears_both_on_a_bad_model(monkeypatch):
     monkeypatch.setattr(agent_search, "AgentVaultChat", _boom)
     query._state.agent_search_pipeline = lambda _q: None
     query._state.agent_chat_pipeline = lambda _q: None
+    query._state.agent_search_extra_pipeline = lambda _q: None
+    query._state.agent_chat_extra_pipeline = lambda _q: None
 
     query._refresh_agent_pipelines("/tmp/vault")
 
     assert query._state.agent_search_pipeline is None
     assert query._state.agent_chat_pipeline is None
+    assert query._state.agent_search_extra_pipeline is None
+    assert query._state.agent_chat_extra_pipeline is None
     # ...and the pages say why, instead of dropping the option without a word.
     assert query._state.agent_unavailable_reason == "no such model"
     monkeypatch.setattr(query, "_refresh_pipelines", lambda force=False: None)
@@ -2348,3 +2366,78 @@ class TestLoadActiveFilter:
     def test_vault_without_a_script_is_unfiltered(self, tmp_path):
         assert query._load_active_filter(str(tmp_path)) is None
         assert query._state.result_filter_active is False
+
+
+def _extra_effort_chat_outcome(message):
+    outcome = _agent_chat_outcome(message)
+    outcome.response = f"Extra-effort answer about {message}."
+    return outcome
+
+
+def test_chat_extra_effort_is_greyed_out_until_use_agent_is_checked(monkeypatch):
+    monkeypatch.setattr(query, "_refresh_pipelines", lambda force=False: None)
+    monkeypatch.setattr(query, "_update_document_counts", lambda vault_path: None)
+    client = TestClient(query.app)
+
+    assert 'id="use-extra-effort"' not in client.get("/chat").text
+
+    query._state.agent_chat_pipeline = _agent_chat_outcome
+    query._state.agent_chat_extra_pipeline = _extra_effort_chat_outcome
+    text = client.get("/chat").text
+    assert "Extra Effort" in text
+    assert re.search(r'id="use-extra-effort"[^>]*disabled', text)
+    # The tooltip names the raised cap: twice the default 8 iterations.
+    assert "up to 16 iterations" in text
+
+
+def test_chat_extra_effort_runs_the_raised_cap_agent_only_with_use_agent(monkeypatch):
+    monkeypatch.setattr(query, "_refresh_pipelines", lambda force=False: None)
+    monkeypatch.setattr(query, "_update_document_counts", lambda vault_path: None)
+    query._state.chat_pipeline = lambda _message: "Plain answer."
+    query._state.search_pipeline = lambda _message: []
+    query._state.agent_chat_pipeline = _agent_chat_outcome
+    query._state.agent_chat_extra_pipeline = _extra_effort_chat_outcome
+    client = TestClient(query.app)
+
+    response = client.post(
+        "/chat",
+        data={"message": "podman", "use_agent": "on", "use_extra_effort": "on"},
+    )
+    assert "Extra-effort answer about podman." in response.text
+    assert "Extra Effort · Agent judged it had enough" in response.text
+
+    response = client.post("/chat", data={"message": "podman", "use_agent": "on"})
+    assert "Agent answer about podman." in response.text
+    assert "Extra Effort ·" not in response.text
+
+    # Without Use Agent the box means nothing: the plain pipeline answers.
+    response = client.post(
+        "/chat", data={"message": "podman", "use_extra_effort": "on"}
+    )
+    assert "Plain answer." in response.text
+
+
+def test_search_extra_effort_runs_the_raised_cap_agent(monkeypatch):
+    from talkpipe_vault.pipelines.agent_search import AgentSearchOutcome
+
+    monkeypatch.setattr(query, "_refresh_pipelines", lambda force=False: None)
+    monkeypatch.setattr(query, "_update_document_counts", lambda vault_path: None)
+    query._state.search_pipeline = lambda _query: []
+    query._state.agent_search_pipeline = _agent_outcome
+    query._state.agent_search_extra_pipeline = lambda text: AgentSearchOutcome(
+        results=[], note="Agent hit the 16-iteration cap: kept 0 chunks."
+    )
+    client = TestClient(query.app)
+
+    page = client.get("/search").text
+    assert re.search(r'name="use_extra_effort"[^>]*disabled', page)
+
+    response = client.post(
+        "/search", data={"query": "podman", "use_agent": "1", "use_extra_effort": "1"}
+    )
+    assert "Extra Effort: Agent hit the 16-iteration cap" in response.text
+    # The agent box stays checked, so Extra Effort comes back enabled and checked.
+    assert not re.search(r'name="use_extra_effort"[^>]*disabled', response.text)
+
+    response = client.post("/search", data={"query": "podman", "use_agent": "1"})
+    assert "Agent judged it had enough" in response.text
