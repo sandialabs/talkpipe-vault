@@ -113,6 +113,19 @@ AGENT_ERROR_ANSWER = (
     "agent."
 )
 
+# Shown instead of an answer when the agent kept nothing but left chunks it
+# had found undecided: it never judged them, so saying the notes do not cover
+# the question would be wrong. Some models spend every iteration searching
+# and reading without deciding (minimax-m3.1-flash on Ollama, whose reasoning
+# is not carried from one turn to the next).
+UNDECIDED_ANSWER = (
+    "The agent found passages in this vault but stopped before keeping any "
+    "of them, so there was nothing to answer from; its tool calls show what "
+    "it searched. That usually comes from the chat model, not the notes: some "
+    "models spend every iteration searching and reading without deciding. Try "
+    "another chat model, or ask without the agent."
+)
+
 # Appended to the note of a run that ended without the agent's judgement, the
 # ceiling, or the turn cap: that is how a model weak at tool calling ends a
 # run, and nothing else on the page would tell the reader the model is why.
@@ -134,6 +147,8 @@ class AgentSearchOutcome:
     # The exception text when the run stopped with an error, else "".
     # Keyword-only, so AgentChatOutcome's positional fields are unchanged.
     error: str = field(default="", kw_only=True)
+    # How many chunks the agent was shown but neither kept nor ignored.
+    undecided: int = field(default=0, kw_only=True)
 
 
 @dataclass
@@ -392,9 +407,14 @@ class AgentVaultSearch(AbstractFieldSegment):
                 "showing what it kept." if session.kept else "it kept nothing."
             )
             return AgentSearchOutcome(
-                session.results, note, session.trace, error=str(exc) or repr(exc)
+                session.results,
+                note,
+                session.trace,
+                error=str(exc) or repr(exc),
+                undecided=len(session.undecided),
             )
         kept = len(session.kept)
+        undecided = len(session.undecided)
         searches = len(session.queries_run)
         # The four ways a run can end, most to least satisfying. The first is
         # the intended one; the rest are worth telling apart, because each
@@ -414,10 +434,14 @@ class AgentVaultSearch(AbstractFieldSegment):
         note = (
             f"Agent {how}: kept {kept} chunk{'s' if kept != 1 else ''} after "
             f"{searches} search{'es' if searches != 1 else ''}, "
-            f"ignored {len(session.ignored)}.{hint}"
+            f"ignored {len(session.ignored)}"
+            + (f", left {undecided} undecided" if undecided else "")
+            + f".{hint}"
         )
         session.tell(note)
-        return AgentSearchOutcome(session.results, note, session.trace)
+        return AgentSearchOutcome(
+            session.results, note, session.trace, undecided=undecided
+        )
 
     def process_value(self, value: str) -> AgentSearchOutcome:
         return self.select_chunks(value)
@@ -477,12 +501,17 @@ class AgentVaultChat(AgentVaultSearch):
         outcome = self.select_chunks(value)
         if outcome.results:
             response = self.answer(value, outcome.results)
+        elif outcome.error:
+            response = AGENT_ERROR_ANSWER
+        elif outcome.undecided:
+            response = UNDECIDED_ANSWER
         else:
-            response = AGENT_ERROR_ANSWER if outcome.error else NO_CONTEXT_ANSWER
+            response = NO_CONTEXT_ANSWER
         return AgentChatOutcome(
             outcome.results,
             outcome.note,
             outcome.trace,
             response,
             error=outcome.error,
+            undecided=outcome.undecided,
         )

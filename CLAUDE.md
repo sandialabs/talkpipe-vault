@@ -249,7 +249,9 @@ a plain one — only the retrieval in front differs. It emits an `AgentChatOutco
 `AgentSearchOutcome` plus `response`); when the agent kept nothing, no prompt is sent and
 `NO_CONTEXT_ANSWER` is returned instead of asking a model to answer from an empty context
 (`AGENT_ERROR_ANSWER` when the run failed before keeping anything — the vault was never
-searched, so the answer must not blame it). `_bind_vault` refuses a vault path that does not
+searched, so the answer must not blame it; `UNDECIDED_ANSWER` when the agent left chunks it
+found undecided — counted in the outcome's `undecided` and the note's `left N undecided` —
+since it never judged them). `_bind_vault` refuses a vault path that does not
 exist, so a typo fails at construction instead of creating an empty folder. Strands runs one
 turn's tool calls concurrently in threads, so `AgentSearchSession._register` assigns chunk ids
 under a lock; an unknown chunk id passed to keep/ignore is refused *and* traced.

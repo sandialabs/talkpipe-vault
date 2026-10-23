@@ -2,6 +2,10 @@
 
 ## In Development
 
+### Agent-Selected Search Results and Answers
+- **An agent that runs out of iterations before deciding is no longer answered as if the notes lacked the answer.** When the agent kept nothing but left chunks it had found undecided, Ask used to say the notes don't appear to answer the question, though the agent never judged what it found. It now says the agent found passages but stopped before keeping any, and that the chat model is the likely cause. The results note ends with how many chunks were left undecided, and the outcome carries the count as `undecided`.
+- `minimax-m3.1-flash:cloud` on Ollama is named in the README and the agent retrieval guide as a model that usually spends its iterations searching and reading without deciding. Its reasoning is not carried from one turn to the next by the Ollama provider talkpipe-agents uses, so it keeps losing its plan. A larger iteration cap, a smaller search limit and a firmer prompt did not fix it; replaying the reasoning did.
+
 ## 1.1.0a1 (2026-10-23)
 
 ### Search

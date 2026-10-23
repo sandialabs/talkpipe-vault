@@ -487,6 +487,9 @@ class TestAgentVaultSearch:
         # The reason it gave is carried into the note the pages display.
         assert "(c1 answers it)" in outcome.note
         assert "kept 1 chunk after 1 search" in outcome.note
+        # c3 was shown but never decided on; the note and outcome count it.
+        assert "ignored 1, left 1 undecided." in outcome.note
+        assert outcome.undecided == 1
         assert outcome.trace[0].startswith("agent search: 'what is one?'")
         assert outcome.trace == segment.told
 
@@ -502,6 +505,9 @@ class TestAgentVaultSearch:
         assert [r.doc_id for r in outcome.results] == ["a", "c"]
         assert outcome.note.startswith("Agent filled its 2-chunk maximum")
         assert "kept 2 chunks after 1 search" in outcome.note
+        # Every chunk carries a decision, so nothing is reported undecided.
+        assert outcome.note.endswith("ignored 1.")
+        assert outcome.undecided == 0
 
     def test_outcome_reports_iteration_cap(self):
         def script(tools: dict[str, Any]) -> None:
@@ -622,7 +628,8 @@ class TestAgentVaultChat:
     def test_nothing_kept_means_no_prompt_is_sent(self):
         def script(tools: dict[str, Any]) -> None:
             tools["vector_search"](query="q")
-            tools["ignore_chunk"](chunk_id="c1")
+            for chunk_id in ("c1", "c2", "c3"):
+                tools["ignore_chunk"](chunk_id=chunk_id)
 
         segment = _ScriptedChat(script)
         outcome = segment.process_value("q")
@@ -631,6 +638,24 @@ class TestAgentVaultChat:
         assert outcome.results == []
         assert outcome.response == agent_search.NO_CONTEXT_ANSWER
         assert outcome.error == ""
+        assert outcome.undecided == 0
+
+    def test_chunks_left_undecided_are_not_answered_as_irrelevant(self):
+        """A model that searches until the cap without deciding never judged
+        what it found; the answer must not say the notes lack it."""
+
+        def script(tools: dict[str, Any]) -> None:
+            tools["vector_search"](query="q")
+            tools["vector_search"](query="q again")
+
+        segment = _ScriptedChat(script, stop_reason="limit_turns")
+        outcome = segment.process_value("q")
+
+        assert segment.answered == []
+        assert outcome.response == agent_search.UNDECIDED_ANSWER
+        assert outcome.undecided == 3
+        assert outcome.note.startswith("Agent hit the 3-iteration cap")
+        assert "ignored 0, left 3 undecided." in outcome.note
 
     def test_a_failed_run_is_not_answered_as_an_empty_vault(self):
         """An agent that errored before searching never looked at the vault;

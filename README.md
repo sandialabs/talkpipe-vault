@@ -261,7 +261,9 @@ script syntax is in the Advanced Guide under
   tool calling — the agent runs on the chat model chosen under Settings. The
   default, `mistral-small`, often stops without keeping what it found (the
   results note then says it "stopped without saying it had enough"); in
-  testing, `qwen3:8b` and `gpt-oss` ran the agent cleanly. When the chat
+  testing, `qwen3:8b` and `gpt-oss` ran the agent cleanly, while
+  `minimax-m3.1-flash:cloud` usually used up its iterations searching and
+  reading without deciding (the developer's guide says why). When the chat
   provider cannot run an agent at all (`eliza`, for instance), the page says
   so in place of the checkbox. Whether a particular model can call tools only
   shows when a search runs — the **Configuration status** panel tests a plain

@@ -219,6 +219,15 @@ class AgentSearchSession:
     def results(self) -> list[SearchResult]:
         return [self._chunks[cid].result for cid in self.kept]
 
+    @property
+    def undecided(self) -> list[str]:
+        """Ids of the chunks the agent was shown but neither kept nor ignored."""
+        return [
+            cid
+            for cid in self._chunks
+            if cid not in self.kept and cid not in self.ignored
+        ]
+
     def _register(self, entry: Any, key: str | None = None) -> _Chunk | None:
         result = normalize_search_result(entry, self._rename_fields)
         if result is None:

@@ -133,17 +133,36 @@ application should show it rather than swallow it:
 | `Agent stopped without saying it had enough` | The model ended its turn without calling `enough_information`. **This is what a model with weak tool-calling does** — it looks like a finished run but is not one, so the note goes on to say the model is the likely cause |
 | `The agent stopped with an error (…)` | An exception mid-run — often the model server refusing the request (model not pulled, or no tool calling for that model). What it had kept so far is returned, and `outcome.error` holds the exception text (it is `""` for every other ending) |
 
+When the agent was shown chunks it neither kept nor ignored, the note ends
+with `left N undecided`, and `outcome.undecided` holds that count (`0` when
+every chunk it saw carries a decision).
+
 `AgentVaultChat` sends no RAG prompt when nothing was kept — `response` is
 then a fixed message rather than an invented answer: `NO_CONTEXT_ANSWER`
 says the notes don't appear to answer the question, and `AGENT_ERROR_ANSWER`
 replaces it when the run failed before keeping anything, since then the vault
-was never searched.
+was never searched. `UNDECIDED_ANSWER` replaces it when the agent left chunks
+it found undecided: it never judged them, so the notes may well hold the
+answer.
 
 The model matters. In testing, `gpt-oss` and `qwen3:8b` run the loop
 cleanly; `mistral-small` (the vault's default chat model) searches but rarely
 calls `keep_chunk`; some models make no tool calls at all. All of them end
 safely (the weak ones as "stopped without saying it had enough" or "nothing
-to answer from"), but only the first kind is useful. The model is the chat
+to answer from"), but only the first kind is useful.
+
+`minimax-m3.1-flash:cloud` on Ollama sees and understands the results, but it
+plans in its reasoning ("let me keep these chunks, then read the document"),
+and that reasoning is not sent back to it on the next turn: the Strands
+Ollama provider that talkpipe-agents uses drops Ollama's `thinking` field.
+Each turn it plans afresh, makes one decision or reads another document, and
+the run usually hits the iteration cap. Sometimes it keeps nothing at all
+(`kept 0 chunks …, ignored 0, left N undecided`). Raising the iteration cap,
+lowering the search limit, or telling it in the prompt to decide on a
+search's chunks together did not fix it. Replaying the reasoning did, so the
+fix belongs in talkpipe-agents' Ollama model rather than here. Until then,
+prefer `qwen3:8b` or `gpt-oss` for the agent. Other models that reason
+between tool calls may be affected the same way. The model is the chat
 model: on the web and terminal interfaces, the one chosen under Settings.
 Trace lines like `agent ✗ keep_chunk refused: unknown chunk id 'c1'` are the
 signature of a model that keeps chunks before reading them — guessing ids, or
