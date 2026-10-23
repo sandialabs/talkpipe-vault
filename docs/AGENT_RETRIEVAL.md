@@ -132,9 +132,10 @@ application should show it rather than swallow it:
 | `The agent stopped with an error (…)` | An exception mid-run — often the model server refusing the request (model not pulled, or no tool calling for that model). What it had kept so far is returned, and `outcome.error` holds the exception text (it is `""` for every other ending) |
 
 `AgentVaultChat` sends no RAG prompt when nothing was kept — `response` is
-then a fixed "nothing to answer from" message rather than an invented answer
-(`NO_CONTEXT_ANSWER`, or `AGENT_ERROR_ANSWER` when the run failed before
-keeping anything, since then the vault was never searched).
+then a fixed message rather than an invented answer: `NO_CONTEXT_ANSWER`
+says the notes don't appear to answer the question, and `AGENT_ERROR_ANSWER`
+replaces it when the run failed before keeping anything, since then the vault
+was never searched.
 
 The model matters. In testing, `gpt-oss` and `qwen3:8b` run the loop
 cleanly; `mistral-small` (the vault's default chat model) searches but rarely

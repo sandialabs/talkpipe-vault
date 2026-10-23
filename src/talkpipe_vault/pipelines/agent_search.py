@@ -94,11 +94,13 @@ After calling enough_information, or once you are told to stop, reply with the s
 
 # Shown instead of an answer when the agent kept nothing: the RAG prompt would
 # have no context at all, and a model asked to answer from nothing invents one.
+# It leads with what that most often means for the reader -- the notes do not
+# cover the question -- before the ways to check that it is not the agent.
 NO_CONTEXT_ANSWER = (
-    "The agent did not find any chunk in this vault that answers the "
-    "question, so there was nothing to answer from. Try rephrasing the "
-    "question, indexing more documents, choosing a chat model with stronger "
-    "tool calling, or asking without the agent."
+    "The notes in this vault don't appear to answer this question: the agent "
+    "searched them and found nothing relevant. If you expected an answer, try "
+    "rephrasing the question, indexing the documents that hold it, choosing a "
+    "chat model with stronger tool calling, or asking without the agent."
 )
 
 # Shown instead of an answer when the run failed before keeping anything: the
