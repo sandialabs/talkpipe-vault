@@ -4642,7 +4642,7 @@ all = [
 
 [[package]]
 name = "talkpipe-agents"
-version = "0.1.0"
+version = "0.1.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -4656,9 +4656,9 @@ dependencies = [
     { name = "urllib3" },
     { name = "virtualenv" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/2d/4c/6f06234c2f9100615b558d551d61b61ab44e372b814c72045b64c9a115b9/talkpipe_agents-0.1.0.tar.gz", hash = "sha256:4323b26f3e0c3fe8ba0d93bb1a80bc080aa3ca0957a0f6986c29f9240cb91b4e", size = 102341, upload-time = "2026-10-21T19:09:40.748Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/2b/91/3247e029d29d15bb3c5d793a6d6fbd9196bfd525116febd0ad511f41defa/talkpipe_agents-0.1.1.tar.gz", hash = "sha256:d93c471e4e897281e7b0848e2d9860a32db5ac48290fca0b6dd180cf6cb50ed8", size = 103431, upload-time = "2026-10-23T18:27:02.755Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f2/35/305e9b070b5089ca06742f7aca2a78e24656a4da34476e2d4e9939f44e21/talkpipe_agents-0.1.0-py3-none-any.whl", hash = "sha256:9e05172d7a60ba51de58a22b5ab3b1e0e3486dc4063340f0d12cb90aff81d533", size = 46389, upload-time = "2026-10-21T19:09:39.178Z" },
+    { url = "https://files.pythonhosted.org/packages/43/25/3a5b44d2b193a40fa7323ca457f527db485039fee6e684185238d853cd2e/talkpipe_agents-0.1.1-py3-none-any.whl", hash = "sha256:05c663e9a1a3bc525f3c6f547c6fae519316e1929cca0a76972083c7f2247b56", size = 46851, upload-time = "2026-10-23T18:27:01.57Z" },
 ]
 
 [[package]]
@@ -4727,7 +4727,7 @@ requires-dist = [
     { name = "safety", marker = "extra == 'dev'", specifier = ">=3.8.1" },
     { name = "safety", marker = "extra == 'security'", specifier = ">=3.8.1" },
     { name = "talkpipe", extras = ["all"], specifier = ">=1.1.0" },
-    { name = "talkpipe-agents", specifier = ">=0.1.0" },
+    { name = "talkpipe-agents", specifier = ">=0.1.1" },
     { name = "textual", specifier = ">=8.0.0" },
     { name = "urllib3", specifier = ">=2.8.0" },
     { name = "uvicorn", specifier = ">=0.24.0" },
