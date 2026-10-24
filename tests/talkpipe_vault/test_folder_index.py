@@ -164,7 +164,9 @@ def test_keywords_are_searchable_before_any_vector(docs, vault_home, fake_embedd
     assert folder.try_become_writer(watch=False)
     try:
         folder.scan()
-        while folder.has_keyword_work():
+        for _ in range(10):
+            if not folder.has_keyword_work():
+                break
             folder.keyword_batch()
         status = folder.status()
         assert status["files_total"] == 2  # the .png has no extractor
@@ -316,9 +318,11 @@ def test_reembed_replaces_vectors_and_keeps_keywords(docs, vault_home, fake_embe
         folder.reembed(FAKE_EMBEDDING_SOURCE, "fake-two")
         assert not _lance_ids(folder)
         assert _whoosh_ids(folder)
-        while folder.has_vector_work(time.monotonic()):
+        for _ in range(10):
+            if not folder.has_vector_work(time.monotonic()):
+                break
             folder.vector_window()
-        assert folder.status()["complete"]
+        assert folder.status()["complete"], folder.status()["vector_error"]
     finally:
         folder.close()
     recorded = vault_metadata.load_embedding_config(folder.index_path)
@@ -401,22 +405,29 @@ def test_change_events_ignore_hidden_and_index_paths(docs, vault_home, fake_embe
     assert folder._dirty == {"sub/new.md"}
 
 
+def _wait_for(folder, predicate, timeout=60.0):
+    """Wait for the background indexer; an error it reports fails at once."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        status = folder.status()
+        failure = status["error"] or status["vector_error"]
+        assert not failure, failure
+        if predicate(status):
+            return True
+        time.sleep(0.2)
+    return False
+
+
 def test_scheduler_picks_up_a_new_file(docs, vault_home, fake_embedder):
     scheduler = folder_index.FolderScheduler(ingest_lock_dir=vault_home)
     folder = _open(docs)
     scheduler.add(folder)
     scheduler.start()
     try:
-        deadline = time.monotonic() + 60
-        while time.monotonic() < deadline and not folder.status()["complete"]:
-            time.sleep(0.2)
-        assert folder.status()["complete"]
+        assert _wait_for(folder, lambda s: s["complete"])
         assert folder.watch_mode == "live"
         (docs / "delta.txt").write_text(_text("delta"))
-        deadline = time.monotonic() + 60
-        while time.monotonic() < deadline and folder.status()["files_embedded"] < 3:
-            time.sleep(0.2)
-        assert folder.status()["files_embedded"] == 3
+        assert _wait_for(folder, lambda s: s["files_embedded"] == 3)
     finally:
         scheduler.stop()
     assert not folder.is_writer
@@ -455,9 +466,12 @@ def test_watch_folders_source_reports_progress(docs, vault_home, fake_embedder):
         max_events=50,
     )
     seen = []
+    deadline = time.monotonic() + 60
     for status in source.generate():
         seen.append(status)
-        if status["complete"]:
+        # An error ends the wait too: the folder would never finish.
+        if status["complete"] or status["error"] or status["vector_error"]:
             break
-    assert seen[-1]["complete"]
+        assert time.monotonic() < deadline, seen[-1]
+    assert seen[-1]["complete"], seen[-1]
     assert seen[-1]["role"] == "writer"

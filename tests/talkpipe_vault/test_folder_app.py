@@ -66,7 +66,11 @@ def _wait(predicate, timeout=60.0):
 
 
 def _complete():
+    """Every folder finished, or one failed (asserted, so the test stops)."""
     statuses = query.folders_status(query._state)
+    for status in statuses:
+        failure = status["error"] or status["vector_error"]
+        assert not failure, failure
     return bool(statuses) and all(s["complete"] for s in statuses)
 
 

@@ -976,7 +976,12 @@ class FolderIndex:
             )
             self.write_status(force=True)
             return 0
-        except RagIngestError as exc:
+        except Exception as exc:
+            # Any failure waits before the next try, so an error that does not
+            # go away (an embedder that is down, an incompatible talkpipe) is
+            # reported instead of retried in a tight loop.
+            if not isinstance(exc, RagIngestError):
+                logger.exception("Embedding %s failed", self.root)
             self._vector_failures += 1
             delay = min(
                 VECTOR_RETRY_MAX_SECONDS, 15.0 * 2 ** (self._vector_failures - 1)
