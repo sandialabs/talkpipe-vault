@@ -929,11 +929,10 @@ class FolderIndex:
                 # rows match a named vault's.
                 chunks.extend(
                     {
-                        "doc_id": hit["doc_id"],
+                        "id": hit["doc_id"],
                         "content": hit.get("content", ""),
                         "shingle_text": hit.get("content", ""),
                         "source": hit.get("path", ""),
-                        "id": hit.get("path", ""),
                         "title": hit.get("filename", ""),
                     }
                     for hit in hits
@@ -961,7 +960,7 @@ class FolderIndex:
                 embedding_model=self.embedding_model,
                 embedding_source=self.embedding_source,
                 table_name=DEFAULT_VECTOR_TABLE_NAME,
-                doc_id_field="doc_id",
+                doc_id_field="id",
                 batch_size=100,
                 expected_dimension=recorded.get("dimension"),
                 preflight=self._needs_preflight,
@@ -1416,6 +1415,52 @@ def open_folder(
         shingle_size=shingle_size,
         overlap=overlap,
     )
+
+
+def find_index_path(
+    root: str | Path, index_home: str | Path | None = None
+) -> Path | None:
+    """The existing index of the folder *root*, or None; never creates one."""
+    path = Path(os.path.realpath(os.path.expanduser(os.fspath(root))))
+    in_tree = path / FOLDER_INDEX_DIRNAME
+    if in_tree.is_dir():
+        return in_tree
+    base = Path(index_home).expanduser() if index_home else default_index_home()
+    external = external_index_path(path, base)
+    return external if external.is_dir() else None
+
+
+def index_folder_root(index_path: str | Path) -> Path | None:
+    """The folder a folder-mode index belongs to, or None for a named vault."""
+    index = Path(index_path)
+    if index.name == FOLDER_INDEX_DIRNAME:
+        return index.parent
+    try:
+        data = json.loads((index / ROOT_RECORD_FILENAME).read_text("utf-8"))
+        return Path(data["root"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def read_index_status(index_path: str | Path) -> dict[str, Any]:
+    """The writer's last published status of a folder index ({} if none)."""
+    try:
+        data = json.loads((Path(index_path) / STATUS_FILENAME).read_text("utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def vectors_complete(index_path: str | Path) -> bool:
+    """False while a folder index still has files without vectors.
+
+    A named vault (no folder status) always counts as complete.
+    """
+    if index_folder_root(index_path) is None:
+        return True
+    status = read_index_status(index_path)
+    total = int(status.get("files_total") or 0)
+    return total > 0 and int(status.get("files_embedded") or 0) >= total
 
 
 def index_folder_now(folder: FolderIndex, vectors: bool = True) -> dict[str, Any]:

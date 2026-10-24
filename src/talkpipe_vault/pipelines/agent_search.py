@@ -68,6 +68,7 @@ from .searching_and_prompting import (
     ExtractSearchKeywords,
     VaultSearch,
     VaultTextSearch,
+    resolve_vault_paths,
 )
 
 logger = logging.getLogger(__name__)
@@ -189,7 +190,11 @@ class AgentVaultSearch(AbstractFieldSegment):
 
     def __init__(
         self,
-        vault_path: Annotated[str, "Path to LanceDB created by makevectordatabase"],
+        vault_path: Annotated[
+            str | list[str],
+            "Vault path (LanceDB created by makevectordatabase), or a folder "
+            "with a folder-mode index; a list searches them together",
+        ],
         field: Annotated[
             str | None, "The field to extract. If none, use full item."
         ] = None,
@@ -252,6 +257,8 @@ class AgentVaultSearch(AbstractFieldSegment):
     ) -> None:
         super().__init__(field=field, set_as=set_as, multi_emit=multi_emit)
         self.vault_path = vault_path
+        # The indexes searched: a folder stands for its folder-mode index.
+        self._paths = resolve_vault_paths(vault_path)
         self.embedding_model = embedding_model
         self.embedding_source = embedding_source
         self.chat_model = chat_model if chat_model is not None else get_chat_model()
@@ -286,15 +293,16 @@ class AgentVaultSearch(AbstractFieldSegment):
         would create an empty folder and send the agent through a whole run
         of empty searches before anyone saw the typo.
         """
-        if not os.path.isdir(get_vector_db_path(self.vault_path)):
-            raise ValueError(
-                f"No vault at {self.vault_path!r}: the folder does not exist. "
-                "Check the path, or build the vault first (makevectordatabase "
-                "or the Vaults & Documents page)."
-            )
+        for path in self._paths:
+            if not os.path.isdir(get_vector_db_path(path)):
+                raise ValueError(
+                    f"No vault at {path!r}: the folder does not exist. "
+                    "Check the path, or build the vault first (makevectordatabase "
+                    "or the Vaults & Documents page)."
+                )
         build_agent_model(self.chat_source, self.chat_model)
         self._vector_search = VaultSearch(
-            vault_path=self.vault_path,
+            vault_path=self._paths,
             embedding_model=self.embedding_model,
             embedding_source=self.embedding_source,
             limit=self.search_limit,
@@ -326,12 +334,12 @@ class AgentVaultSearch(AbstractFieldSegment):
         return list(raw or [])
 
     def keyword_index_exists(self) -> bool:
-        return os.path.isdir(get_whoosh_index_path(self.vault_path))
+        return any(os.path.isdir(get_whoosh_index_path(path)) for path in self._paths)
 
     def keyword_search(self, query: str) -> list[Any]:
         # Built per call: the index may not have existed when the segment was
         # constructed (it can be built between two questions).
-        search = VaultTextSearch(vault_path=self.vault_path, limit=self.search_limit)
+        search = VaultTextSearch(vault_path=self._paths, limit=self.search_limit)
         return list(search.process_value(query))
 
     def extract_keywords(self, question: str) -> str:

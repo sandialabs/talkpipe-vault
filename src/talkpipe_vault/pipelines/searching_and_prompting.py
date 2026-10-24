@@ -1,12 +1,16 @@
 import json
 import logging
+import os
 import re
 from collections.abc import Iterable, Iterator
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Annotated, Any
 
 from talkpipe import segment
 from talkpipe.chatterlang import register_segment
 from talkpipe.llm.chat import LLMPrompt
+from talkpipe.llm.embedding import LLMEmbed
 from talkpipe.pipe.basic import (
     AbstractFieldSegment,
     EvalExpression,
@@ -23,11 +27,15 @@ from talkpipe.pipelines.basic_rag import (
 from talkpipe.pipelines.vector_databases import SearchVectorDatabaseSegment
 from talkpipe.search.abstract import SearchResult
 from talkpipe.search.lancedb import LanceDBDocumentStore
-from talkpipe.search.whoosh import WhooshIndexError, searchWhoosh
+from talkpipe.search.whoosh import (
+    WhooshFullTextIndex,
+    WhooshIndexError,
+    searchWhoosh,
+)
 from talkpipe.util.config import parse_key_value_str
 from talkpipe.util.data_manipulation import assign_property, extract_property
 
-from . import retrieval_filter
+from . import folder_index, retrieval_filter, vault_metadata
 from .config import (
     DEFAULT_VECTOR_TABLE_NAME,
     KEYWORD_EXTRACTION_SYSTEM_PROMPT,
@@ -313,7 +321,10 @@ class MergeSearchResults(AbstractSegment):
     Results are normalized to SearchResult, deduplicated (by doc_id when
     present, otherwise by document content), and stored on the item in order:
     everything from the first field, then previously unseen results from each
-    later field. A missing field contributes nothing.
+    later field. With strategy "rrf" the lists are instead fused by
+    reciprocal rank (a result ranked high in several lists comes first),
+    which suits lists whose scores are not comparable. A missing field
+    contributes nothing.
     """
 
     def __init__(
@@ -330,8 +341,14 @@ class MergeSearchResults(AbstractSegment):
         limit: Annotated[
             int | None, "Maximum total number of merged results to keep."
         ] = None,
+        strategy: Annotated[
+            str, "'concat' (lists in order) or 'rrf' (reciprocal rank fusion)"
+        ] = "concat",
     ):
         super().__init__()
+        if strategy not in ("concat", "rrf"):
+            raise ValueError(f"Unknown merge strategy {strategy!r}")
+        self.strategy = strategy
         self.fields = [f.strip() for f in field_list.split(",") if f.strip()]
         self.set_as = set_as
         self.rename_fields = (
@@ -346,6 +363,20 @@ class MergeSearchResults(AbstractSegment):
 
     def transform(self, input_iter: Iterable[Any]) -> Iterator[Any]:
         for item in input_iter:
+            if self.strategy == "rrf":
+                lists = [
+                    extract_property(item, field, fail_on_missing=False) or []
+                    for field in self.fields
+                ]
+                assign_property(
+                    item,
+                    self.set_as,
+                    reciprocal_rank_fusion(
+                        lists, limit=self.limit, rename_fields=self.rename_fields
+                    ),
+                )
+                yield item
+                continue
             merged: list[SearchResult] = []
             seen: set[str] = set()
             for field in self.fields:
@@ -365,6 +396,272 @@ class MergeSearchResults(AbstractSegment):
                 merged = merged[: self.limit]
             assign_property(item, self.set_as, merged)
             yield item
+
+
+# Reciprocal rank fusion's damping constant; 60 is the value from the
+# original paper and what most hybrid-search systems use.
+RRF_K = 60
+
+
+def reciprocal_rank_fusion(
+    result_lists: Iterable[Iterable[Any]],
+    *,
+    limit: int | None = None,
+    rename_fields: dict[str, str] | None = None,
+    k: int = RRF_K,
+) -> list[SearchResult]:
+    """Fuse ranked result lists by reciprocal rank.
+
+    Each result scores the sum of 1 / (k + rank) over the lists it appears
+    in, so ranks rather than scores decide: BM25 scores from different
+    indexes, or distances from different embedders, cannot be compared,
+    but positions can. Results are deduplicated by doc_id (else content);
+    each keeps its own score and the first copy seen. Ties keep the order of
+    first appearance.
+    """
+    scores: dict[str, float] = {}
+    first: dict[str, SearchResult] = {}
+    order: list[str] = []
+    for results in result_lists:
+        for rank, entry in enumerate(results or []):
+            result = normalize_search_result(entry, rename_fields)
+            if result is None:
+                continue
+            key = result.doc_id or json.dumps(
+                result.document, sort_keys=True, default=str
+            )
+            if key not in first:
+                first[key] = result
+                order.append(key)
+                scores[key] = 0.0
+            scores[key] += 1.0 / (k + rank + 1)
+    order.sort(key=lambda key: -scores[key])
+    merged = [first[key] for key in order]
+    return merged if limit is None else merged[:limit]
+
+
+def resolve_vault_paths(vault_path: str | Iterable[str]) -> list[str]:
+    """The index paths a segment's vault_path names.
+
+    One path or several. A folder that has a folder-mode index (its own
+    ``.tpvault``, or one kept in app data) stands for that index, so a
+    segment can be pointed at the documents folder itself; any other path
+    is a vault and is used as it is.
+    """
+    paths = [vault_path] if isinstance(vault_path, str) else list(vault_path)
+    resolved: list[str] = []
+    for raw in paths:
+        path = os.path.expanduser(str(raw))
+        index = None
+        if os.path.isdir(path) and folder_index.index_folder_root(path) is None:
+            index = folder_index.find_index_path(path)
+        resolved.append(str(index) if index is not None else path)
+    if not resolved:
+        raise ValueError("vault_path names no vault")
+    return resolved
+
+
+def needs_fan_out(paths: list[str]) -> bool:
+    """True unless *paths* is one named vault, which keeps its own pipeline.
+
+    Several indexes are searched one by one and fused; a folder index goes
+    the same way even alone, so its results carry the folder and have their
+    paths rebased when the folder moved.
+    """
+    return len(paths) > 1 or folder_index.index_folder_root(paths[0]) is not None
+
+
+@dataclass(frozen=True)
+class _IndexView:
+    """One index in a fan-out search: where it is and how to label its hits.
+
+    ``recorded_root`` is the folder path its chunk sources were stored under
+    and ``current_root`` where the folder is now; they differ when the
+    folder was moved or is mounted elsewhere (host versus container), and
+    sources are rebased from one to the other.
+    """
+
+    path: str
+    label: str
+    current_root: str = ""
+    recorded_root: str = ""
+
+    def tag(self, document: Any) -> dict[str, Any]:
+        doc = dict(document or {})
+        doc["folder"] = self.label
+        old, new = self.recorded_root, self.current_root
+        if old and new and old != new:
+            for key in ("source", "path"):
+                value = doc.get(key)
+                if isinstance(value, str) and value.startswith(old + os.sep):
+                    doc[key] = new + value[len(old) :]
+        return doc
+
+
+def _index_views(paths: list[str]) -> list[_IndexView]:
+    """Views for the indexes, labelled by folder (or vault) name.
+
+    Two folders with the same name are told apart by their parent's name.
+    """
+    entries: list[tuple[str, Path, str, str]] = []
+    for path in paths:
+        root = folder_index.index_folder_root(path)
+        if root is None:
+            entries.append((path, Path(path), "", ""))
+            continue
+        recorded = folder_index.read_index_status(path).get("recorded_root")
+        entries.append((path, root, str(root), str(recorded or root)))
+    names = [where.name or str(where) for _, where, _, _ in entries]
+    views = []
+    for (path, where, current, recorded), name in zip(entries, names, strict=True):
+        label = name
+        if names.count(name) > 1 and where.parent.name:
+            label = f"{name} ({where.parent.name})"
+        views.append(_IndexView(path, label, current, recorded))
+    return views
+
+
+class _FanOutVectorSearch:
+    """Semantic search over several indexes, fused into one ranked list.
+
+    Indexes are grouped by the embedder their vectors were made with (the
+    one recorded in each index; the given one for an index with no record)
+    and the query is embedded once per group. Within a group the hits are
+    merged by raw distance, which is comparable there; groups are fused by
+    reciprocal rank, since distances from different embedders are not.
+    """
+
+    def __init__(
+        self,
+        paths: list[str],
+        embedding_model: str | None,
+        embedding_source: str | None,
+        limit: int,
+    ):
+        self.limit = limit
+        self.views = _index_views(paths)
+        default_model, default_source = resolve_embedding_config(
+            embedding_model, embedding_source
+        )
+        grouped: dict[tuple[str, str], list[_IndexView]] = {}
+        for view in self.views:
+            recorded = vault_metadata.load_embedding_config(view.path)
+            key = (
+                (str(recorded["source"]), str(recorded["model"]))
+                if recorded
+                else (default_source, default_model)
+            )
+            grouped.setdefault(key, []).append(view)
+        self.groups = [
+            (
+                LLMEmbed(model=model, source=source, field=None).embedder,
+                get_retrieval_template(model),
+                views,
+            )
+            for (source, model), views in grouped.items()
+        ]
+        self.stores = {
+            view.path: LanceDBDocumentStore(
+                path=get_vector_db_path(view.path),
+                table_name=DEFAULT_VECTOR_TABLE_NAME,
+            )
+            for view in self.views
+        }
+
+    def __call__(self, query: str) -> list[SearchResult]:
+        lists: list[list[SearchResult]] = []
+        for embedder, template, views in self.groups:
+            vector = embedder.execute_one(template.replace("{query}", str(query)))
+            hits: list[tuple[float, SearchResult]] = []
+            for view in views:
+                hits.extend(self._search(view, vector))
+            hits.sort(key=lambda hit: hit[0])
+            lists.append([result for _, result in hits[: self.limit]])
+        if len(lists) == 1:
+            return lists[0]
+        return reciprocal_rank_fusion(lists, limit=self.limit)
+
+    def _search(
+        self, view: _IndexView, vector: Any
+    ) -> list[tuple[float, SearchResult]]:
+        try:
+            table, _ = self.stores[view.path]._get_table()
+            rows = table.search(list(vector)).limit(self.limit).to_list()
+        except ValueError:
+            return []  # no vectors yet
+        except Exception:
+            logger.warning("Vector search of %s failed", view.path, exc_info=True)
+            return []
+        out = []
+        for row in rows:
+            # Raw distance, not vector_search's score: that clips at zero,
+            # which would leave nothing to merge on for some embedders.
+            distance = float(row.get("_distance", 0.0))
+            out.append(
+                (
+                    distance,
+                    SearchResult(
+                        score=max(0.0, 1.0 - distance),
+                        doc_id=str(row.get("id", "")),
+                        document=view.tag(
+                            normalize_document_cell(row.get("document", "{}"))
+                        ),
+                    ),
+                )
+            )
+        return out
+
+
+class _FanOutTextSearch:
+    """Keyword search over several Whoosh indexes, fused by reciprocal rank.
+
+    Emits the dict shape VaultTextSearch does ({"doc_id", "score",
+    "document"}). An index without a full-text index contributes nothing.
+    """
+
+    def __init__(self, views: list[_IndexView], limit: int | None):
+        self.views = views
+        self.limit = limit
+
+    def __call__(self, query: str) -> list[dict[str, Any]]:
+        lists: list[list[dict[str, Any]]] = []
+        for view in self.views:
+            whoosh_path = get_whoosh_index_path(view.path)
+            if not os.path.isdir(whoosh_path):
+                continue
+            try:
+                with WhooshFullTextIndex(whoosh_path) as ix:
+                    # None means uncapped at runtime, as in VaultTextSearch.
+                    hits = ix.text_search(query, limit=self.limit)  # type: ignore[arg-type]  # None = uncapped
+            except Exception:
+                logger.warning("Keyword search of %s failed", view.path, exc_info=True)
+                continue
+            lists.append(
+                [
+                    {
+                        "doc_id": hit.doc_id,
+                        "score": float(hit.score),
+                        "document": view.tag(hit.document),
+                    }
+                    for hit in hits
+                ]
+            )
+        if len(lists) == 1:
+            return lists[0]
+        return [
+            {"doc_id": r.doc_id, "score": r.score, "document": dict(r.document or {})}
+            for r in reciprocal_rank_fusion(lists, limit=self.limit)
+        ]
+
+
+def words_query(text: str, max_words: int = 12) -> str:
+    """A Whoosh OR-query of the words of *text* (three letters or more).
+
+    For keyword retrieval with no model to distill the question: Whoosh's
+    parser joins bare words with AND, which a whole question rarely matches.
+    """
+    words = [word for word in re.findall(r"\w+", str(text)) if len(word) > 2]
+    return keyword_query_from_llm_output("\n".join(words), max_keywords=max_words)
 
 
 @register_segment("filterSearchResults")
@@ -496,12 +793,23 @@ class VaultSearch(AbstractFieldSegment):
     or in a specified field). The query is templated and used to search the
     'docs' table in LanceDB.
 
+    With several vaults or folders (or a single folder index), each is
+    searched with the embedder its vectors were made with and the hits are
+    fused into one ranked list; each hit's document gets a "folder" label.
+    With keyword_fallback, folder indexes still embedding are also searched
+    by keyword and those hits fused in, so files not yet embedded can be
+    found.
+
     Emits search results from the vector database containing matching document chunks.
     """
 
     def __init__(
         self,
-        vault_path: Annotated[str, "Path to LanceDB created by makevectordatabase"],
+        vault_path: Annotated[
+            str | list[str],
+            "Vault path (LanceDB created by makevectordatabase), or a folder "
+            "with a folder-mode index; a list searches them together",
+        ],
         field: Annotated[
             str | None, "The field to extract. If none, use full item."
         ] = None,
@@ -523,17 +831,28 @@ class VaultSearch(AbstractFieldSegment):
             int | None,
             "Maximum number of results. If None, uses the vector store default.",
         ] = None,
+        keyword_fallback: Annotated[
+            bool,
+            "If True, also keyword-search folder indexes whose files are not "
+            "all embedded yet and fuse those hits in.",
+        ] = False,
     ):
         super().__init__(field=field, set_as=set_as, multi_emit=multi_emit)
         embedding_model, embedding_source = resolve_embedding_config(
             embedding_model, embedding_source
         )
 
-        retrieval_template = get_retrieval_template(embedding_model)
-        ensure_supported_vault_layout(vault_path)
-
+        paths = resolve_vault_paths(vault_path)
+        for path in paths:
+            ensure_supported_vault_layout(path)
         self.vault_path = vault_path
-        vectordb_path = get_vector_db_path(vault_path)
+        if needs_fan_out(paths):
+            self.pipeline = self._fan_out(
+                paths, embedding_model, embedding_source, limit, keyword_fallback
+            )
+            return
+        retrieval_template = get_retrieval_template(embedding_model)
+        vectordb_path = get_vector_db_path(paths[0])
         limit_kwargs: dict[str, Any] = {} if limit is None else {"limit": limit}
         self.pipeline = (
             ToDict(field_list="_:query")
@@ -547,6 +866,42 @@ class VaultSearch(AbstractFieldSegment):
                 **limit_kwargs,
             )
         ).as_function(single_in=True, single_out=True)
+
+    @staticmethod
+    def _fan_out(
+        paths: list[str],
+        embedding_model: str,
+        embedding_source: str,
+        limit: int | None,
+        keyword_fallback: bool,
+    ) -> Any:
+        result_limit = limit if limit is not None else 10
+        search = _FanOutVectorSearch(
+            paths, embedding_model, embedding_source, result_limit
+        )
+
+        def run(value: Any) -> list[SearchResult]:
+            results = search(str(value))
+            if not keyword_fallback:
+                return results
+            # Re-checked per query: the index finishes embedding over time.
+            unfinished = [
+                view
+                for view in search.views
+                if not folder_index.vectors_complete(view.path)
+            ]
+            if not unfinished:
+                return results
+            keyword_hits = _FanOutTextSearch(unfinished, result_limit)(
+                words_query(str(value))
+            )
+            return reciprocal_rank_fusion(
+                [results, keyword_hits],
+                limit=result_limit,
+                rename_fields=parse_key_value_str(SEARCH_RESULT_RENAMES),
+            )
+
+        return run
 
     def process_value(self, value: str) -> Any:
         return self.pipeline(value)
@@ -566,14 +921,20 @@ class VaultChat(AbstractFieldSegment):
     With a result_filter_script, each retrieval stream is over-fetched, run
     through the vault's ChatterLang filter independently, and truncated back
     to its result limit before the streams are merged (issue #22), so both
-    keyword and semantic hits stay represented after filtering.
+    keyword and semantic hits stay represented after filtering. With several
+    vaults or folders, retrieval searches them all (see vaultSearch and
+    vaultTextSearch) and the answer cites hits from any of them.
 
     Emits AI-generated response strings based on retrieved vault context.
     """
 
     def __init__(
         self,
-        vault_path: Annotated[str, "Path to LanceDB created by makevectordatabase"],
+        vault_path: Annotated[
+            str | list[str],
+            "Vault path (LanceDB created by makevectordatabase), or a folder "
+            "with a folder-mode index; a list searches them together",
+        ],
         field: Annotated[
             str | None, "The field to extract. If none, use full item."
         ] = None,
@@ -633,10 +994,14 @@ class VaultChat(AbstractFieldSegment):
         ] = False,
     ):
         super().__init__(field=field, set_as=set_as, multi_emit=multi_emit)
-        if include_background and not (keyword_search or result_filter_script):
+        paths = resolve_vault_paths(vault_path)
+        fan_out = needs_fan_out(paths)
+        if include_background and not (
+            keyword_search or result_filter_script or fan_out
+        ):
             raise ValueError(
-                "include_background requires keyword_search=True or a "
-                "result_filter_script"
+                "include_background requires keyword_search=True, a "
+                "result_filter_script, or several vaults"
             )
         self.include_background = include_background
         embedding_model, embedding_source = resolve_embedding_config(
@@ -646,10 +1011,11 @@ class VaultChat(AbstractFieldSegment):
         chat_source = chat_source if chat_source is not None else get_chat_source()
 
         retrieval_template = get_retrieval_template(embedding_model)
-        ensure_supported_vault_layout(vault_path)
+        for path in paths:
+            ensure_supported_vault_layout(path)
 
         self.vault_path = vault_path
-        vectordb_path = get_vector_db_path(vault_path)
+        vectordb_path = get_vector_db_path(paths[0])
         result_limit = limit if limit is not None else 10
         keyword_result_limit = (
             keyword_limit if keyword_limit is not None else result_limit
@@ -660,6 +1026,31 @@ class VaultChat(AbstractFieldSegment):
         overfetch = (
             retrieval_filter.FILTER_OVERFETCH_FACTOR if result_filter_script else 1
         )
+
+        def vector_stage(limit: int) -> AbstractSegment:
+            """Semantic retrieval of *limit* hits into _background."""
+            if fan_out:
+                # Folders still embedding are keyword-searched too, so a
+                # question can be answered from files not yet embedded.
+                return VaultSearch(
+                    vault_path=paths,
+                    field="query",
+                    set_as="_background",
+                    embedding_model=embedding_model,
+                    embedding_source=embedding_source,
+                    limit=limit,
+                    keyword_fallback=True,
+                )
+            return SearchVectorDatabaseSegment(
+                path=vectordb_path,
+                table_name=DEFAULT_VECTOR_TABLE_NAME,
+                query_field="templated_query",
+                set_as="_background",
+                limit=limit,
+                embedding_model=embedding_model,
+                embedding_source=embedding_source,
+            )
+
         if keyword_search:
             # prompt -> keyword-query creation -> keyword search -> add in
             # vector search -> RAG prompt -> completion, per issue #11. The
@@ -677,7 +1068,7 @@ class VaultChat(AbstractFieldSegment):
                     chat_source=chat_source,
                 )
                 | VaultTextSearch(
-                    vault_path=vault_path,
+                    vault_path=paths,
                     limit=keyword_result_limit * overfetch,
                     field="_keyword_query",
                     set_as="_keyword_background",
@@ -692,15 +1083,7 @@ class VaultChat(AbstractFieldSegment):
                     strict=result_filter_strict,
                     rename_fields=SEARCH_RESULT_RENAMES,
                 )
-            pipeline = pipeline | SearchVectorDatabaseSegment(
-                path=vectordb_path,
-                table_name=DEFAULT_VECTOR_TABLE_NAME,
-                query_field="templated_query",
-                set_as="_background",
-                limit=result_limit * overfetch,
-                embedding_model=embedding_model,
-                embedding_source=embedding_source,
-            )
+            pipeline = pipeline | vector_stage(result_limit * overfetch)
             if result_filter_script:
                 pipeline = pipeline | SearchResultFilter(
                     script=result_filter_script,
@@ -734,30 +1117,27 @@ class VaultChat(AbstractFieldSegment):
                     set_as="chat_response",
                 )
             ).as_function(single_in=True, single_out=True)
-        elif result_filter_script:
-            # The RAGToText composite hides retrieval internally, so the
-            # filtered plain pipeline uses the decomposed equivalent: vector
-            # search into _background, the filter, then the same RAG prompt ->
-            # completion -> sources stages the keyword branch uses.
-            self.pipeline = (
+        elif result_filter_script or fan_out:
+            # The RAGToText composite hides retrieval internally (and reads
+            # one vault), so the filtered and the several-vault plain
+            # pipelines use the decomposed equivalent: vector search into
+            # _background, the filter, then the same RAG prompt -> completion
+            # -> sources stages the keyword branch uses.
+            pipeline = (
                 ToDict(field_list="_:query")
                 | fillTemplate(template=retrieval_template, set_as="templated_query")
-                | SearchVectorDatabaseSegment(
-                    path=vectordb_path,
-                    table_name=DEFAULT_VECTOR_TABLE_NAME,
-                    query_field="templated_query",
-                    set_as="_background",
-                    limit=result_limit * overfetch,
-                    embedding_model=embedding_model,
-                    embedding_source=embedding_source,
-                )
-                | SearchResultFilter(
+                | vector_stage(result_limit * overfetch)
+            )
+            if result_filter_script:
+                pipeline = pipeline | SearchResultFilter(
                     script=result_filter_script,
                     field="_background",
                     limit=result_limit,
                     strict=result_filter_strict,
                     rename_fields=SEARCH_RESULT_RENAMES,
                 )
+            self.pipeline = (
+                pipeline
                 | ConstructRAGPrompt(
                     prompt_directive=RAG_PROMPT_DIRECTIVE,
                     background_field="_background",
@@ -799,7 +1179,7 @@ class VaultChat(AbstractFieldSegment):
         self.keyword_search = keyword_search
         # These branches keep the full working item so callers can see the
         # retrieval and filter outcome, not just the answer.
-        self._emits_item = keyword_search or bool(result_filter_script)
+        self._emits_item = keyword_search or bool(result_filter_script) or fan_out
 
     def process_value(self, value: str) -> Any:
         result = self.pipeline(value)
@@ -824,7 +1204,9 @@ class VaultTextSearch(AbstractFieldSegment):
 
     Expects input items containing a search query string (either as the full item
     or in a specified field). The query is matched against document fields in
-    the configured Whoosh full-text index.
+    the configured Whoosh full-text index; with several vaults or folders,
+    each index is searched and the hits fused by reciprocal rank, each
+    document labelled with its "folder".
 
     Emits search results as dicts containing:
         - "doc_id": str - Document identifier (file path)
@@ -834,7 +1216,11 @@ class VaultTextSearch(AbstractFieldSegment):
 
     def __init__(
         self,
-        vault_path: Annotated[str, "Path to LanceDB created by makevectordatabase"],
+        vault_path: Annotated[
+            str | list[str],
+            "Vault path (LanceDB created by makevectordatabase), or a folder "
+            "with a folder-mode index; a list searches them together",
+        ],
         limit: Annotated[
             int | None, "Maximum number of results to return. If None, no cap."
         ] = None,
@@ -849,9 +1235,16 @@ class VaultTextSearch(AbstractFieldSegment):
         ] = True,
     ):
         super().__init__(field=field, set_as=set_as, multi_emit=multi_emit)
-        ensure_supported_vault_layout(vault_path)
+        paths = resolve_vault_paths(vault_path)
+        for path in paths:
+            ensure_supported_vault_layout(path)
         self.vault_path = vault_path
-        whoosh_index_path = get_whoosh_index_path(vault_path)
+        self._fan_out = (
+            _FanOutTextSearch(_index_views(paths), limit)
+            if needs_fan_out(paths)
+            else None
+        )
+        whoosh_index_path = get_whoosh_index_path(paths[0])
         self.pipeline = searchWhoosh(
             index_path=whoosh_index_path,
             # searchWhoosh declares limit as int, but it is passed straight to
@@ -862,6 +1255,8 @@ class VaultTextSearch(AbstractFieldSegment):
         ).as_function(single_in=True, single_out=False)
 
     def process_value(self, value: str) -> list[dict[str, Any]]:
+        if self._fan_out is not None:
+            return self._fan_out(value)
         results = []
         try:
             for result in self.pipeline(value):
