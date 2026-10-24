@@ -238,6 +238,7 @@ fileWatcher = "talkpipe_vault.watchdog:file_watcher"
 watchIntoVectorDB = "talkpipe_vault.pipelines.building_and_watching:watch_into_vector_db"
 listIntoVectorDB = "talkpipe_vault.pipelines.building_and_watching:list_into_vector_db"
 watchFolders = "talkpipe_vault.pipelines.folder_index:watch_folders"
+folderChanges = "talkpipe_vault.pipelines.folder_changes:folder_changes"
 
 [project.entry-points."talkpipe.segments"]
 buildVectorDBFromPaths = "talkpipe_vault.pipelines.building_and_watching:build_vector_db_from_paths"
