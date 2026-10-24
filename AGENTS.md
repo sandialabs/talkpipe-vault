@@ -18,7 +18,8 @@ application, but constituent parts can also be used in other applications.
 - `src/talkpipe_vault/` - Main library source code
  - `apps/` - Application code (query interface, vault server)
  - `pipelines/` - Pipeline implementations (building vector DBs, searching, watching,
-   agent-driven result selection in `agent_search.py` on top of talkpipe-agents)
+   agent-driven result selection in `agent_search.py` on top of talkpipe-agents,
+   folder mode's background indexer and its segments in `folder_index.py`)
  - `segments.py` - Text extraction segments
  - `watchdog.py` - File monitoring source
  - `initialize_plugin.py` - TalkPipe plugin initialization

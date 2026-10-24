@@ -1596,9 +1596,9 @@ def index_folder(
     it again only processes what changed. When another process is already
     indexing the folder, this one leaves it alone.
 
-    Emits a status dict per folder: file counts (files_total,
-    files_keyword, files_embedded, files_error, ...), phase, role, and any
-    vector_error; or sets it on the item when set_as is given.
+    Emits a status dict per folder (or sets it on the input item): file
+    counts (files_total, files_keyword, files_embedded, files_error, ...),
+    phase, role, and any vector_error.
     """
     for item in items:
         root = item if field is None else extract_property(item, field)
@@ -1650,8 +1650,8 @@ def watch_folders(
     the vault's interfaces use: it becomes each folder's writer when no
     other process is, indexes keywords then vectors, watches for changes
     (rescanning periodically where events are unreliable), and resumes
-    where it left off when restarted. Runs until max_events status changes
-    have been emitted, or forever.
+    where it left off when restarted. Runs until the requested number of
+    status changes has been emitted, or forever.
 
     Emits a status dict (see indexFolder) for a folder whenever its phase
     or file counts change.

@@ -71,6 +71,10 @@ page uses. `vaultAgentChat` subclasses it, and takes exactly the same
 parameters plus nothing — the answer is generated from whatever the search
 kept.
 
+`vault_path` may also be a list of vaults or folders (each searched with its
+own embedder and the hits fused) or a folder with a folder-mode index; see
+the [Advanced Guide](ADVANCED.md#folder-mode).
+
 ## How a run works
 
 The agent is talkpipe-agents' `llmAgent` segment. It is given seven tools, all

@@ -34,14 +34,21 @@ not match the index.
 ### `vault-server`
 
 ```bash
-vault-server [~/my-vault] [--resume] [--host 0.0.0.0] [--port 8002] [--show-source-paths] [--no-browser]
+vault-server [~/notes | ~/my-vault] [--dir FOLDER ...] [--as-vault] [--resume] [--host 0.0.0.0] [--port 8002] [--show-source-paths] [--no-browser]
 ```
 
-- The vault path is optional; without it the app starts on the
+- The path is optional; without it the app starts on the
   Vaults & Documents page.
-- `--resume` opens the vault most recently used in the web interface,
-  falling back to the given path (or the Vaults & Documents page) when no
-  recent vault is usable. This is how the container image starts.
+- A folder of documents opens in **folder mode** (see
+  [Folder mode](#folder-mode)): it is searched directly, indexed in the
+  background into `~/notes/.tpvault`. A vault folder, or an empty or
+  missing one, opens as a named vault as before; `--as-vault` forces that
+  for a folder of documents (the behavior before folder mode).
+- `--dir FOLDER` adds a folder to search; repeat it for several.
+- `--resume` reopens what the web interface last had open: its folders, or
+  else the vault most recently used, falling back to the given path (or the
+  Vaults & Documents page) when nothing is usable. This is how the container
+  image starts.
 - `--show-source-paths` shows source file paths in search results and serves
   those files over HTTP; hidden by default. Opening documents via the Open
   link on results and citations does not need this flag — it identifies the
@@ -58,12 +65,12 @@ python -m talkpipe_vault.apps.query ~/my-vault --host 0.0.0.0 --port 8002
 ### `vault-tui`
 
 ```bash
-vault-tui [~/my-vault] [--resume] [--show-source-paths]
+vault-tui [~/notes | ~/my-vault] [--dir FOLDER ...] [--as-vault] [--resume] [--show-source-paths]
 ```
 
 The terminal interface described in the [README](../README.md#the-terminal-interface-vault-tui).
-The vault path, `--resume` and `--show-source-paths` mean the same as for
-`vault-server`; there is no host/port because it runs in-process. It reads
+The path, `--dir`, `--as-vault`, `--resume` and `--show-source-paths` mean
+the same as for `vault-server`; there is no host/port because it runs in-process. It reads
 and writes the same files as the web interface (recent vaults, settings and
 credentials under `TALKPIPE_VAULT_HOME`, default `~/.talkpipe-vault`) and
 honours the path fences below. Press `F1` inside the app for the keyboard
@@ -310,12 +317,25 @@ shingle, embed, store — and `vault-server` searches it.
 - `listIntoVectorDB` — batch processing from glob patterns for the
   experimental vault layout
 
+- `watchFolders` — keeps folders indexed for [folder mode](#folder-mode)
+  and emits each folder's status as it changes; the same background indexer
+  the interfaces use
+
 **Segments:**
 
+- `indexFolder` — brings each folder it is given up to date for folder mode
+  (new and changed files indexed, deleted ones removed, keywords then
+  vectors) and emits its status
 - `buildVectorDBFromPaths` — complete document processing pipeline
 - `vaultSearch` — semantic search on a vault's vector database
 - `vaultTextSearch` — full-text keyword search using the Whoosh index
 - `vaultChat` — RAG-based Q&A using vault contents
+
+`vaultSearch`, `vaultTextSearch`, `vaultChat`, `vaultAgentSearch` and
+`vaultAgentChat` take a list of paths as `vault_path` to search several
+vaults or folders together, and a folder with a folder-mode index can be
+named directly instead of its index. A single named vault keeps its own
+pipeline unchanged.
 - `vaultAgentSearch` / `vaultAgentChat` — agent-driven retrieval: an agent
   searches the vault with tools and keeps the chunks a question needs (and,
   for `vaultAgentChat`, answers from them); see the
@@ -463,6 +483,29 @@ chunks = list(pipeline())
 print(f"Indexed {len(chunks)} chunk(s) into the vault.")
 ```
 
+Folder mode's components work the same way outside the interfaces. Index
+two folders, then ask across both:
+
+```python
+import talkpipe
+
+talkpipe.load_plugins()
+
+index = talkpipe.compile("| indexFolder | print").as_function(single_in=False)
+index(["/path/to/notes", "/path/to/papers"])  # status dicts, one per folder
+
+ask = talkpipe.compile(
+    '| vaultChat[vault_path=["/path/to/notes", "/path/to/papers"], '
+    'chat_source="ollama", chat_model="qwen3:8b"]'
+).as_function(single_in=True, single_out=True)
+print(ask("What changed in the deployment plan?"))
+```
+
+`INPUT FROM watchFolders[paths="/path/to/notes,/path/to/papers"] | print`
+keeps both indexed instead, printing each folder's status as it changes, and
+can run next to a `vault-server` on the same folders: whichever starts first
+indexes, the other searches and takes over if it exits.
+
 To watch a directory instead of a fixed glob, use the `watchIntoVectorDB`
 source (parameters `source_path` and `polling`) in place of
 `listIntoVectorDB` — it runs until interrupted. Both write the experimental
@@ -491,6 +534,59 @@ in `pipelines/building_and_watching.py` (`listIntoVectorDB` /
 - `shingled_chunks` — embeddings for overlapping chunk windows with
   composite ids like `first-last-source`
 - `fulltext_vault/` — Whoosh index over full document content
+
+### Folder mode
+
+A folder searched directly keeps its index, an ordinary vault in the stable
+layout above, in a hidden `.tpvault` subfolder of the folder:
+
+```
+<folder>/.tpvault/
+  docs.lance/  fulltext_vault/  vault_metadata.json   # the stable layout
+  manifest.db    # per-file state: stat, content hash, chunk count, phase
+  status.json    # the indexing process's progress and heartbeat
+  writer.lock    # which process indexes the folder
+  .gitignore     # "*": git ignores the whole directory
+  CACHEDIR.TAG   # borg, restic --exclude-caches and tar --exclude-caches skip it
+```
+
+The index is kept under the app's data directory instead
+(`$TALKPIPE_VAULT_HOME/folder-indexes/<name>-<hash>/`, or under
+`TALKPIPE_VAULT_ROOT` when one is set) when the folder is read-only, on a
+network share (nfs, cifs/smb, sshfs, …), or inside a sync client's folder
+(Dropbox, OneDrive, Google Drive, iCloud, Syncthing), or when Settings says
+so. An index already in place is always reused, wherever it is.
+
+**Indexing** runs in one background thread per process, keyword phase
+first: every file is read and chunked once into the Whoosh index, so a
+folder is searchable by keyword within minutes; the vector phase then
+embeds those stored chunks into LanceDB. Changes are noticed by a file
+watcher, by a full scan whenever the folder is opened, and by a rescan every
+30 minutes (10 where file events are unreliable). A file whose size or
+modification time changed is hashed, so a touched but unchanged file is not
+re-embedded; a changed or deleted file's chunks leave both indexes at once.
+Chunk ids are derived from the index and the file's path relative to the
+folder, so redoing a batch after a crash replaces rather than duplicates,
+and a moved folder keeps its index.
+
+**Several processes** may open one folder: the one holding `writer.lock` (an
+OS lock, released when the process exits however it exits) indexes it; the
+others search it and show its progress, and one of them takes over when it
+exits. A machine-wide `ingest.lock` in the app's data directory lets only
+one batch run at a time across processes, which bounds memory.
+
+**Searching several folders** fuses their results: semantic hits from
+folders indexed with the same embedder merge by distance, other lists by
+reciprocal rank, and every hit names its folder. While a folder is still
+embedding, keyword matches for its unembedded files are included and the
+pages say the index is partial. The embedder a folder was indexed with is
+recorded in its `vault_metadata.json` and used for its queries; when
+Settings names another, the folder offers **Re-embed** (keyword search keeps
+answering meanwhile), and when the chunk settings differ, **Rebuild**.
+
+Folder and named-vault modes are exclusive in the interfaces; a named vault
+whose documents all lie in one folder offers to search that folder instead.
+Retrieval filters apply when one folder is open, not several.
 
 ## Experimental directory monitoring
 

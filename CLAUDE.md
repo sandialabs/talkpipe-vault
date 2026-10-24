@@ -47,13 +47,14 @@ src/talkpipe_vault/
     ├── cli.py                  # Experimental watcher CLI helpers (not installed as scripts)
     ├── building_and_watching.py # Experimental watch/batch vector DB pipelines
     ├── searching_and_prompting.py # VaultSearch / VaultChat / VaultTextSearch segments
+    ├── folder_index.py         # Folder mode: per-folder index, background indexer, indexFolder/watchFolders
     ├── agent_tools.py          # The vault's agent tool pack (session + bound-tool factories)
     └── agent_search.py         # vaultAgentSearch / vaultAgentChat, built on llmAgent
 ```
 
 ## The Web Application (primary user path)
 
-`vault-server [vault_path] [--resume] [--host] [--port] [--show-source-paths] [--no-browser]` —
+`vault-server [folder|vault_path] [--dir FOLDER ...] [--as-vault] [--resume] [--host] [--port] [--show-source-paths] [--no-browser]` —
 `--resume` opens the most recently used vault (fallback: vault_path); the vault path is
 optional; without it the UI starts on the Vaults & Documents page.
 
@@ -162,16 +163,67 @@ non-authoritative `indexed_via_url` breadcrumb).
   a missing or unreadable file is treated as a legacy vault, never an error.
 - A legacy `vault_path/vector_vault` layout is rejected with migration guidance
   (`ensure_supported_vault_layout`).
+- **Folder mode** keeps a folder's index — an ordinary vault in this layout — in
+  `<folder>/.tpvault/`, plus `manifest.db` (sqlite, per-file state, written only by the
+  lock holder), `status.json` (progress for other processes), `writer.lock`,
+  `.gitignore` (`*`) and `CACHEDIR.TAG`. Read-only, network, synced folders and a set
+  `TALKPIPE_VAULT_ROOT` put it under `<vault root or home>/folder-indexes/` instead
+  (`resolve_index_location`). Never add `.tpvault` to the vault markers in
+  `_existing_non_vault_entries`: that would make the documents folder count as a vault.
 - The experimental watcher pipelines in `building_and_watching.py` write different tables
   (`full_documents`, `shingled_chunks`) that the web app does NOT read; they are not part
   of the stable path and are not installed as console scripts.
 
 ## TalkPipe Sources/Segments (registered entry points)
 
-Sources: `fileWatcher`, `watchIntoVectorDB`, `listIntoVectorDB` (watcher ones experimental).
+Sources: `fileWatcher`, `watchIntoVectorDB`, `listIntoVectorDB` (watcher ones experimental),
+`watchFolders`.
 Segments: `buildVectorDBFromPaths`, `vaultSearch`, `vaultChat`, `vaultTextSearch`,
 `searchLance`, `extractSearchKeywords`, `mergeSearchResults`, `filterSearchResults`,
-`vaultAgentSearch`, `vaultAgentChat`.
+`vaultAgentSearch`, `vaultAgentChat`, `indexFolder`.
+
+## Folder mode
+
+Users point at folders instead of creating vaults. `pipelines/folder_index.py` is the
+engine and depends on nothing in `apps/` except `default_index_home()` (lazy import);
+keep it that way so `indexFolder`/`watchFolders` stay usable in other applications.
+
+- `FolderIndex` is one folder: `try_become_writer()` takes `writer.lock` (filelock, an
+  OS lock released on any exit); a process without it is a reader that shows the
+  writer's `status.json`. `scan()` reconciles the manifest with the disk (size/mtime,
+  then sha256, so a touched file is not re-embedded; changed/deleted files lose their
+  chunks from both stores at once), `keyword_batch()` chunks pending files into Whoosh,
+  `vector_window()` embeds stored chunks via `build_rag_database(chunks=…)`. Chunk ids
+  are `{uuid8}-{sha1(relpath)[:16]}:{n:05d}` — same id in Whoosh and LanceDB, so redone
+  batches replace rather than duplicate. Mark a file done only after the store call
+  returns.
+- `FolderScheduler` is one daemon thread per process: scans, then keyword work for every
+  folder, then vectors; `ingest.lock` in the vault home serializes batches across
+  processes. Maintenance (`reembed`, `rebuild`) and closing a folder run on the worker
+  through `submit()` / `remove()`. The watcher drops events with any hidden path
+  component — watchdog's `.*` ignore matches only the last component, so `.tpvault`'s
+  own writes would otherwise re-trigger it.
+- Search: `VaultSearch`/`VaultTextSearch`/`VaultChat`/`AgentVaultSearch` accept a list of
+  paths; `resolve_vault_paths` maps a documents folder to its index, and
+  `needs_fan_out` keeps a single named vault on its old pipeline. Fan-out groups indexes
+  by recorded embedder (distance merge inside a group, `reciprocal_rank_fusion` across),
+  tags hits with `folder`, and rebases sources when a folder moved.
+  `keyword_fallback` adds keyword hits for folders still embedding (and keyword-only
+  results when the embedder fails).
+- App glue in `apps/query.py` ("Folder mode" block): `add_folder`, `remove_folder`,
+  `reembed_folder`, `rebuild_folder`, `folders_status`, `_folder_banner`,
+  `_partial_index_note`, `_folder_chunk`/`_folder_source_file` for lookups. In folder
+  mode `_state.folders` lists the roots and `_state.vault_path` is the first folder's
+  index; folder and named-vault modes are exclusive (`_activate_vault` leaves folder
+  mode). Routes: `/folders/add`, `/folders/remove`, `/folders/reembed`,
+  `/folders/rebuild`; `/api/index-status` carries `folders` and `banner`. Named-vault
+  index runs and full-text rebuilds hold the vault's `writer.lock` and pause the folder
+  indexer (`_index_run_guard`), and refuse a folder's index.
+- CLI (`vault-server`, `vault-tui`): a folder of documents opens in folder mode
+  (`is_documents_folder`), `--dir` repeats, `--as-vault` restores the old behavior,
+  `--resume` prefers the last session's folders (`resumable_folders`). Settings:
+  `open_folders`, `recent_folders`, `last_session`, `index_location`.
+- Tests use the offline `fake_embedder` fixture (`tests/conftest.py`, source `fakehash`).
 
 **Agent retrieval** is split in two, deliberately: `pipelines/agent_tools.py` owns *what
 the tools do*, `pipelines/agent_search.py` owns *the pipeline that runs them*. Nothing in

@@ -22,7 +22,9 @@
 TalkPipe Vault is a web application that indexes your documents — notes,
 papers, reports, an Obsidian vault, a project archive — into a local
 [LanceDB](https://lancedb.com/) vector database and lets you explore them
-three ways:
+three ways. Point it at one or more folders and start asking: each folder is
+indexed in the background and kept up to date as its files change (see
+[Folders](#folders)).
 
 - **Semantic search** — find documents by meaning, not just words
 - **Keyword search** — precise full-text queries with boolean operators
@@ -230,10 +232,39 @@ saved filter does nothing until you tick **Enabled on this machine**. The
 script syntax is in the Advanced Guide under
 [Writing a retrieval filter](docs/ADVANCED.md#writing-a-retrieval-filter).
 
+## Folders
+
+Choose the folders you want to ask about — on the **Vaults & Documents**
+page, the terminal interface's Vault tab, or the command line:
+
+```bash
+vault-server ~/notes                      # or: vault-server --dir ~/notes --dir ~/papers
+```
+
+That is all: there is no vault to name or create. Each folder, and
+everything under it, is indexed in the background — keywords first, so it
+is searchable within minutes, then meaning — and you can search and ask
+right away; until indexing finishes, every page says so and keyword matches
+are included for files not embedded yet. New, changed and deleted files are
+picked up as they happen. Quitting part-way loses nothing: indexing resumes
+where it left off, and a second vault-server or vault-tui opened on the same
+folder shares its index instead of building another.
+
+The index lives in a hidden `.tpvault` folder inside each folder (git and
+most backup tools skip it), or in the app's data directory when the folder
+is read-only, on a network share, or synced by a cloud client — see
+[Folder mode](docs/ADVANCED.md#folder-mode). Removing a folder keeps its
+index unless you ask for it to be deleted; your documents are never touched.
+
+Named vaults — an index kept in a separate folder of its own — still work
+as before, under **Named vaults (advanced)**.
+
 ## The web interface
 
-- **Vaults & Documents** — choose the documents to index and the vault to
-  index them into, on one page with a built-in folder browser. With no vault
+- **Vaults & Documents** — the **Folders** list (add folders to search, with
+  each one's indexing progress) and, under **Named vaults (advanced)**,
+  the documents to index and the vault to index them into, on one page with
+  a built-in folder browser. With no vault
   open, a vault name is suggested from the documents folder and created on
   submit; with one open, the same form adds documents to it. Recent vaults
   are remembered for one-click reopening, and indexing shows live progress.
