@@ -473,20 +473,32 @@ def test_status_reports_full_text_index_older_than_the_vault(sample_vault):
     assert service.status()["keyword_index_stale"] is False
 
 
+def test_startup_searches_a_documents_folder_in_place(tmp_path):
+    docs = tmp_path / "notes"
+    docs.mkdir()
+    (docs / "a.md").write_text("# a\n")
+    service = VaultService()
+    outcome = service.startup(str(docs))
+    assert outcome["ok"], outcome
+    assert outcome["folders"]
+    assert service.state.folders == [str(docs.resolve())]
+    assert not (docs / "docs.lance").exists()
+
+
 def test_startup_asks_before_making_a_documents_folder_a_vault(tmp_path):
     docs = tmp_path / "notes"
     docs.mkdir()
     (docs / "a.md").write_text("# a\n")
     (docs / "b.md").write_text("# b\n")
     service = VaultService()
-    outcome = service.startup(str(docs))
+    outcome = service.startup(str(docs), as_vault=True)
     assert not outcome["ok"]
     assert outcome["needs_confirm"]
     assert outcome["confirm_path"] == str(docs)
     assert outcome["entry_count"] == 2
     assert service.vault_path == ""
     # Confirmed, the same call opens it (the Vault form's flow).
-    confirmed = service.startup(str(docs), confirm_non_vault=True)
+    confirmed = service.startup(str(docs), confirm_non_vault=True, as_vault=True)
     assert confirmed["ok"], confirmed
     assert service.vault_path == str(docs)
 

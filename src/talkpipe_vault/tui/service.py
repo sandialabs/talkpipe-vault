@@ -32,7 +32,10 @@ from talkpipe_vault.pipelines import (
     retrieval_filter,
     vault_metadata,
 )
-from talkpipe_vault.pipelines.config import ensure_supported_vault_layout
+from talkpipe_vault.pipelines.config import (
+    FOLDER_INDEX_DIRNAME,
+    ensure_supported_vault_layout,
+)
 
 # The default model2vec model unpacks to roughly this much on disk; the figure
 # only sizes the first-run wait in the startup message.
@@ -128,8 +131,10 @@ class VaultService:
         resume: bool = False,
         confirm_non_vault: bool = False,
         progress: Callable[[str], None] | None = None,
+        folders: list[str] | None = None,
+        as_vault: bool = False,
     ) -> dict[str, Any]:
-        """Apply saved credentials/settings and open the initial vault.
+        """Apply saved credentials/settings and open the initial vault or folders.
 
         Mirrors ``run_app``: a vault that cannot be opened degrades to "no
         vault" with a warning rather than aborting, so Settings and its
@@ -142,12 +147,39 @@ class VaultService:
         one-line description of what the open is waiting on (loading — on a
         first run, downloading — the embedding model), because that can take
         minutes and nothing else on screen says so.
+
+        Folder mode, as with ``vault-server``: *folders* (``--dir``) are
+        searched directly, a ``vault_path`` that is a folder of documents
+        joins them unless *as_vault*, and *resume* reopens the last
+        session's folders before falling back to the last vault.
         """
         problems = access_control.startup_errors()
         if problems:
             return _fail(" ".join(problems))
         credentials.apply()
         query.load_saved_model_overrides()
+        folders = [str(Path(p).expanduser()) for p in folders or []]
+        if vault_path and not as_vault and query.is_documents_folder(vault_path):
+            folders.insert(0, str(Path(vault_path).expanduser()))
+            vault_path = ""
+        resumed_folders = False
+        if resume and not folders:
+            folders = query.resumable_folders()
+            resumed_folders = bool(folders)
+        if folders:
+            if progress is not None:
+                progress(self.opening_note(", ".join(folders)))
+            problems = query.open_saved_folders(self.state, folders)
+            if not self.state.folders:
+                return _fail(" ".join(problems))
+            note = " (last session)" if resumed_folders else ""
+            message = (
+                f"Searching {', '.join(self.state.folders)}{note}; indexing "
+                "runs in the background."
+            )
+            if problems:
+                message += " " + " ".join(problems)
+            return _ok(message, vault_path=self.state.vault_path, folders=True)
         chosen = ""
         resumed = False
         skipped: list[str] = []
@@ -256,6 +288,7 @@ class VaultService:
 
     def _clear_vault(self) -> None:
         state = self.state
+        query._leave_folder_mode(state)
         state.vault_path = ""
         state.search_pipeline = None
         state.chat_pipeline = None
@@ -283,6 +316,9 @@ class VaultService:
         state = self.state
         return {
             "vault_path": state.vault_path,
+            "folder_mode": bool(state.folders),
+            "folder_names": [Path(root).name or root for root in state.folders],
+            "folder_banner": query._folder_banner(state),
             "chunks": state.shingled_chunks_count,
             "keyword_search_enabled": state.keyword_search_enabled,
             "keyword_index_stale": self.keyword_index_stale(),
@@ -370,6 +406,40 @@ class VaultService:
     def suggest_vault_path(self, source: str) -> str:
         return query.suggest_vault_path(source) if source.strip() else ""
 
+    # -- folders ------------------------------------------------------------------
+
+    def folders(self) -> list[dict[str, Any]]:
+        """The open folders' progress, as the Vaults & Documents page lists it."""
+        return query.folders_status(self.state)
+
+    def recent_folders(self) -> list[str]:
+        """Folders searched before that are not open now."""
+        return [
+            p for p in user_settings.get_recent_folders() if p not in self.state.folders
+        ]
+
+    def add_folder(self, raw_path: str) -> dict[str, Any]:
+        """Start searching a folder (``/folders/add``)."""
+        message, error = query.add_folder(self.state, raw_path)
+        return _fail(error) if error else _ok(message)
+
+    def remove_folder(self, root: str, *, delete_index: bool = False) -> dict[str, Any]:
+        """Stop searching a folder (``/folders/remove``)."""
+        message, error = query.remove_folder(
+            self.state, root, delete_index=delete_index
+        )
+        return _fail(f"{message} {error}".strip()) if error else _ok(message)
+
+    def reembed_folder(self, root: str) -> dict[str, Any]:
+        """Re-embed a folder with the Settings embedder (``/folders/reembed``)."""
+        message, error = query.reembed_folder(self.state, root)
+        return _fail(error) if error else _ok(message)
+
+    def shutdown(self) -> None:
+        """Finish the folder indexer's batch in progress and release the folders."""
+        if query._folder_scheduler is not None:
+            query._folder_scheduler.stop()
+
     def open_vault(
         self, raw_path: str, *, confirm_non_vault: bool = False
     ) -> dict[str, Any]:
@@ -381,6 +451,9 @@ class VaultService:
         vault_path, placement_note, error = query._resolve_vault_request(raw_path)
         if vault_path is None:
             return _fail(error)
+        if (vault_path / FOLDER_INDEX_DIRNAME).is_dir():
+            # A folder searched in folder mode: open the folder, not a vault.
+            return self.add_folder(str(vault_path))
         created = not vault_path.is_dir()
         entries = query._existing_non_vault_entries(vault_path)
         if entries > 0 and not confirm_non_vault:
@@ -471,6 +544,11 @@ class VaultService:
             if vault.strip():
                 return self.open_vault(vault, confirm_non_vault=confirm_non_vault)
             return _fail("Enter a folder or glob pattern to index.")
+        if self.state.folders and not vault.strip():
+            return _fail(
+                "Folders index themselves: add the folder under Folders above. "
+                "To index into a named vault instead, enter the vault."
+            )
         pattern = query._resolve_source_pattern(source)
         doc_roots = access_control.document_roots()
         confined_prefix = access_control.confine(
@@ -658,8 +736,17 @@ class VaultService:
         if not self.state.vault_path:
             return _fail("No vault is open.")
         try:
-            text = query._get_chunk_text_for_path_and_snippet(
-                self.state.vault_path, lookup_path, snippet
+            found = (
+                query._folder_chunk(self.state, lookup_path)
+                if self.state.folders
+                else None
+            )
+            text = (
+                str(found[0].get("content", ""))
+                if found
+                else query._get_chunk_text_for_path_and_snippet(
+                    self.state.vault_path, lookup_path, snippet
+                )
             )
         except Exception as exc:
             return _fail(f"Could not load the chunk: {exc}")
@@ -672,8 +759,12 @@ class VaultService:
         if not self.state.vault_path:
             return _fail("No vault is open.")
         try:
-            path = query._resolve_indexed_source_file(
-                self.state.vault_path, lookup_path
+            path = (
+                query._folder_source_file(self.state, lookup_path)
+                if self.state.folders
+                else query._resolve_indexed_source_file(
+                    self.state.vault_path, lookup_path
+                )
             )
         except Exception as exc:
             return _fail(f"Could not resolve the source document: {exc}")
@@ -795,6 +886,9 @@ class VaultService:
         answered_by = query._answered_by(state)
         if retrieval_note:
             answered_by = f"{answered_by} · {retrieval_note}"
+        partial = query._partial_index_note(state)
+        if partial:
+            answered_by = f"{answered_by} · {partial}"
         if state.result_filter_active:
             if answered_by_agent:
                 answered_by += f" · {query.AGENT_FILTER_NOTE}"

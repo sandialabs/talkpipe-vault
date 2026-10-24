@@ -815,11 +815,15 @@ class VaultApp(App[None]):
         *,
         vault_path: str = "",
         resume: bool = False,
+        folders: list[str] | None = None,
+        as_vault: bool = False,
     ) -> None:
         super().__init__()
         self.service = service or VaultService()
         self._initial_vault = vault_path
         self._resume = resume
+        self._initial_folders = list(folders or [])
+        self._as_vault = as_vault
         self._index_timer: Any = None
         self._index_message = ""
         self._index_previous_chunks = 0
@@ -867,6 +871,23 @@ class VaultApp(App[None]):
             yield from self._compose_vault_form()
 
     def _compose_vault_form(self) -> ComposeResult:
+        yield Label(
+            "Folders to search — each is indexed in the background and kept up to date",
+            classes="section-heading",
+        )
+        with Horizontal(classes="form-row"):
+            yield Input(placeholder="e.g. ~/Documents/notes", id="folder-path")
+            yield Button("Browse", id="folder-browse")
+            yield Button("Add folder", variant="primary", id="folder-add")
+        yield RecentVaultList(id="folder-list")
+        with Horizontal(classes="button-row"):
+            yield Button("Remove selected", id="folder-remove")
+            yield Button(
+                "Remove and delete its index", variant="error", id="folder-delete"
+            )
+            yield Button("Re-embed selected", id="folder-reembed")
+        yield Static("", id="folder-note", markup=False)
+        yield Label("Named vaults (advanced)", classes="section-heading")
         yield Label(
             "Documents to index (folder or glob pattern)", classes="field-label"
         )
@@ -1060,7 +1081,9 @@ class VaultApp(App[None]):
     def on_mount(self) -> None:
         self._apply_size(self.size.height)
         self.query_one("#config-status", Static).update("Checking…")
-        if self._initial_vault or self._resume:
+        # Folders index in the background; keep their progress current.
+        self.set_interval(3.0, self._poll_folders)
+        if self._initial_vault or self._resume or self._initial_folders:
             # The toast expires in seconds; opening can take minutes on a first
             # run (embedding-model download). Keep a line on screen until then.
             self.query_one("#vault-name", ShortenedPath).show_path("opening…")
@@ -1085,6 +1108,8 @@ class VaultApp(App[None]):
             progress=lambda text: self.call_from_thread(
                 self._show_startup_progress, text
             ),
+            folders=self._initial_folders,
+            as_vault=self._as_vault,
         )
         self.call_from_thread(self._after_startup, outcome)
 
@@ -1109,6 +1134,15 @@ class VaultApp(App[None]):
             self._confirm_non_vault(
                 outcome, lambda: self._open_vault(path, confirm=True)
             )
+            return
+        if outcome["ok"] and outcome.get("folders"):
+            self.notify(outcome["message"])
+            self.refresh_status()
+            self._load_recent_vaults()
+            self._load_settings_form()
+            self._load_config_status(probe=True, download=False)
+            self.query_one("#tabs", TabbedContent).active = "tab-search"
+            self.query_one("#search-query", Input).focus()
             return
         if outcome["ok"]:
             if outcome.get("vault_path"):
@@ -1159,12 +1193,17 @@ class VaultApp(App[None]):
         status = self.service.status()
         # After the facts label (chunk count, keyword state) has taken its
         # width, so the name is shortened to the room actually left.
-        self.call_after_refresh(
-            self._show_vault_name, status["vault_path"] or "no vault open"
-        )
+        name = status["vault_path"] or "no vault open"
+        if status["folder_mode"]:
+            name = "folders: " + ", ".join(status["folder_names"])
+        self.call_after_refresh(self._show_vault_name, name)
         has_vault = bool(status["vault_path"])
         facts = []
-        if status["vault_path"]:
+        if status["folder_mode"]:
+            facts.append(f"{status['chunks']} chunks")
+            if status["folder_banner"]:
+                facts.append("indexing")
+        elif status["vault_path"]:
             facts.append(f"{status['chunks']} chunks")
             if status["keyword_index_stale"]:
                 facts.append("keywords out of date")
@@ -1202,13 +1241,139 @@ class VaultApp(App[None]):
             status["keyword_search_enabled"] or not has_vault, "hidden"
         )
         self.query_one("#filter", Button).disabled = not has_vault
+        # Folders build their keyword index themselves.
+        self.query_one("#kw-build", Button).set_class(status["folder_mode"], "hidden")
         self.query_one("#kw-build", Button).disabled = not has_vault
         self.query_one("#kw-build", Button).label = (
             "Rebuild full-text index"
             if status["keyword_search_enabled"]
             else "Build full-text index"
         )
-        self.query_one("#vault-path", Input).value = status["vault_path"]
+        self.query_one("#vault-path", Input).value = (
+            "" if status["folder_mode"] else status["vault_path"]
+        )
+        self._load_folders()
+
+    # -- folders -------------------------------------------------------------------------
+
+    def _load_folders(self) -> None:
+        """Fill the folder list: open folders with progress, then recent ones."""
+        options = self.query_one("#folder-list", OptionList)
+        highlighted = options.highlighted
+        options.clear_options()
+        for folder in self.service.folders():
+            where = "" if folder["in_folder"] else " · index in app data"
+            options.add_option(
+                Option(
+                    f"{folder['name']} — {folder['progress']}{where}  ({folder['root']})",
+                    id=f"open:{folder['root']}",
+                )
+            )
+        for root in self.service.recent_folders():
+            options.add_option(
+                Option(f"{root}  (searched before)", id=f"recent:{root}")
+            )
+        if highlighted is not None and highlighted < options.option_count:
+            options.highlighted = highlighted
+        banner = self.service.status()["folder_banner"]
+        self.query_one("#folder-note", Static).update(banner)
+
+    def _poll_folders(self) -> None:
+        if self.service.status()["folder_mode"]:
+            self._load_folders()
+            self._refresh_facts_only()
+
+    def _refresh_facts_only(self) -> None:
+        status = self.service.status()
+        facts = [f"{status['chunks']} chunks"]
+        if status["folder_banner"]:
+            facts.append("indexing")
+        self.query_one("#vault-facts", Static).update(" · ".join(facts))
+
+    def _selected_folder(self) -> tuple[str, str] | None:
+        options = self.query_one("#folder-list", OptionList)
+        index = options.highlighted
+        if index is None:
+            return None
+        option_id = str(options.get_option_at_index(index).id or "")
+        kind, _, root = option_id.partition(":")
+        return (kind, root) if root else None
+
+    @on(Button.Pressed, "#folder-browse")
+    @work(group="modal")
+    async def _browse_folder(self) -> None:
+        start = self.query_one("#folder-path", Input).value.strip()
+        chosen = await self.push_screen_wait(DirectoryPickerScreen(self.service, start))
+        if chosen:
+            self.query_one("#folder-path", Input).value = chosen
+
+    @on(Input.Submitted, "#folder-path")
+    @on(Button.Pressed, "#folder-add")
+    def _add_folder_pressed(self) -> None:
+        path = self.query_one("#folder-path", Input).value.strip()
+        if not path:
+            self.notify("Choose a folder to search.", severity="warning")
+            return
+        self.query_one("#folder-note", Static).update(f"Opening {path}…")
+        self._folder_action(lambda: self.service.add_folder(path), clear_input=True)
+
+    @on(OptionList.OptionSelected, "#folder-list")
+    def _folder_selected(self) -> None:
+        selected = self._selected_folder()
+        if selected and selected[0] == "recent":
+            self._folder_action(lambda: self.service.add_folder(selected[1]))
+
+    @on(Button.Pressed, "#folder-remove")
+    @on(Button.Pressed, "#folder-delete")
+    @work(group="modal")
+    async def _remove_folder_pressed(self, event: Button.Pressed) -> None:
+        selected = self._selected_folder()
+        if not selected or selected[0] != "open":
+            self.notify("Select an open folder first.", severity="warning")
+            return
+        root = selected[1]
+        delete = event.button.id == "folder-delete"
+        if delete:
+            confirmed = await self.push_screen_wait(
+                ConfirmScreen(
+                    "Delete this folder's index?",
+                    f"Stops searching {root} and deletes its search index. Your "
+                    "documents are not touched; searching the folder again "
+                    "re-indexes it.",
+                    confirm_label="Delete index",
+                )
+            )
+            if not confirmed:
+                return
+        self._folder_action(
+            lambda: self.service.remove_folder(root, delete_index=delete)
+        )
+
+    @on(Button.Pressed, "#folder-reembed")
+    def _reembed_folder_pressed(self) -> None:
+        selected = self._selected_folder()
+        if not selected or selected[0] != "open":
+            self.notify("Select an open folder first.", severity="warning")
+            return
+        root = selected[1]
+        self._folder_action(lambda: self.service.reembed_folder(root))
+
+    @work(thread=True, exclusive=True, group="folders")
+    def _folder_action(
+        self, action: Callable[[], dict[str, Any]], *, clear_input: bool = False
+    ) -> None:
+        outcome = action()
+        self.call_from_thread(self._after_folder_action, outcome, clear_input)
+
+    def _after_folder_action(self, outcome: dict[str, Any], clear_input: bool) -> None:
+        self._notify_outcome(outcome)
+        if outcome["ok"] and clear_input:
+            self.query_one("#folder-path", Input).value = ""
+        self.refresh_status()
+        self._load_recent_vaults()
+        self.query_one("#folder-note", Static).update(
+            outcome.get("message") or outcome.get("error") or ""
+        )
 
     def action_refresh(self) -> None:
         self._refresh_worker(announce=True)
@@ -1849,15 +2014,19 @@ class VaultApp(App[None]):
         return ""
 
     async def action_quit(self) -> None:
-        """Ctrl+Q; asks first when quitting would abandon an indexing run."""
+        """Ctrl+Q; asks first when quitting would abandon an indexing run.
+
+        Folder indexing needs no question: it resumes where it left off the
+        next time a vault process opens the folder.
+        """
         work_in_progress = self._index_run_in_progress()
         if not work_in_progress:
-            self.exit()
+            self._exit_releasing_folders()
             return
 
         def decided(confirmed: bool | None) -> None:
             if confirmed:
-                self.exit()
+                self._exit_releasing_folders()
 
         self.push_screen(
             ConfirmScreen(
@@ -1870,6 +2039,12 @@ class VaultApp(App[None]):
             ),
             decided,
         )
+
+    def _exit_releasing_folders(self) -> None:
+        if self.service.status()["folder_mode"]:
+            self.notify("Stopping the folder indexer; it resumes next time.")
+        self.service.shutdown()
+        self.exit()
 
     # -- settings ---------------------------------------------------------------------------
 
@@ -2065,12 +2240,31 @@ def main(argv: list[str] | None = None) -> None:
         "vault_path",
         nargs="?",
         default="",
-        help="Vault folder to open (created if missing). Omit to choose one in the app.",
+        help=(
+            "A folder of documents to search (indexed in the background), or "
+            "a vault folder to open (created if missing). Omit to choose in "
+            "the app."
+        ),
+    )
+    parser.add_argument(
+        "--dir",
+        action="append",
+        default=[],
+        metavar="FOLDER",
+        help="A folder of documents to search; repeat to search several.",
+    )
+    parser.add_argument(
+        "--as-vault",
+        action="store_true",
+        help="Open vault_path as a vault even when it is a folder of documents.",
     )
     parser.add_argument(
         "--resume",
         action="store_true",
-        help="Open the most recently used vault (falls back to vault_path).",
+        help=(
+            "Reopen the last session's folders, or the most recently used "
+            "vault (falls back to vault_path)."
+        ),
     )
     parser.add_argument(
         "--show-source-paths",
@@ -2081,7 +2275,13 @@ def main(argv: list[str] | None = None) -> None:
     configure_logger("root:ERROR")
     prepare_process_for_textual()
     service = VaultService(show_source_paths=args.show_source_paths)
-    app = VaultApp(service, vault_path=args.vault_path, resume=args.resume)
+    app = VaultApp(
+        service,
+        vault_path=args.vault_path,
+        resume=args.resume,
+        folders=args.dir,
+        as_vault=args.as_vault,
+    )
     run_app(app)
 
 

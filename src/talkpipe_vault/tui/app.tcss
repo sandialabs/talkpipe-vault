@@ -165,7 +165,16 @@ Checkbox.-on > .toggle--button {
 
 #recent-vaults {
     height: 1fr;
+    /* Room for a few vaults even below the Folders area (the tab scrolls). */
+    min-height: 6;
+    border: round $primary-darken-2;
+    background: $panel;
+}
+
+#folder-list {
+    height: auto;
     min-height: 3;
+    max-height: 8;
     border: round $primary-darken-2;
     background: $panel;
 }

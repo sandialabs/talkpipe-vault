@@ -519,9 +519,10 @@ async def test_help_and_compact_mode(sample_vault):
         assert isinstance(app.screen, MessageScreen)
         await pilot.press("escape")
         await _settle(pilot)
-        # Every tab's primary control is on screen at 80x20.
+        # Every tab's primary control is on screen at 80x20 (on the Vault
+        # tab, adding a folder; named vaults are further down).
         for key, widget_id in (
-            ("f2", "#index"),
+            ("f2", "#folder-add"),
             ("f3", "#search-go"),
             ("f4", "#kw-go"),
             ("f5", "#ask-go"),
@@ -594,7 +595,7 @@ def test_main_runs_app(monkeypatch, tmp_path):
     captured = {}
 
     class FakeApp:
-        def __init__(self, service, *, vault_path, resume):
+        def __init__(self, service, *, vault_path, resume, **_folder_options):
             captured.update(vault_path=vault_path, resume=resume, service=service)
 
         def run(self, **_kwargs):
@@ -1110,6 +1111,11 @@ async def test_recent_vault_click_selects_and_double_click_opens(tmp_path):
         await _settle(pilot)
         recents = app.query_one("#recent-vaults", OptionList)
         assert recents.get_option_at_index(1).id == str(victim)
+        # Below the Folders area: bring the list into view to click it.
+        app.query_one("#vault-scroll").scroll_to_widget(
+            recents, animate=False, top=True
+        )
+        await _settle(pilot)
         # A single click on the second row only moves the highlight: the
         # vault stays as it was and the Vault tab stays put.
         await pilot.click(recents, offset=(2, 2))
@@ -1240,7 +1246,7 @@ def test_main_prepares_the_process_before_running(monkeypatch, tmp_path):
     )
 
     class FakeApp:
-        def __init__(self, service, *, vault_path, resume):
+        def __init__(self, service, *, vault_path, resume, **_folder_options):
             calls.append("constructed")
 
         def run(self, **_kwargs):
@@ -1264,11 +1270,30 @@ async def test_startup_keeps_an_opening_line_until_the_vault_is_ready(tmp_path):
         assert "This vault is empty" in _text(app.query_one("#index-progress", Static))
 
 
-async def test_command_line_documents_folder_is_confirmed_first(tmp_path):
+async def test_command_line_documents_folder_is_searched_in_place(tmp_path):
     docs = tmp_path / "notes"
     docs.mkdir()
     (docs / "a.md").write_text("# a\n")
     app = VaultApp(VaultService(), vault_path=str(docs))
+    async with app.run_test(size=SIZE) as pilot:
+        await _wait_workers(app, pilot)
+        assert app.service.state.folders == [str(docs.resolve())]
+        assert app.query_one("#tabs").active == "tab-search"
+        app.query_one("#tabs").active = "tab-vault"
+        await _settle(pilot)
+        app._load_folders()
+        options = app.query_one("#folder-list")
+        assert options.option_count == 1
+        assert "notes" in str(options.get_option_at_index(0).prompt)
+        assert not (docs / "docs.lance").exists()
+    app.service.shutdown()
+
+
+async def test_command_line_documents_folder_as_vault_is_confirmed_first(tmp_path):
+    docs = tmp_path / "notes"
+    docs.mkdir()
+    (docs / "a.md").write_text("# a\n")
+    app = VaultApp(VaultService(), vault_path=str(docs), as_vault=True)
     async with app.run_test(size=SIZE) as pilot:
         await _wait_workers(app, pilot)
         assert isinstance(app.screen, ConfirmScreen)
