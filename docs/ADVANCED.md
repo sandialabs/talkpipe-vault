@@ -320,6 +320,8 @@ shingle, embed, store — and `vault-server` searches it.
 - `watchFolders` — keeps folders indexed for [folder mode](#folder-mode)
   and emits each folder's status as it changes; the same background indexer
   the interfaces use
+- `folderChanges` — emits a folder's document files, then each one again as
+  it is added, changed or deleted, remembering per name what it has sent
 
 **Segments:**
 
@@ -330,12 +332,6 @@ shingle, embed, store — and `vault-server` searches it.
 - `vaultSearch` — semantic search on a vault's vector database
 - `vaultTextSearch` — full-text keyword search using the Whoosh index
 - `vaultChat` — RAG-based Q&A using vault contents
-
-`vaultSearch`, `vaultTextSearch`, `vaultChat`, `vaultAgentSearch` and
-`vaultAgentChat` take a list of paths as `vault_path` to search several
-vaults or folders together, and a folder with a folder-mode index can be
-named directly instead of its index. A single named vault keeps its own
-pipeline unchanged.
 - `vaultAgentSearch` / `vaultAgentChat` — agent-driven retrieval: an agent
   searches the vault with tools and keeps the chunks a question needs (and,
   for `vaultAgentChat`, answers from them); see the
@@ -343,6 +339,13 @@ pipeline unchanged.
 - `filterSearchResults` — runs a ChatterLang script over a list of search
   results held on a field, keeping, dropping, or rewriting each one; backs
   the per-vault retrieval filter
+
+`vaultSearch`, `vaultTextSearch`, `vaultChat`, `vaultAgentSearch` and
+`vaultAgentChat` take a list of paths as `vault_path` to search several
+vaults or folders together, and a folder with a folder-mode index can be
+named directly instead of its index. A single named vault keeps its own
+pipeline unchanged. [Folder pipelines](FOLDER_PIPELINES.md) has Python and
+ChatterLang examples of every folder component.
 
 ### Writing a retrieval filter
 
@@ -504,7 +507,8 @@ print(ask("What changed in the deployment plan?"))
 `INPUT FROM watchFolders[paths="/path/to/notes,/path/to/papers"] | print`
 keeps both indexed instead, printing each folder's status as it changes, and
 can run next to a `vault-server` on the same folders: whichever starts first
-indexes, the other searches and takes over if it exits.
+indexes, the other searches and takes over if it exits. More examples, in
+Python and ChatterLang, are in [Folder pipelines](FOLDER_PIPELINES.md).
 
 To watch a directory instead of a fixed glob, use the `watchIntoVectorDB`
 source (parameters `source_path` and `polling`) in place of
@@ -587,6 +591,14 @@ answering meanwhile), and when the chunk settings differ, **Rebuild**.
 Folder and named-vault modes are exclusive in the interfaces; a named vault
 whose documents all lie in one folder offers to search that folder instead.
 Retrieval filters apply when one folder is open, not several.
+
+A pipeline following a folder with `folderChanges` keeps its record of what
+it has sent in another hidden subfolder, `<folder>/.tpstream/<name>.db`
+(with a `.gitignore`, but no `CACHEDIR.TAG`: a restore should bring it back
+with the documents), or under `folder-streams/` in app data where an index
+would go there. It is separate from `.tpvault`, so rebuilding or deleting a
+folder's index never makes a stream send the whole folder again; delete a
+`<name>.db` to have that stream start over.
 
 ## Experimental directory monitoring
 

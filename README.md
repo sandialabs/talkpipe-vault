@@ -259,6 +259,10 @@ index unless you ask for it to be deleted; your documents are never touched.
 Named vaults — an index kept in a separate folder of its own — still work
 as before, under **Named vaults (advanced)**.
 
+To index, watch or search folders from your own Python code or ChatterLang
+scripts, or to follow a folder's changes as a stream of documents, see
+[Folder pipelines](docs/FOLDER_PIPELINES.md).
+
 ## The web interface
 
 - **Vaults & Documents** — the **Folders** list (add folders to search, with

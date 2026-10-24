@@ -48,6 +48,7 @@ src/talkpipe_vault/
     ├── building_and_watching.py # Experimental watch/batch vector DB pipelines
     ├── searching_and_prompting.py # VaultSearch / VaultChat / VaultTextSearch segments
     ├── folder_index.py         # Folder mode: per-folder index, background indexer, indexFolder/watchFolders
+    ├── folder_changes.py       # folderChanges: a folder's document files as a stream of changes
     ├── agent_tools.py          # The vault's agent tool pack (session + bound-tool factories)
     └── agent_search.py         # vaultAgentSearch / vaultAgentChat, built on llmAgent
 ```
@@ -177,7 +178,7 @@ non-authoritative `indexed_via_url` breadcrumb).
 ## TalkPipe Sources/Segments (registered entry points)
 
 Sources: `fileWatcher`, `watchIntoVectorDB`, `listIntoVectorDB` (watcher ones experimental),
-`watchFolders`.
+`watchFolders`, `folderChanges`.
 Segments: `buildVectorDBFromPaths`, `vaultSearch`, `vaultChat`, `vaultTextSearch`,
 `searchLance`, `extractSearchKeywords`, `mergeSearchResults`, `filterSearchResults`,
 `vaultAgentSearch`, `vaultAgentChat`, `indexFolder`.
@@ -223,6 +224,14 @@ keep it that way so `indexFolder`/`watchFolders` stay usable in other applicatio
   (`is_documents_folder`), `--dir` repeats, `--as-vault` restores the old behavior,
   `--resume` prefers the last session's folders (`resumable_folders`). Settings:
   `open_folders`, `recent_folders`, `last_session`, `index_location`.
+- `pipelines/folder_changes.py` (`folderChanges`) reuses the indexer's walk, change filter,
+  watcher and location rules but shares no state with it: it reads no contents (pipelines
+  use talkpipe's `readFile`, never vault extraction code) and keeps a per-name record in
+  `<folder>/.tpstream/<name>.db` (`stream_state_path`; app data where the folder can't hold
+  it), apart from `.tpvault` so an index rebuild never re-sends a folder. A file is recorded
+  only when the consumer asks for the next item (at-least-once); keep it that way.
+  `docs/FOLDER_PIPELINES.md` shows every folder component in Python and ChatterLang — every
+  block there was run; keep it so.
 - Tests use the offline `fake_embedder` fixture (`tests/conftest.py`, source `fakehash`).
 
 **Agent retrieval** is split in two, deliberately: `pipelines/agent_tools.py` owns *what
