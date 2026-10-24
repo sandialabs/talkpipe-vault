@@ -18,7 +18,7 @@ built on the TalkPipe framework and demonstrates real-world usage of its composa
 - **Package**: `talkpipe-vault`
 - **Module**: `talkpipe_vault`
 - **Python**: 3.11.4+ required
-- **TalkPipe**: >=1.0.0b5 (`talkpipe[all]`; ships `py.typed`, so mypy checks against its real signatures)
+- **TalkPipe**: >=1.2.0 (`talkpipe[all]`; ships `py.typed`, so mypy checks against its real signatures)
 - **talkpipe-agents**: >=0.1.1 (from PyPI) — the `llmAgent`/Strands layer behind agent search.
   No `py.typed`, so it is in the mypy `ignore_missing_imports` list.
 - **Status**: Alpha (active development)
@@ -359,9 +359,10 @@ mypy                   # static types over src/ (config in pyproject.toml)
 # `pre-commit install` (opt-in, per clone) runs the same three on every
 # commit; `pre-commit run --all-files` reproduces the CI gate locally.
 
-# Security
+# Security. safety is in no extra: it caps filelock below talkpipe's floor,
+# so it runs in its own environment, from an empty directory (CI does the same).
 bandit -r src/
-safety check
+pip freeze --exclude-editable | (cd "$(mktemp -d)" && uvx safety check --stdin)
 ```
 
 Test notes:

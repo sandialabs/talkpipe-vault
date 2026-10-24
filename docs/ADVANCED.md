@@ -642,9 +642,11 @@ ruff format --check .  # formatting; apply with: ruff format .
 mypy                   # static types over src/ (config in pyproject.toml)
 pre-commit install     # optional: run the same checks on every commit
 
-# Security scanning
+# Security scanning. safety runs in an environment of its own: it caps
+# filelock below talkpipe's security floor, so it cannot be installed here.
+# Run it from an empty directory (it rejects this repo's v3.0 policy file).
 bandit -r src/
-safety check
+pip freeze --exclude-editable | (cd "$(mktemp -d)" && uvx safety check --stdin)
 ```
 
 ### Project structure

@@ -34,7 +34,9 @@ classifiers = [
 # not change what actually installs -- raise a floor when a new advisory
 # lands, do not lower one.
 dependencies = [
-    "talkpipe[all]>=1.1.0",  # security floor: brings pymongo>=4.18.2 and pypdf>=6.19.0
+    # 1.2.0: build_rag_database(chunks=), which folder mode embeds through.
+    # Also above the security floor of 1.1.0 (pymongo>=4.18.2, pypdf>=6.19.0).
+    "talkpipe[all]>=1.2.0",
     # Agent-driven result selection on the Search page (llmAgent + tool
     # registry). 0.1.1 retries a tool call the model server could not parse
     # instead of ending the agent run.
@@ -46,7 +48,7 @@ dependencies = [
     "watchdog[watchmedo]",
     # Folder mode's writer election (OS file locks); already installed
     # through huggingface-hub, declared because it is used directly.
-    "filelock>=3.20.3",  # security floor
+    "filelock>=4.2.1",  # security floor
     "textual>=8.0.0",  # terminal interface (vault-tui)
 ]
 dynamic = ["version"]
@@ -67,17 +69,9 @@ dev = [
     "pre-commit>=4.0",
     "virtualenv>=21.7.13",  # security floor (via pre-commit)
     "bandit>=1.7.7",
-    # safety 3.8.1 is the first release whose metadata declares the typer it
-    # can run on (<0.26). Older releases leave typer unbounded, so a fresh pip
-    # resolve that lands on a newer typer (pulled in by fastapi-cloud-cli)
-    # backtracks to safety 3.7.0 and pairs it with a typer it crashes on
-    # ("There is no active click context"). safety 3.8.x in turn crashes in
-    # its HTTP client under authlib 1.8.0 ("'Timeout' object cannot be
-    # interpreted as an integer"), which it does not cap itself; drop the
-    # authlib cap once a safety release runs on authlib 1.8. Same pins in
-    # `security` below.
-    "safety>=3.8.1",
-    "authlib<1.9",
+    # safety is not listed here or in `security`: every release caps filelock
+    # below 4.0, under talkpipe's security floor of 4.2.1, so it cannot share
+    # an environment with this package. Run it in one of its own (CI does).
 ]
 test = [
     "pytest>=9.0.3",
@@ -87,9 +81,7 @@ test = [
     "httpx>=0.24.0",
 ]
 security = [
-    "bandit>=1.7.7",
-    "safety>=3.8.1",  # see the note in `dev`
-    "authlib<1.9",  # see the note in `dev`
+    "bandit>=1.7.7",  # safety: see the note in `dev`
 ]
 
 [project.urls]
