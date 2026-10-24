@@ -119,6 +119,15 @@ def get_embedding_source() -> str:
 VECTOR_VAULT_SUBDIR = "vector_vault"
 FULLTEXT_VAULT_SUBDIR = "fulltext_vault"
 DEFAULT_VECTOR_TABLE_NAME = "docs"
+# A folder opened directly (folder mode) keeps its index, an ordinary vault,
+# in this hidden subdirectory of the folder (see pipelines/folder_index.py).
+FOLDER_INDEX_DIRNAME = ".tpvault"
+# Default chunking for indexing (talkpipe's ProcessDocumentsSegment defaults).
+DEFAULT_CHUNK_SIZE = 300
+DEFAULT_SHINGLE_SIZE = 3
+DEFAULT_SHINGLE_OVERLAP = 1
+# Fields of a vault's Whoosh full-text index (besides its doc_id).
+WHOOSH_INDEX_FIELDS = ["content", "path", "filename"]
 
 
 def resolve_embedding_config(

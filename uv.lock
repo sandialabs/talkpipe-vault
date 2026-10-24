@@ -4666,6 +4666,7 @@ name = "talkpipe-vault"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi", extra = ["standard"] },
+    { name = "filelock" },
     { name = "jinja2" },
     { name = "talkpipe", extra = ["all"] },
     { name = "talkpipe-agents" },
@@ -4710,6 +4711,7 @@ requires-dist = [
     { name = "bandit", marker = "extra == 'dev'", specifier = ">=1.7.7" },
     { name = "bandit", marker = "extra == 'security'", specifier = ">=1.7.7" },
     { name = "fastapi", extras = ["standard"], specifier = ">=0.109.1" },
+    { name = "filelock", specifier = ">=3.20.3" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.24.0" },
     { name = "httpx", marker = "extra == 'test'", specifier = ">=0.24.0" },
     { name = "jinja2", specifier = ">=3.1.6" },

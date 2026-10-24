@@ -44,6 +44,9 @@ dependencies = [
     "jinja2>=3.1.6",  # security floor
     "urllib3>=2.8.0",  # security floor (via requests, lancedb, sentry-sdk)
     "watchdog[watchmedo]",
+    # Folder mode's writer election (OS file locks); already installed
+    # through huggingface-hub, declared because it is used directly.
+    "filelock>=3.20.3",  # security floor
     "textual>=8.0.0",  # terminal interface (vault-tui)
 ]
 dynamic = ["version"]
@@ -224,6 +227,7 @@ module = [
     "tqdm.*",
     "uvicorn.*",
     "watchdog.*",
+    "whoosh.*",
 ]
 ignore_missing_imports = true
 
@@ -241,11 +245,13 @@ talkpipe_vault = "talkpipe_vault.initialize_plugin"
 fileWatcher = "talkpipe_vault.watchdog:file_watcher"
 watchIntoVectorDB = "talkpipe_vault.pipelines.building_and_watching:watch_into_vector_db"
 listIntoVectorDB = "talkpipe_vault.pipelines.building_and_watching:list_into_vector_db"
+watchFolders = "talkpipe_vault.pipelines.folder_index:watch_folders"
 
 [project.entry-points."talkpipe.segments"]
 buildVectorDBFromPaths = "talkpipe_vault.pipelines.building_and_watching:build_vector_db_from_paths"
 extractSearchKeywords = "talkpipe_vault.pipelines.searching_and_prompting:ExtractSearchKeywords"
 filterSearchResults = "talkpipe_vault.pipelines.searching_and_prompting:SearchResultFilter"
+indexFolder = "talkpipe_vault.pipelines.folder_index:index_folder"
 mergeSearchResults = "talkpipe_vault.pipelines.searching_and_prompting:MergeSearchResults"
 searchLance = "talkpipe_vault.pipelines.searching_and_prompting:searchLance"
 vaultChat = "talkpipe_vault.pipelines.searching_and_prompting:VaultChat"

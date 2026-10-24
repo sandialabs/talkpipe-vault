@@ -63,9 +63,13 @@ from talkpipe_vault.pipelines import (
     vault_metadata,
 )
 from talkpipe_vault.pipelines.config import (
+    DEFAULT_CHUNK_SIZE,
+    DEFAULT_SHINGLE_OVERLAP,
+    DEFAULT_SHINGLE_SIZE,
     DEFAULT_VECTOR_TABLE_NAME,
     FULLTEXT_VAULT_SUBDIR,
     VECTOR_VAULT_SUBDIR,
+    WHOOSH_INDEX_FIELDS,
     ensure_supported_vault_layout,
     get_chat_model,
     get_chat_source,
@@ -92,9 +96,6 @@ logger = logging.getLogger(__name__)
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 STATIC_DIR = Path(__file__).parent / "static"
 SNIPPET_MAX_LENGTH = 300
-DEFAULT_CHUNK_SIZE = 300
-DEFAULT_SHINGLE_SIZE = 3
-DEFAULT_SHINGLE_OVERLAP = 1
 # Chunks Ask (and keyword search) retrieve when the Settings page sets none.
 # With the default 300x3 shingles, 5 chunks often held the right file but not
 # the passage the answer needed; 8 answered measurably better on a Q/A benchmark.
@@ -371,9 +372,6 @@ def _iter_lancedb_docs_for_whoosh(vault_path: str) -> list[dict[str, str]]:
         )
 
     return documents
-
-
-WHOOSH_INDEX_FIELDS = ["content", "path", "filename"]
 
 
 def _build_whoosh_index(
