@@ -164,11 +164,13 @@ class IndexLocation:
     reason: str = ""
 
 
-def external_index_path(root: Path, base: Path) -> Path:
+def external_index_path(
+    root: Path, base: Path, dirname: str = EXTERNAL_INDEX_DIRNAME
+) -> Path:
     """The app-data location of a folder's index, unique per folder path."""
     digest = hashlib.sha256(str(root).encode("utf-8")).hexdigest()[:12]
     name = "".join(ch if ch.isalnum() or ch in "._-" else "-" for ch in root.name)
-    return base / EXTERNAL_INDEX_DIRNAME / f"{name.strip('-._') or 'folder'}-{digest}"
+    return base / dirname / f"{name.strip('-._') or 'folder'}-{digest}"
 
 
 def _mount_type(path: Path) -> str:
@@ -214,7 +216,12 @@ def external_reason(root: Path) -> str:
 
 
 def resolve_index_location(
-    root: str | Path, external_base: Path, *, force_external: str = ""
+    root: str | Path,
+    external_base: Path,
+    *,
+    force_external: str = "",
+    dirname: str = FOLDER_INDEX_DIRNAME,
+    external_dirname: str = EXTERNAL_INDEX_DIRNAME,
 ) -> IndexLocation:
     """Decide where the index of the folder *root* lives.
 
@@ -222,10 +229,12 @@ def resolve_index_location(
     app data (``external_base``); app data when *force_external* gives a
     reason (a fenced deployment, or the user's choice) or the folder is on a
     network share or synced; otherwise the folder itself, if a ``.tpvault``
-    can be created and written there.
+    can be created and written there. *dirname* and *external_dirname* name
+    the two places, so other per-folder state (folderDocuments') follows
+    the same rules.
     """
     root = Path(os.path.realpath(root))
-    in_tree = root / FOLDER_INDEX_DIRNAME
+    in_tree = root / dirname
     if in_tree.is_dir():
         writable = os.access(in_tree, os.W_OK)
         return IndexLocation(
@@ -234,7 +243,7 @@ def resolve_index_location(
             read_only=not writable,
             reason="" if writable else "the folder's index is read-only",
         )
-    external = external_index_path(root, external_base)
+    external = external_index_path(root, external_base, external_dirname)
     if external.is_dir():
         return IndexLocation(external, False, reason=_recorded_reason(external))
     reason = force_external or external_reason(root)
@@ -260,7 +269,9 @@ def _recorded_reason(external: Path) -> str:
         return "kept in app data"
 
 
-def _prepare_index_dir(location: IndexLocation, root: Path) -> None:
+def _prepare_index_dir(
+    location: IndexLocation, root: Path, cache_tag: bool = True
+) -> None:
     """Create the index directory with its hygiene files.
 
     ``.gitignore`` makes git skip the directory without editing the user's
@@ -273,7 +284,7 @@ def _prepare_index_dir(location: IndexLocation, root: Path) -> None:
     if not gitignore.exists():
         gitignore.write_text("*\n", encoding="utf-8")
     tag = location.path / "CACHEDIR.TAG"
-    if not tag.exists():
+    if cache_tag and not tag.exists():
         tag.write_text(CACHEDIR_TAG, encoding="utf-8")
     if not location.in_folder:
         record = location.path / ROOT_RECORD_FILENAME
@@ -479,24 +490,105 @@ def _supported_extensions() -> set[str]:
     return {ext.lower() for ext in global_extractor_registry.registered_extensions}
 
 
-class _ChangeHandler(FileSystemEventHandler):
-    """Collects the folder-relative paths watchdog reports as changed.
+def _changed_relpath(root: Path, path: str) -> str:
+    """*path* relative to *root* when a change to it matters, else "".
 
     watchdog's pattern matching looks only at a path's last component, so a
     ``.*`` ignore does not stop events from inside ``.tpvault`` or ``.git``;
     any path with a hidden component is dropped here instead, or the
     writer's own index writes would keep re-triggering it.
     """
+    try:
+        rel = Path(path).relative_to(root).as_posix()
+    except ValueError:
+        return ""
+    if rel in ("", ".") or _is_hidden(rel):
+        return ""
+    if not match_any_paths(
+        [path], excluded_patterns=COMMON_IGNORE_PATTERNS, case_sensitive=False
+    ):
+        return ""
+    return rel
 
-    def __init__(self, folder: FolderIndex):
-        self.folder = folder
+
+def _document_files(
+    root: Path, subtree: str, extensions: set[str]
+) -> dict[str, os.stat_result]:
+    """Supported, visible document files at or below *subtree* of *root*."""
+    found: dict[str, os.stat_result] = {}
+    start = root / subtree if subtree else root
+
+    def consider(path: Path) -> None:
+        rel = path.relative_to(root).as_posix()
+        if _is_hidden(rel) or path.suffix[1:].lower() not in extensions:
+            return
+        if not match_any_paths(
+            [str(path)],
+            excluded_patterns=COMMON_IGNORE_PATTERNS,
+            case_sensitive=False,
+        ):
+            return
+        try:
+            if path.is_symlink():
+                target = os.path.realpath(path)
+                if not target.startswith(str(root) + os.sep):
+                    return
+            stat = path.stat()
+        except OSError:
+            return
+        found[rel] = stat
+
+    if start.is_file():
+        consider(start)
+    elif start.is_dir() and not start.is_symlink():
+        for dirpath, dirnames, filenames in os.walk(start):
+            dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+            for name in filenames:
+                if not name.startswith("."):
+                    consider(Path(dirpath) / name)
+    return found
+
+
+class _ChangeHandler(FileSystemEventHandler):
+    """Passes every path watchdog reports as changed to *note_change*."""
+
+    def __init__(self, note_change: Callable[[str], None]):
+        self.note_change = note_change
 
     def on_any_event(self, event: FileSystemEvent) -> None:
         if event.event_type in ("opened", "closed_no_write"):
             return
         for raw in (event.src_path, getattr(event, "dest_path", "")):
             if raw:
-                self.folder.note_change(os.fsdecode(raw))
+                self.note_change(os.fsdecode(raw))
+
+
+def _watch(root: Path, note_change: Callable[[str], None]) -> tuple[Any, str]:
+    """Start watching *root*; return the observer (or None) and the mode.
+
+    The mode is "live" with change events, or "rescan" where they are not
+    reliable (a network share, a folder this process cannot write) or
+    watching failed, so the caller relies on periodic rescans.
+    """
+    if _mount_type(root) in NETWORK_FS_TYPES or not os.access(root, os.W_OK):
+        return None, "rescan"
+    try:
+        observer = Observer()
+        observer.schedule(_ChangeHandler(note_change), str(root), recursive=True)
+        observer.daemon = True
+        observer.start()
+    except Exception as exc:
+        # inotify watch limits, unsupported filesystems, and the like.
+        logger.warning("Watching %s failed (%s); rescanning instead", root, exc)
+        return None, "rescan"
+    return observer, "live"
+
+
+def _stop_observer(observer: Any) -> None:
+    if observer is not None:
+        with contextlib.suppress(Exception):
+            observer.stop()
+            observer.join(timeout=5)
 
 
 class FolderIndex:
@@ -637,45 +729,16 @@ class FolderIndex:
     # -- watching ----------------------------------------------------------
 
     def _start_watching(self) -> None:
-        if _mount_type(self.root) in NETWORK_FS_TYPES or not os.access(
-            self.root, os.W_OK
-        ):
-            # No reliable change events: rely on periodic rescans.
-            self.watch_mode = "rescan"
-            return
-        try:
-            observer = Observer()
-            observer.schedule(_ChangeHandler(self), str(self.root), recursive=True)
-            observer.daemon = True
-            observer.start()
-        except Exception as exc:
-            # inotify watch limits, unsupported filesystems, and the like.
-            logger.warning(
-                "Watching %s failed (%s); rescanning instead", self.root, exc
-            )
-            self.watch_mode = "rescan"
-            return
-        self._observer = observer
-        self.watch_mode = "live"
+        self._observer, self.watch_mode = _watch(self.root, self.note_change)
 
     def _stop_watching(self) -> None:
         observer, self._observer = self._observer, None
-        if observer is not None:
-            with contextlib.suppress(Exception):
-                observer.stop()
-                observer.join(timeout=5)
+        _stop_observer(observer)
 
     def note_change(self, path: str) -> None:
         """Record that *path* changed; it is reconciled after a short delay."""
-        try:
-            rel = Path(path).relative_to(self.root).as_posix()
-        except ValueError:
-            return
-        if rel in ("", ".") or _is_hidden(rel):
-            return
-        if not match_any_paths(
-            [path], excluded_patterns=COMMON_IGNORE_PATTERNS, case_sensitive=False
-        ):
+        rel = _changed_relpath(self.root, path)
+        if not rel:
             return
         with self._dirty_lock:
             self._dirty.add(rel)
@@ -707,43 +770,6 @@ class FolderIndex:
         else:
             self.scan(sorted(dirty))
 
-    def _disk_files(
-        self, subtree: str, extensions: set[str]
-    ) -> dict[str, os.stat_result]:
-        """Supported, visible document files at or below *subtree*."""
-        found: dict[str, os.stat_result] = {}
-        start = self.root / subtree if subtree else self.root
-
-        def consider(path: Path) -> None:
-            rel = path.relative_to(self.root).as_posix()
-            if _is_hidden(rel) or path.suffix[1:].lower() not in extensions:
-                return
-            if not match_any_paths(
-                [str(path)],
-                excluded_patterns=COMMON_IGNORE_PATTERNS,
-                case_sensitive=False,
-            ):
-                return
-            try:
-                if path.is_symlink():
-                    target = os.path.realpath(path)
-                    if not target.startswith(str(self.root) + os.sep):
-                        return
-                stat = path.stat()
-            except OSError:
-                return
-            found[rel] = stat
-
-        if start.is_file():
-            consider(start)
-        elif start.is_dir() and not start.is_symlink():
-            for dirpath, dirnames, filenames in os.walk(start):
-                dirnames[:] = [d for d in dirnames if not d.startswith(".")]
-                for name in filenames:
-                    if not name.startswith("."):
-                        consider(Path(dirpath) / name)
-        return found
-
     def scan(self, subtrees: Iterable[str] | None = None) -> None:
         """Reconcile the manifest with the files on disk.
 
@@ -771,7 +797,7 @@ class FolderIndex:
     def _scan_subtree(self, subtree: str, extensions: set[str]) -> None:
         assert self.manifest is not None  # nosec B101 - checked by scan()
         known = self.manifest.rows_under(subtree)
-        on_disk = self._disk_files(subtree, extensions)
+        on_disk = _document_files(self.root, subtree, extensions)
         pending: list[tuple[str, str, int, int, str | None]] = []
         restat: list[tuple[str, int, int]] = []
         stale_keys: list[str] = []
