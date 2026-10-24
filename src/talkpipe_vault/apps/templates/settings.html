@@ -166,6 +166,21 @@
             </p>
         </fieldset>
         <fieldset>
+            <legend>Folders &mdash; where their indexes are kept</legend>
+            <label for="index-location">New folder indexes</label>
+            <select name="index_location" id="index-location">
+                <option value="auto" {% if index_location == 'auto' %}selected{% endif %}>In the folder (a hidden .tpvault subfolder) when possible</option>
+                <option value="home" {% if index_location == 'home' %}selected{% endif %}>In this app's data directory</option>
+            </select>
+            <p class="field-hint">
+                Kept in the folder, an index travels with it and is shared by
+                every vault process that opens it. Folders that are read-only,
+                on a network share, or synced by a cloud client always keep
+                theirs in the app's data directory. Folders already indexed keep
+                their index where it is.
+            </p>
+        </fieldset>
+        <fieldset>
             <legend>Agent retrieval &mdash; Search and Ask page option</legend>
             <p class="field-hint">
                 With "Let an agent select the results" checked on the Search page, or

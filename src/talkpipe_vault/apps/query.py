@@ -11,6 +11,8 @@ Provides the following via web interface:
 """
 
 import argparse
+import atexit
+import contextlib
 import errno
 import glob as globlib
 import json
@@ -28,7 +30,7 @@ import urllib.request
 import uuid
 import webbrowser
 from collections.abc import Callable, Iterator
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -59,6 +61,7 @@ from talkpipe_vault.apps import access_control, credentials, user_settings
 from talkpipe_vault.pipelines import (
     agent_search,
     diagnostics,
+    folder_index,
     retrieval_filter,
     vault_metadata,
 )
@@ -67,6 +70,7 @@ from talkpipe_vault.pipelines.config import (
     DEFAULT_SHINGLE_OVERLAP,
     DEFAULT_SHINGLE_SIZE,
     DEFAULT_VECTOR_TABLE_NAME,
+    FOLDER_INDEX_DIRNAME,
     FULLTEXT_VAULT_SUBDIR,
     VECTOR_VAULT_SUBDIR,
     WHOOSH_INDEX_FIELDS,
@@ -184,6 +188,10 @@ class AppState:
     rag_result_limit: int | None = None
     agent_search_iterations: int | None = None
     agent_search_result_count: int | None = None
+    # Folder mode: the folders searched directly, each with its own index.
+    # While any is open, vault_path is the first folder's index so the
+    # single-vault helpers keep working, and the pipelines search them all.
+    folders: list[str] = field(default_factory=list)
 
 
 # Application state singleton
@@ -220,6 +228,9 @@ def _template_context(
         # Fixed, unlike the configurable Ask/keyword count; pages that mention
         # how many semantic matches they show read it from here.
         "search_result_limit": DEFAULT_SEARCH_RESULT_LIMIT,
+        "folder_mode": bool(state.folders),
+        "folder_names": [Path(root).name or root for root in state.folders],
+        "folder_banner": _folder_banner(state),
     }
     context.update(extra)
     return context
@@ -412,6 +423,374 @@ def _build_whoosh_index(
                 progress(done, total)
 
 
+# --------------------------------------------------------------------------
+# Folder mode: folders searched directly, indexed in the background
+#
+# The engine and its segments live in pipelines/folder_index.py; this is the
+# glue both interfaces share (the terminal interface calls these helpers too).
+
+_folder_scheduler: folder_index.FolderScheduler | None = None
+_folder_scheduler_lock = threading.Lock()
+
+
+def _scheduler() -> folder_index.FolderScheduler:
+    """The process's folder indexer, started on first use."""
+    global _folder_scheduler
+    with _folder_scheduler_lock:
+        if _folder_scheduler is None:
+            _folder_scheduler = folder_index.FolderScheduler(
+                ingest_lock_dir=user_settings.get_vault_home()
+            )
+            _folder_scheduler.start()
+            # Finish the batch in progress and release the folders on exit;
+            # whatever is left resumes from the manifest next time.
+            atexit.register(_folder_scheduler.stop)
+        return _folder_scheduler
+
+
+def _open_folder_indexes(state: AppState) -> list[folder_index.FolderIndex]:
+    """The open folders' indexes, in the order the folders were added."""
+    if _folder_scheduler is None or not state.folders:
+        return []
+    by_root = {str(f.root): f for f in _folder_scheduler.folders()}
+    return [by_root[root] for root in state.folders if root in by_root]
+
+
+def _index_paths(state: AppState) -> list[str]:
+    """Every index the pipelines search: the open folders', else the vault."""
+    if state.folders:
+        return [f.index_path for f in _open_folder_indexes(state)]
+    return [state.vault_path] if state.vault_path else []
+
+
+def _search_target(state: AppState) -> str | list[str]:
+    """The vault_path the search segments get (a list in folder mode)."""
+    return _index_paths(state) if state.folders else state.vault_path
+
+
+def folders_status(state: AppState) -> list[dict[str, Any]]:
+    """Each open folder's indexing progress and role, for both interfaces."""
+    models = _effective_models(state)
+    current = f"{models['embedding_source']}/{models['embedding_model']}"
+    statuses = []
+    for folder in _open_folder_indexes(state):
+        status = folder.status()
+        status["embedding_differs"] = bool(status["embedding"]) and (
+            status["embedding"] != current
+        )
+        status["current_embedding"] = current
+        status["chunking_differs"] = (
+            folder.chunk_size,
+            folder.shingle_size,
+            folder.overlap,
+        ) != (
+            models["chunk_size"],
+            models["shingle_size"],
+            models["shingle_overlap"],
+        )
+        status["progress"] = _folder_progress_line(status)
+        statuses.append(status)
+    return statuses
+
+
+def _folder_progress_line(status: dict[str, Any]) -> str:
+    """One line on where a folder's indexing stands, for the folder list."""
+    total = status["files_total"]
+    phase = status["phase"]
+    if phase == "scanning" and not total:
+        return "Scanning for documents…"
+    if phase in ("waiting", "stopped") and not total:
+        return "Waiting for the indexer…"
+    if not total:
+        return "No documents found yet"
+    keyword, embedded = status["files_keyword"], status["files_embedded"]
+    if phase == "stalled":
+        return f"Indexing stalled at {embedded}/{total} files ({status['writer']})"
+    if keyword < total:
+        return f"Keyword index {keyword}/{total} files"
+    if embedded < total:
+        paused = " (paused)" if phase == "paused" else ""
+        return f"Searchable by keyword · meaning {embedded}/{total} files{paused}"
+    watching = " · watching for changes" if status.get("watch_mode") == "live" else ""
+    return f"Ready · {total} files{watching}"
+
+
+def _folder_progress_text(status: dict[str, Any]) -> str:
+    """ "notes (keywords 62%, meaning 16%)" for an unfinished folder."""
+    keyword = round(100 * status["keyword_coverage"])
+    meaning = round(100 * status["vector_coverage"])
+    if status["phase"] == "scanning" and not status["files_total"]:
+        return f"{status['name']} (scanning)"
+    return f"{status['name']} (keywords {keyword}%, meaning {meaning}%)"
+
+
+def _folder_banner(state: AppState) -> str:
+    """The still-indexing notice every page shows, or "" when all are done."""
+    unfinished = [s for s in folders_status(state) if not s["complete"]]
+    if not unfinished:
+        return ""
+    names = ", ".join(_folder_progress_text(s) for s in unfinished)
+    return (
+        f"Still indexing {names}. Results may miss documents; keyword matches "
+        "are included for files not embedded yet."
+    )
+
+
+def _partial_index_note(state: AppState) -> str:
+    """The Ask "Answered by" addition while folders are still embedding."""
+    unfinished = [s for s in folders_status(state) if not s["complete"]]
+    if not unfinished:
+        return ""
+    parts = ", ".join(
+        f"{s['name']} {round(100 * s['vector_coverage'])}% embedded" for s in unfinished
+    )
+    return f"partial index: {parts} · keyword matches included"
+
+
+def _within_path(path: str, ancestor: str) -> bool:
+    return path == ancestor or path.startswith(ancestor.rstrip(os.sep) + os.sep)
+
+
+def _activate_folders(state: AppState) -> None:
+    """Point the pipelines at the open folders (or at nothing)."""
+    paths = _index_paths(state) if state.folders else []
+    if not paths:
+        state.vault_path = ""
+        _clear_pipelines(state)
+        return
+    state.vault_path = paths[0]
+    _apply_vault_embedding_config(paths[0])
+    _refresh_pipelines(force=True)
+    _update_document_counts(state.vault_path)
+
+
+def _clear_pipelines(state: AppState) -> None:
+    state.search_pipeline = None
+    state.chat_pipeline = None
+    state.keyword_chat_pipeline = None
+    state.keyword_search_pipeline = None
+    state.keyword_search_enabled = False
+    state.result_filter_active = False
+    state.filtered_search_pipeline = None
+    state.filtered_keyword_search_pipeline = None
+    state.agent_search_pipeline = None
+    state.agent_chat_pipeline = None
+    state.agent_search_extra_pipeline = None
+    state.agent_chat_extra_pipeline = None
+    state.shingled_chunks_count = 0
+
+
+def add_folder(state: AppState, raw_path: str) -> tuple[str, str]:
+    """Start searching the folder *raw_path* (and everything under it).
+
+    Returns (message, error). The folder is fenced by the document roots,
+    like indexing; a folder inside an open one is refused (it is already
+    searched), and one containing open folders replaces them. Opening the
+    first folder leaves named-vault mode. Indexing starts in the background.
+    """
+    text = raw_path.strip()
+    if not text:
+        return "", "Choose a folder to search."
+    roots = access_control.document_roots()
+    confined = access_control.confine(os.path.expanduser(text), roots)
+    if confined is None:
+        return "", (
+            f"Folders on this server must be under {access_control.describe(roots)}."
+        )
+    if not confined.is_dir():
+        return "", f"{confined} is not a folder."
+    root = str(confined)
+    for existing in state.folders:
+        if root == existing:
+            return f"{root} is already being searched.", ""
+        if _within_path(root, existing):
+            return "", f"{root} is already covered by {existing}."
+    models = _effective_models(state)
+    try:
+        folder = folder_index.open_folder(
+            root,
+            embedding_source=models["embedding_source"],
+            embedding_model=models["embedding_model"],
+            chunk_size=models["chunk_size"],
+            shingle_size=models["shingle_size"],
+            overlap=models["shingle_overlap"],
+            index_location=user_settings.get_index_location(),
+        )
+    except OSError as exc:
+        return "", str(exc)
+    uuid = folder_index.read_index_status(folder.index_path).get("index_uuid")
+    others = {
+        folder_index.read_index_status(f.index_path).get("index_uuid")
+        for f in _open_folder_indexes(state)
+    }
+    if uuid and uuid in others:
+        return "", (
+            f"{root} holds a copy of another open folder's index. Delete its "
+            f"{FOLDER_INDEX_DIRNAME} folder to give it an index of its own."
+        )
+    if not state.folders and state.vault_path:
+        # Leaving named-vault mode; the vault stays in the recent list.
+        state.vault_path = ""
+    replaced = [e for e in state.folders if _within_path(e, root)]
+    for existing in replaced:
+        _close_folder(state, existing)
+    _scheduler().add(folder)
+    state.folders.append(root)
+    user_settings.set_open_folders(state.folders)
+    user_settings.set_last_session(user_settings.SESSION_FOLDERS)
+    _activate_folders(state)
+    where = (
+        "in the folder"
+        if folder.location.in_folder
+        else f"in app data ({folder.location.reason})"
+    )
+    message = (
+        f"Searching {root}. Its index is kept {where}; indexing runs in the background."
+    )
+    if replaced:
+        message += f" It replaces {', '.join(replaced)}, which it contains."
+    return message, ""
+
+
+def _close_folder(state: AppState, root: str) -> folder_index.FolderIndex | None:
+    folder = next((f for f in _open_folder_indexes(state) if str(f.root) == root), None)
+    if folder is not None and _folder_scheduler is not None:
+        _folder_scheduler.remove(folder)
+    if root in state.folders:
+        state.folders.remove(root)
+    return folder
+
+
+def remove_folder(
+    state: AppState, root: str, delete_index: bool = False
+) -> tuple[str, str]:
+    """Stop searching *root*; with *delete_index*, delete its index too.
+
+    Returns (message, error). Only the index directory is ever deleted,
+    never the documents, and not while another process is indexing it.
+    """
+    if root not in state.folders:
+        return "", f"{root} is not being searched."
+    folder = _close_folder(state, root)
+    user_settings.set_open_folders(state.folders)
+    _activate_folders(state)
+    message = f"Stopped searching {root}."
+    if delete_index and folder is not None:
+        problem = folder_index.delete_folder_index(folder)
+        if problem:
+            return message, f"Its index was not deleted: {problem}."
+        message += f" Deleted its index ({folder.index_path})."
+    elif folder is not None:
+        message += " Its index is kept, so adding it again is instant."
+    return message, ""
+
+
+def _folder_by_root(state: AppState, root: str) -> folder_index.FolderIndex | None:
+    return next((f for f in _open_folder_indexes(state) if str(f.root) == root), None)
+
+
+def reembed_folder(state: AppState, root: str) -> tuple[str, str]:
+    """Rebuild *root*'s vectors with the current Settings embedder."""
+    folder = _folder_by_root(state, root)
+    if folder is None:
+        return "", f"{root} is not being searched."
+    if not folder.is_writer:
+        return "", "Another vault process is indexing this folder; re-embed it there."
+    models = _effective_models(state)
+    source, model = models["embedding_source"], models["embedding_model"]
+    _scheduler().submit(folder, lambda: folder.reembed(source, model)).wait(30)
+    _activate_folders(state)
+    message = (
+        f"Re-embedding {root} with {source}/{model}. Keyword search keeps "
+        "answering meanwhile."
+    )
+    return message, ""
+
+
+def rebuild_folder(state: AppState, root: str) -> tuple[str, str]:
+    """Re-chunk and re-index *root* with the current chunking settings."""
+    folder = _folder_by_root(state, root)
+    if folder is None:
+        return "", f"{root} is not being searched."
+    if not folder.is_writer:
+        return "", "Another vault process is indexing this folder; rebuild it there."
+    models = _effective_models(state)
+    _scheduler().submit(
+        folder,
+        lambda: folder.rebuild(
+            models["chunk_size"], models["shingle_size"], models["shingle_overlap"]
+        ),
+    ).wait(30)
+    _activate_folders(state)
+    return f"Rebuilding the index of {root} with the current chunk settings.", ""
+
+
+def open_saved_folders(state: AppState, roots: list[str]) -> list[str]:
+    """Open several folders (startup, --resume); return the problems."""
+    problems = []
+    for root in roots:
+        _, error = add_folder(state, root)
+        if error:
+            problems.append(error)
+    return problems
+
+
+def is_documents_folder(path: str) -> bool:
+    """True when a path given on the command line should open as a folder.
+
+    That is a folder already searched in folder mode (it holds .tpvault),
+    or an existing folder of files that holds no vault data; anything else
+    (a vault, an empty or missing folder) opens as a named vault, as before.
+    """
+    folder = Path(path).expanduser()
+    if (folder / FOLDER_INDEX_DIRNAME).is_dir():
+        return True
+    return _existing_non_vault_entries(folder) > 0
+
+
+def resumable_folders() -> list[str]:
+    """The folders to reopen on --resume: the last session's, if it had any."""
+    if user_settings.get_last_session() != user_settings.SESSION_FOLDERS:
+        return []
+    return [p for p in user_settings.get_open_folders() if Path(p).is_dir()]
+
+
+def _leave_folder_mode(state: AppState) -> None:
+    """Close every folder (they stay remembered) before opening a vault."""
+    for root in list(state.folders):
+        _close_folder(state, root)
+
+
+def _folder_chunk(state: AppState, key: str) -> tuple[dict[str, Any], str] | None:
+    """The stored chunk behind a folder result's lookup key, and its index.
+
+    Folder chunk ids are unique across indexes, so the key names one chunk;
+    Whoosh holds every chunk, embedded or not.
+    """
+    for path in _index_paths(state):
+        whoosh_path = get_whoosh_index_path(path)
+        if not os.path.isdir(whoosh_path):
+            continue
+        with WhooshFullTextIndex(whoosh_path) as ix:
+            document = ix.get_document(key)
+        if document:
+            return document, path
+    return None
+
+
+def _folder_source_file(state: AppState, key: str) -> Path | None:
+    """The document behind a folder result, confined to the open folders."""
+    found = _folder_chunk(state, key)
+    candidate = found[0].get("path", "") if found else key
+    if found:
+        root = folder_index.index_folder_root(found[1])
+        recorded = folder_index.read_index_status(found[1]).get("recorded_root")
+        if root is not None and recorded and candidate.startswith(recorded + os.sep):
+            candidate = str(root) + candidate[len(recorded) :]
+    confined = access_control.confine(candidate, [Path(r) for r in state.folders])
+    return confined if confined is not None and confined.is_file() else None
+
+
 def init_pipelines(vault_path: str) -> None:
     """
     Initialize the search and chat pipelines.
@@ -519,9 +898,15 @@ def _refresh_pipelines(force: bool = False) -> None:
     if not force and (current_time - _state.last_refresh_time) < 5.0:
         return
 
+    target = _search_target(_state)
     filter_script = _load_active_filter(vault_path)
+    if isinstance(target, list) and len(target) > 1:
+        # A retrieval filter belongs to one vault; with several folders
+        # open none applies (the pages say so).
+        filter_script = None
+        _state.result_filter_active = False
     _state.search_pipeline = VaultSearch(
-        vault_path=vault_path,
+        vault_path=target,
         embedding_model=_state.embedding_model,
         embedding_source=_state.embedding_source,
         # Serves two readers with different counts: the Search pages, which
@@ -534,9 +919,11 @@ def _refresh_pipelines(force: bool = False) -> None:
             DEFAULT_SEARCH_RESULT_LIMIT,
             _state.rag_result_limit or DEFAULT_RAG_RESULT_LIMIT,
         ),
+        # Folders still embedding are keyword-searched too.
+        keyword_fallback=bool(_state.folders),
     ).as_function(single_in=True, single_out=True)
     _state.chat_pipeline = VaultChat(
-        vault_path=vault_path,
+        vault_path=target,
         embedding_model=_state.embedding_model,
         embedding_source=_state.embedding_source,
         chat_model=_state.chat_model,
@@ -548,15 +935,17 @@ def _refresh_pipelines(force: bool = False) -> None:
         # prompted with (and the filter outcome) instead of the answer string.
         include_background=bool(filter_script),
     ).as_function(single_in=True, single_out=True)
-    _state.keyword_search_enabled = _keyword_search_enabled(vault_path)
+    _state.keyword_search_enabled = any(
+        _keyword_search_enabled(path) for path in _index_paths(_state)
+    )
     if _state.keyword_search_enabled:
         _state.keyword_search_pipeline = VaultTextSearch(
-            vault_path=vault_path,
+            vault_path=target,
             limit=_state.rag_result_limit or DEFAULT_RAG_RESULT_LIMIT,
         ).as_function(single_in=True, single_out=False)
         try:
             _state.keyword_chat_pipeline = VaultChat(
-                vault_path=vault_path,
+                vault_path=target,
                 embedding_model=_state.embedding_model,
                 embedding_source=_state.embedding_source,
                 chat_model=_state.chat_model,
@@ -579,8 +968,8 @@ def _refresh_pipelines(force: bool = False) -> None:
     else:
         _state.keyword_search_pipeline = None
         _state.keyword_chat_pipeline = None
-    _refresh_filtered_search_pipelines(vault_path, filter_script)
-    _refresh_agent_pipelines(vault_path)
+    _refresh_filtered_search_pipelines(target, filter_script)
+    _refresh_agent_pipelines(target)
     _state.last_refresh_time = current_time
 
 
@@ -655,7 +1044,7 @@ def _prefix_note(note: str, prefix: str) -> str:
     return f"{prefix} · {note}" if note else prefix
 
 
-def _refresh_agent_pipelines(vault_path: str) -> None:
+def _refresh_agent_pipelines(vault_path: str | list[str]) -> None:
     """(Re)build the agent-driven Search and Ask pipelines.
 
     One AgentVaultChat backs both: its chunk selection is what the Search page
@@ -699,7 +1088,7 @@ def _refresh_agent_pipelines(vault_path: str) -> None:
 
 
 def _refresh_filtered_search_pipelines(
-    vault_path: str, filter_script: str | None
+    vault_path: str | list[str], filter_script: str | None
 ) -> None:
     """(Re)build the opt-in filtered variants of the search-page pipelines.
 
@@ -769,7 +1158,16 @@ def _refresh_filtered_search_pipelines(
 
 
 def _update_document_counts(vault_path: str) -> None:
-    """Update document counts from vault storage locations."""
+    """Update document counts from vault storage locations.
+
+    In folder mode the count is the open folders' chunks, embedded or not.
+    """
+    if _state.folders:
+        _state.shingled_chunks_count = sum(
+            int(folder_index.read_index_status(path).get("chunks") or 0)
+            for path in _index_paths(_state)
+        )
+        return
     ensure_supported_vault_layout(vault_path)
     vectordb_path = get_vector_db_path(vault_path)
 
@@ -1374,10 +1772,12 @@ def _activate_vault(vault_path: Path) -> str:
     """
     try:
         vault_path.mkdir(parents=True, exist_ok=True)
+        _leave_folder_mode(_state)
         init_pipelines(str(vault_path))
     except (OSError, ValueError) as exc:
         return str(exc)
     user_settings.remember_vault(str(vault_path))
+    user_settings.set_last_session(user_settings.SESSION_VAULT)
     return ""
 
 
@@ -1397,6 +1797,12 @@ async def open_vault(
     vault_path, placement_note, error = _resolve_vault_request(new_vault_path)
     if vault_path is None:
         return _redirect_with_message("/documents", error=error)
+
+    # A documents folder searched in folder mode holds its index in
+    # .tpvault; opening it opens the folder, never a vault among its files.
+    if (vault_path / FOLDER_INDEX_DIRNAME).is_dir():
+        message, error = add_folder(state, str(vault_path))
+        return _redirect_with_message("/documents", message=message, error=error)
 
     created = not vault_path.is_dir()
 
@@ -1575,6 +1981,8 @@ async def documents_page(
         require_vault=False,
         models=_effective_models(state),
         recent_vaults=user_settings.get_recent_vaults(),
+        folders=folders_status(state),
+        recent_folders=user_settings.get_recent_folders(),
         vault_example=vault_example,
         confirm_vault_path=str(confirmed_vault) if confirm_entry_count else None,
         confirm_entry_count=confirm_entry_count,
@@ -1624,6 +2032,8 @@ def _render_documents_with_filter(
         require_vault=False,
         models=_effective_models(state),
         recent_vaults=user_settings.get_recent_vaults(),
+        folders=folders_status(state),
+        recent_folders=user_settings.get_recent_folders(),
         vault_example=str(root / "my-vault") if root else "~/my-vault",
         confirm_vault_path=None,
         confirm_entry_count=0,
@@ -1936,7 +2346,14 @@ def _run_index_job(
             _index_job.files_done = files_done
             _index_job.current_file = Path(current).name if current else ""
 
+    # One embedding run at a time in this process: the folder indexer waits.
+    pause = (
+        _folder_scheduler.paused()
+        if _folder_scheduler is not None
+        else contextlib.nullcontext()
+    )
     try:
+        pause.__enter__()
         any_match = False
         total_files = 0
         for matched in globlib.iglob(pattern, recursive=True):
@@ -1989,6 +2406,7 @@ def _run_index_job(
         with _index_job_lock:
             _index_job.error = str(exc)
     finally:
+        pause.__exit__(None, None, None)
         with _index_job_lock:
             _index_job.running = False
             _index_job.current_file = ""
@@ -2039,9 +2457,66 @@ def start_index_job(
 
 
 @app.get("/api/index-status")
-async def index_status() -> JSONResponse:
-    """Report the state of the background document-indexing job."""
-    return JSONResponse(content=_index_job_snapshot())
+def index_status(state: AppState = Depends(get_state)) -> JSONResponse:
+    """Report the state of the background document-indexing job.
+
+    ``folders`` lists the open folders' indexing progress, and ``banner``
+    is the still-indexing notice the pages show ("" when all are done).
+    """
+    content = _index_job_snapshot()
+    content["folders"] = folders_status(state)
+    content["banner"] = _folder_banner(state)
+    return JSONResponse(content=content)
+
+
+@app.post("/folders/add", response_class=HTMLResponse)
+def folders_add(
+    folder_path: Annotated[str, Form()] = "",
+    state: AppState = Depends(get_state),
+) -> Response:
+    """Start searching a folder (and everything under it).
+
+    Expects form data with:
+        - folder_path: str - The folder to search
+    """
+    message, error = add_folder(state, folder_path)
+    return _redirect_with_message("/documents", message=message, error=error)
+
+
+@app.post("/folders/remove", response_class=HTMLResponse)
+def folders_remove(
+    root: Annotated[str, Form()] = "",
+    delete_index: Annotated[str, Form()] = "",
+    state: AppState = Depends(get_state),
+) -> Response:
+    """Stop searching a folder, optionally deleting its index.
+
+    Expects form data with:
+        - root: str - An open folder
+        - delete_index: str - If truthy, also delete the folder's index
+    """
+    message, error = remove_folder(state, root, delete_index=bool(delete_index))
+    return _redirect_with_message("/documents", message=message, error=error)
+
+
+@app.post("/folders/reembed", response_class=HTMLResponse)
+def folders_reembed(
+    root: Annotated[str, Form()] = "",
+    state: AppState = Depends(get_state),
+) -> Response:
+    """Rebuild an open folder's vectors with the Settings embedder."""
+    message, error = reembed_folder(state, root)
+    return _redirect_with_message("/documents", message=message, error=error)
+
+
+@app.post("/folders/rebuild", response_class=HTMLResponse)
+def folders_rebuild(
+    root: Annotated[str, Form()] = "",
+    state: AppState = Depends(get_state),
+) -> Response:
+    """Re-index an open folder with the Settings chunking."""
+    message, error = rebuild_folder(state, root)
+    return _redirect_with_message("/documents", message=message, error=error)
 
 
 @dataclass
@@ -2363,6 +2838,17 @@ async def index_documents(
         )
         if redirect:
             return redirect
+    elif state.folders:
+        # The open "vault" is a folder's own index, maintained by the
+        # folder indexer; a named-vault run must not write into it.
+        return _redirect_with_message(
+            "/documents",
+            error=(
+                "Folders index themselves: add the folder under Folders above. "
+                "To index into a named vault instead, choose the vault in Step 2."
+            ),
+            source_path=source,
+        )
     elif not _vault_selected(state):
         return _redirect_with_message(
             "/documents",
@@ -2415,6 +2901,7 @@ async def settings_page(
         chat_sources=getPromptSources(),
         credentials=credentials.describe(),
         credentials_store=str(credentials.store_path()),
+        index_location=user_settings.get_index_location(),
         flash_message=message,
         flash_error=error,
     )
@@ -2482,6 +2969,7 @@ async def save_settings(
     rag_result_limit: Annotated[str, Form()] = "",
     agent_search_iterations: Annotated[str, Form()] = "",
     agent_search_result_count: Annotated[str, Form()] = "",
+    index_location: Annotated[str, Form()] = "",
     state: AppState = Depends(get_state),
 ) -> Response:
     """Save model configuration chosen in the web interface.
@@ -2520,6 +3008,8 @@ async def save_settings(
             "Agent chunk limit",
             minimums["agent_search_result_count"],
         )
+        if index_location:
+            user_settings.set_index_location(index_location)
     except ValueError as exc:
         return _redirect_with_message("/settings", error=str(exc))
 
@@ -2785,6 +3275,12 @@ async def create_keyword_index(
         return _redirect_with_message(
             "/keyword-search", error="Vault path is not configured."
         )
+    if state.folders:
+        # Rebuilding from LanceDB would drop the chunks not embedded yet.
+        return _redirect_with_message(
+            "/keyword-search",
+            error="Folders build their keyword index themselves, first.",
+        )
 
     if not start_fulltext_index_job(state.vault_path):
         return _redirect_with_message(
@@ -2810,9 +3306,22 @@ async def chunk_content(
         )
 
     try:
-        full_text = _get_chunk_text_for_path_and_snippet(
-            state.vault_path, path, snippet
-        )
+        found = _folder_chunk(state, path) if state.folders else None
+        if found:
+            full_text = str(found[0].get("content", ""))
+        else:
+            full_text = next(
+                (
+                    text
+                    for index in _index_paths(state)
+                    if (
+                        text := _get_chunk_text_for_path_and_snippet(
+                            index, path, snippet
+                        )
+                    )
+                ),
+                "",
+            )
     except Exception:
         # The exception text can carry paths and library internals; it goes
         # to the server log, not the response.
@@ -2844,6 +3353,15 @@ async def source_file(
             status_code=404,
             content={"error": "Source file links are disabled."},
         )
+
+    if state.folders:
+        folder_file = _folder_source_file(state, path)
+        if folder_file is None:
+            return JSONResponse(
+                status_code=404,
+                content={"error": "Source file is not in the open folders."},
+            )
+        return FileResponse(folder_file, filename=folder_file.name)
 
     try:
         allowed_paths = _indexed_source_paths(state.vault_path)
@@ -2896,7 +3414,11 @@ async def open_file(
         )
 
     try:
-        source_path = _resolve_indexed_source_file(state.vault_path, path)
+        source_path = (
+            _folder_source_file(state, path)
+            if state.folders
+            else _resolve_indexed_source_file(state.vault_path, path)
+        )
     except Exception:
         logger.exception("Failed to look up the source file")
         return JSONResponse(
@@ -3074,6 +3596,9 @@ async def chat_response(
     answered_by = _answered_by(state)
     if retrieval_note:
         answered_by = f"{answered_by} · {retrieval_note}"
+    partial = _partial_index_note(state) if messages else ""
+    if partial:
+        answered_by = f"{answered_by} · {partial}"
     filter_note = ""
     if state.result_filter_active:
         if answered_by_agent:
@@ -3088,6 +3613,8 @@ async def chat_response(
         filter_note = (
             "the vault's retrieval filter does not compile and was not applied"
         )
+    elif len(state.folders) > 1 and retrieval_filter.load_script(state.vault_path):
+        filter_note = "retrieval filters do not apply while several folders are open"
     if filter_note and messages:
         answered_by = f"{answered_by} · {filter_note}"
 
@@ -3114,6 +3641,7 @@ def run_app(
     port: int = 8000,
     show_source_paths: bool = False,
     open_browser: bool = True,
+    folders: list[str] | None = None,
 ) -> None:
     """
     Start the web application server.
@@ -3127,6 +3655,9 @@ def run_app(
         show_source_paths: If True, display and serve source file paths in search results.
         open_browser: If True, open the app in a web browser once the server is
             accepting connections. No-op in headless environments.
+        folders: Folders to search directly (folder mode); each keeps its own
+            index and is indexed in the background. Takes precedence over
+            vault_path.
     """
     problems = access_control.startup_errors()
     if problems:
@@ -3154,7 +3685,10 @@ def run_app(
     # and Ollama connection see the vault-scoped values.
     credentials.apply()
     load_saved_model_overrides()
-    if vault_path:
+    if folders:
+        for problem in open_saved_folders(_state, folders):
+            print(f"Warning: {problem}", file=sys.stderr)
+    elif vault_path:
         # Start degraded rather than not at all: an embedder that cannot load
         # (e.g. the model is not cached and Hugging Face is unreachable) should
         # not keep the whole server — and its diagnostics — from coming up.

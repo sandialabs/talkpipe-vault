@@ -37,7 +37,7 @@ import sqlite3
 import threading
 import time
 import uuid
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Any
@@ -444,12 +444,13 @@ class Manifest:
     def counts(self) -> dict[str, int]:
         with self._lock:
             rows = self._conn.execute(
-                "SELECT state, COUNT(*), SUM(n_chunks = 0) FROM files GROUP BY state"
+                "SELECT state, COUNT(*), SUM(n_chunks = 0), SUM(n_chunks) "
+                "FROM files GROUP BY state"
             ).fetchall()
-        counts = {state: int(total) for state, total, _ in rows}
-        counts["empty"] = sum(
-            int(empty or 0) for state, _, empty in rows if state in ("keyword", "done")
-        )
+        counts = {state: int(total) for state, total, _, _ in rows}
+        indexed = [row for row in rows if row[0] in ("keyword", "done")]
+        counts["empty"] = sum(int(row[2] or 0) for row in indexed)
+        counts["chunks"] = sum(int(row[3] or 0) for row in indexed)
         return counts
 
 
@@ -1083,6 +1084,7 @@ class FolderIndex:
             "files_pending": pending,
             "files_error": failed,
             "files_empty": counts.get("empty", 0),
+            "chunks": counts.get("chunks", 0),
         }
 
     def _phase(self, counts: dict[str, int]) -> str:
@@ -1129,9 +1131,10 @@ class FolderIndex:
     def status(self) -> dict[str, Any]:
         """Progress and role, for the folder list and the partial-index notes."""
         if self.is_writer and self.manifest is not None:
+            counts = self._counts()
             data: dict[str, Any] = {
-                **self._counts(),
-                "phase": self._phase(self._counts()),
+                **counts,
+                "phase": self._phase(counts),
                 "role": "writer",
                 "writer": "this window",
                 "stalled": False,
@@ -1167,6 +1170,7 @@ class FolderIndex:
                     "files_pending",
                     "files_error",
                     "files_empty",
+                    "chunks",
                 )
             }
             data.update(
@@ -1191,6 +1195,33 @@ class FolderIndex:
             complete=bool(total) and embedded == total,
         )
         return data
+
+
+def delete_folder_index(folder: FolderIndex) -> str:
+    """Delete a closed folder's index (never its documents).
+
+    Returns "" when deleted, else why not: only a folder-mode index
+    directory is ever removed, and not while another process indexes it.
+    """
+    path = folder.location.path
+    if folder.is_writer:
+        return "the folder is still open"
+    if path.name != FOLDER_INDEX_DIRNAME and path.parent.name != EXTERNAL_INDEX_DIRNAME:
+        return f"{path} is not a folder index"
+    if folder.location.read_only:
+        return "the index is read-only"
+    if not path.is_dir():
+        return ""
+    lock = filelock.FileLock(str(path / WRITER_LOCK_FILENAME), is_singleton=False)
+    try:
+        lock.acquire(timeout=0)
+    except filelock.Timeout:
+        return "another vault process is indexing this folder"
+    try:
+        shutil.rmtree(path)
+    finally:
+        lock.release()
+    return ""
 
 
 def _within(path: str, ancestor: str) -> bool:
@@ -1218,6 +1249,11 @@ class FolderScheduler:
         self._stop = threading.Event()
         self._paused = threading.Event()
         self._thread: threading.Thread | None = None
+        # Folders to release, and maintenance to run, on the worker thread
+        # (never concurrently with a batch); each entry's event is set when
+        # it is done.
+        self._closing: list[tuple[FolderIndex, threading.Event]] = []
+        self._tasks: list[tuple[FolderIndex, Callable[[], None], threading.Event]] = []
         self._ingest_lock = (
             filelock.FileLock(
                 str(ingest_lock_dir / INGEST_LOCK_FILENAME), is_singleton=False
@@ -1237,21 +1273,39 @@ class FolderScheduler:
             self._folders.append(folder)
         self.wake()
 
-    def remove(self, folder: FolderIndex) -> None:
-        """Stop indexing *folder*; its writer role is released by the worker."""
+    def _running(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
+    def remove(self, folder: FolderIndex, timeout: float = 30.0) -> bool:
+        """Stop indexing *folder* and release its writer role.
+
+        Waits (up to *timeout*) for the batch in progress to finish, so the
+        index can be deleted afterwards; returns False if it did not.
+        """
         with self._folders_lock:
             if folder in self._folders:
                 self._folders.remove(folder)
-        if self._thread is None or not self._thread.is_alive():
-            folder.close()
-        else:
-            self._closing.append(folder)
-            self.wake()
+            if not self._running():
+                folder.close()
+                return True
+            done = threading.Event()
+            self._closing.append((folder, done))
+        self.wake()
+        return done.wait(timeout)
 
-    _closing: list[FolderIndex]
+    def submit(self, folder: FolderIndex, task: Callable[[], None]) -> threading.Event:
+        """Run *task* (maintenance on *folder*) on the worker, between batches.
+
+        The returned event is set once it has run; its outcome is recorded
+        in the folder's ``error``.
+        """
+        done = threading.Event()
+        with self._folders_lock:
+            self._tasks.append((folder, task, done))
+        self.wake()
+        return done
 
     def start(self) -> None:
-        self._closing = []
         if self._thread is not None and self._thread.is_alive():
             return
         self._stop.clear()
@@ -1266,7 +1320,10 @@ class FolderScheduler:
         self.wake()
         if self._thread is not None:
             self._thread.join(timeout)
-        for folder in self.folders() + getattr(self, "_closing", []):
+        with self._folders_lock:
+            closing = [folder for folder, _ in self._closing]
+            self._closing.clear()
+        for folder in self.folders() + closing:
             with contextlib.suppress(Exception):
                 folder.close()
 
@@ -1311,9 +1368,19 @@ class FolderScheduler:
 
     def step(self) -> bool:
         """Do one unit of work; return False when there was nothing to do."""
-        for folder in getattr(self, "_closing", [])[:]:
-            self._closing.remove(folder)
-            folder.close()
+        with self._folders_lock:
+            closing, self._closing = self._closing, []
+            tasks, self._tasks = self._tasks, []
+        for folder, done in closing:
+            try:
+                folder.close()
+            finally:
+                done.set()
+        for folder, task, done in tasks:
+            try:
+                self._guard(folder, task)
+            finally:
+                done.set()
         now = time.monotonic()
         folders = self.folders()
         for folder in folders:

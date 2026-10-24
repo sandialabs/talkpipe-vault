@@ -20,9 +20,17 @@
     <p class="search-hint filter-note">{{ filter_note }}</p>
     {% endif %}
     <p class="search-hint">Uses the existing Whoosh index. Supports AND, OR, NOT, and "exact phrase".</p>
+    {% if not folder_mode %}
     <form method="post" action="/keyword-search/create-index" id="create-index-form">
         <button type="submit" id="create-index-btn" class="btn-secondary">Rebuild Full-Text Index</button>
     </form>
+    {% endif %}
+    {% elif folder_mode %}
+    <div class="search-disabled">
+        <strong>Keyword search starts shortly.</strong>
+        The open folders are being scanned; their keyword index is built
+        first, before anything else.
+    </div>
     {% else %}
     <div class="search-disabled">
         <strong>Keyword search is disabled.</strong>

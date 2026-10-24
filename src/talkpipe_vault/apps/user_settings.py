@@ -240,3 +240,76 @@ def save_model_overrides(**overrides: str | int | None) -> None:
         else:
             settings.pop(key, None)
     save_settings(settings)
+
+
+# Folder mode: the folders searched directly (each with its own index), the
+# folders searched before, whether the last session was folders or a named
+# vault (what --resume reopens), and where new folder indexes go.
+OPEN_FOLDERS_KEY = "open_folders"
+RECENT_FOLDERS_KEY = "recent_folders"
+LAST_SESSION_KEY = "last_session"
+INDEX_LOCATION_KEY = "index_location"
+INDEX_LOCATIONS = ("auto", "home")
+SESSION_FOLDERS = "folders"
+SESSION_VAULT = "vault"
+
+
+def _string_list(value: object) -> list[str]:
+    return [str(p) for p in value] if isinstance(value, list) else []
+
+
+def get_open_folders() -> list[str]:
+    """Folders open in folder mode, in the order they were added."""
+    return _string_list(load_settings().get(OPEN_FOLDERS_KEY))
+
+
+def get_recent_folders() -> list[str]:
+    """Folders searched before, most recently added first."""
+    return _string_list(load_settings().get(RECENT_FOLDERS_KEY))
+
+
+def set_open_folders(folders: list[str]) -> None:
+    """Persist the open folders, and remember each one as recent."""
+    settings = load_settings()
+    settings[OPEN_FOLDERS_KEY] = list(folders)
+    recents = _string_list(settings.get(RECENT_FOLDERS_KEY))
+    for folder in reversed(folders):
+        recents = [p for p in recents if p != folder]
+        recents.insert(0, folder)
+    settings[RECENT_FOLDERS_KEY] = recents[:MAX_RECENT_VAULTS]
+    save_settings(settings)
+
+
+def forget_folder(folder: str) -> None:
+    """Drop a folder from the recent-folder list (its files are untouched)."""
+    settings = load_settings()
+    settings[RECENT_FOLDERS_KEY] = [
+        p for p in _string_list(settings.get(RECENT_FOLDERS_KEY)) if p != folder
+    ]
+    save_settings(settings)
+
+
+def get_last_session() -> str:
+    """ "folders" or "vault": what the last session had open ("" if unknown)."""
+    value = load_settings().get(LAST_SESSION_KEY)
+    return value if value in (SESSION_FOLDERS, SESSION_VAULT) else ""
+
+
+def set_last_session(kind: str) -> None:
+    settings = load_settings()
+    settings[LAST_SESSION_KEY] = kind
+    save_settings(settings)
+
+
+def get_index_location() -> str:
+    """ "auto" (a folder keeps its own index when it can) or "home" (app data)."""
+    value = load_settings().get(INDEX_LOCATION_KEY)
+    return value if value in INDEX_LOCATIONS else "auto"
+
+
+def set_index_location(value: str) -> None:
+    if value not in INDEX_LOCATIONS:
+        raise ValueError(f"Index location must be one of {', '.join(INDEX_LOCATIONS)}")
+    settings = load_settings()
+    settings[INDEX_LOCATION_KEY] = value
+    save_settings(settings)

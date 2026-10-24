@@ -11,7 +11,13 @@ from talkpipe.util.config import configure_logger
 
 from talkpipe_vault import memtune
 from talkpipe_vault.apps import access_control, user_settings
-from talkpipe_vault.apps.query import _port_in_use, _running_instance_url, run_app
+from talkpipe_vault.apps.query import (
+    _port_in_use,
+    _running_instance_url,
+    is_documents_folder,
+    resumable_folders,
+    run_app,
+)
 from talkpipe_vault.pipelines.config import ensure_supported_vault_layout
 
 configure_logger("root:ERROR")
@@ -88,9 +94,28 @@ def main() -> None:
         nargs="?",
         default="",
         help=(
-            "Path to LanceDB directory (same semantics as makevectordatabase "
-            "--path). Whoosh index lives at vault_path/fulltext_vault. When "
-            "omitted, create or choose a vault from the web interface."
+            "A folder of documents to search (indexed in the background, its "
+            "index kept in a .tpvault subfolder), or a vault: a LanceDB "
+            "directory (same semantics as makevectordatabase --path). When "
+            "omitted, choose folders or a vault in the web interface."
+        ),
+    )
+    parser.add_argument(
+        "--dir",
+        action="append",
+        default=[],
+        metavar="FOLDER",
+        help=(
+            "A folder of documents to search; repeat to search several. Each "
+            "is indexed in the background and kept up to date."
+        ),
+    )
+    parser.add_argument(
+        "--as-vault",
+        action="store_true",
+        help=(
+            "Open vault_path as a vault even when it is a folder of documents "
+            "(the behavior before folder mode)."
         ),
     )
     parser.add_argument(
@@ -125,9 +150,9 @@ def main() -> None:
         "--resume",
         action="store_true",
         help=(
-            "Open the most recently used vault (as recorded by the web "
-            "interface). Falls back to vault_path — or the vault manager "
-            "page — when no recent vault is usable."
+            "Reopen what the web interface last had open: its folders, or "
+            "the most recently used vault. Falls back to vault_path — or the "
+            "Vaults & Documents page — when nothing is usable."
         ),
     )
 
@@ -152,10 +177,17 @@ def main() -> None:
 
     vault_path = ""
     resumed = False
-    if args.resume:
-        vault_path = _most_recent_usable_vault()
-        resumed = bool(vault_path)
-    if not vault_path and args.vault_path:
+    folders = [str(Path(p).expanduser()) for p in args.dir]
+    if args.vault_path and not args.as_vault and is_documents_folder(args.vault_path):
+        folders.insert(0, str(Path(args.vault_path).expanduser()))
+        args.vault_path = ""
+    if args.resume and not folders:
+        folders = resumable_folders()
+        resumed = bool(folders)
+        if not folders:
+            vault_path = _most_recent_usable_vault()
+            resumed = bool(vault_path)
+    if not vault_path and not folders and args.vault_path:
         vault_path = str(Path(args.vault_path).expanduser())
         try:
             Path(vault_path).mkdir(parents=True, exist_ok=True)
@@ -167,7 +199,11 @@ def main() -> None:
     print("=" * 60)
     print("Starting TalkPipe Vault")
     print("=" * 60)
-    if resumed:
+    if folders:
+        suffix = " (last session)" if resumed else ""
+        print(f"Folders: {', '.join(folders)}{suffix}")
+        print("Indexed in the background; ask questions right away.")
+    elif resumed:
         print(f"Vault storage: {vault_path} (most recently used)")
     elif vault_path:
         print(f"Vault storage: {vault_path}")
@@ -188,6 +224,7 @@ def main() -> None:
             port=port,
             show_source_paths=args.show_source_paths,
             open_browser=not args.no_browser,
+            folders=folders,
         )
     except KeyboardInterrupt:
         sys.exit(0)

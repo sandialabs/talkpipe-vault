@@ -3,6 +3,89 @@
 {% block title %}Vaults &amp; Documents - Talkpipe Vault{% endblock %}
 
 {% block content %}
+{# In folder mode the open "vault" is a folder's own index; the named-vault
+   form below must not offer it as the vault to index into. #}
+{% set vault_path = "" if folder_mode else vault_path %}
+<div class="search-box" id="folders-section">
+    <h2>Folders</h2>
+    <p class="panel-hint">
+        Choose the folders you want to ask about. Each folder, and everything
+        under it, is indexed in the background &mdash; keywords first, then
+        meaning &mdash; and kept up to date as files change. You can search
+        and ask right away; until indexing finishes, results may miss documents.
+    </p>
+    <form method="post" action="/folders/add" class="folder-add-form">
+        <div class="index-field-row">
+            <input type="text" name="folder_path" id="folder-path-input"
+                   placeholder="Folder to search &mdash; click Browse, or type a path">
+            <button type="button" id="folder-browse-btn" class="btn-secondary">Browse&hellip;</button>
+            <button type="submit" id="folder-add-btn">Add folder</button>
+        </div>
+    </form>
+    {% if folders %}
+    <ul class="vault-list folder-list" id="folder-list">
+        {% for folder in folders %}
+        <li class="vault-entry folder-entry" data-root="{{ folder.root }}">
+            <span class="vault-entry-path">
+                <strong>{{ folder.name }}</strong> <code>{{ folder.root }}</code>
+                <span class="folder-progress" data-field="progress">{{ folder.progress }}</span>
+                <span class="folder-meta">
+                    Index kept {% if folder.in_folder %}in the folder{% else %}in app data ({{ folder.location_reason }}){% endif %}
+                    &middot; indexed by {{ folder.writer }}
+                    {% if folder.files_error %}&middot; {{ folder.files_error }} file(s) could not be read{% endif %}
+                </span>
+                {% if folder.vector_error %}<span class="filter-error">{{ folder.vector_error }}</span>{% endif %}
+                {% if folder.error %}<span class="filter-error">{{ folder.error }}</span>{% endif %}
+            </span>
+            <span class="vault-entry-actions">
+                {% if folder.role == 'writer' and folder.embedding_differs %}
+                <form method="post" action="/folders/reembed">
+                    <input type="hidden" name="root" value="{{ folder.root }}">
+                    <button type="submit" class="btn-secondary"
+                            title="Indexed with {{ folder.embedding }}">Re-embed with {{ folder.current_embedding }}</button>
+                </form>
+                {% endif %}
+                {% if folder.role == 'writer' and folder.chunking_differs %}
+                <form method="post" action="/folders/rebuild">
+                    <input type="hidden" name="root" value="{{ folder.root }}">
+                    <button type="submit" class="btn-secondary"
+                            title="Indexed with different chunk settings">Rebuild with current chunking</button>
+                </form>
+                {% endif %}
+                <form method="post" action="/folders/remove" class="remove-folder-form">
+                    <input type="hidden" name="root" value="{{ folder.root }}">
+                    <label class="overwrite-option">
+                        <input type="checkbox" name="delete_index" value="1"> also delete its index
+                    </label>
+                    <button type="submit" class="btn-secondary">Remove</button>
+                </form>
+            </span>
+        </li>
+        {% endfor %}
+    </ul>
+    {% endif %}
+    {% set closed_folders = recent_folders|reject('in', folders|map(attribute='root')|list)|list %}
+    {% if closed_folders %}
+    <h3>Searched before</h3>
+    <ul class="vault-list">
+        {% for recent in closed_folders %}
+        <li class="vault-entry">
+            <span class="vault-entry-path">{{ recent }}</span>
+            <span class="vault-entry-actions">
+                <form method="post" action="/folders/add">
+                    <input type="hidden" name="folder_path" value="{{ recent }}">
+                    <button type="submit" class="btn-secondary">Search again</button>
+                </form>
+            </span>
+        </li>
+        {% endfor %}
+    </ul>
+    {% endif %}
+</div>
+
+<details class="named-vaults" id="named-vaults"
+         {% if vault_path or confirm_vault_path or pending_source_path or (not folders and not recent_folders and recent_vaults) %}open{% endif %}>
+<summary class="named-vaults-summary">Named vaults (advanced): index documents into a separate vault folder</summary>
 {% if confirm_vault_path %}
 <div class="search-box vault-confirm-box">
     <h3>This folder already contains files &mdash; create a vault here?</h3>
@@ -20,6 +103,10 @@
         folder instead and index this folder into it.
     </p>
     <div class="vault-confirm-actions">
+        <form method="post" action="/folders/add">
+            <input type="hidden" name="folder_path" value="{{ confirm_vault_path }}">
+            <button type="submit">Search this folder instead</button>
+        </form>
         <a href="/documents" class="btn-secondary vault-confirm-cancel">Choose a different folder</a>
         <form method="post" action="{{ '/documents/index' if pending_source_path else '/vaults/open' }}">
             <input type="hidden" name="new_vault_path" value="{{ confirm_vault_path }}">
@@ -290,10 +377,17 @@
     <p class="panel-hint">No vaults opened yet — indexing documents creates your first one.</p>
     {% endif %}
 </div>
+</details>
 
 {% include "_dir_picker.html" %}
 
 <style>
+    .folder-add-form { display: block; }
+    .folder-entry .vault-entry-path { display: flex; flex-direction: column; gap: 0.2rem; }
+    .folder-progress { font-weight: 600; }
+    .folder-meta { color: var(--text-muted, #666); font-size: 0.9em; }
+    .named-vaults { margin-top: 1rem; }
+    .named-vaults-summary { cursor: pointer; font-weight: 600; padding: 0.5rem 0; }
     /* The steps read top to bottom; the base rule makes panel forms a
        horizontal row, so it has to be overridden at equal specificity. */
     .index-form,
@@ -577,6 +671,29 @@
 </style>
 
 <script>
+    attachDirPicker('folder-browse-btn', 'folder-path-input', { allowNewFolder: false });
+    // Keep each folder's progress line current (base.html polls the status).
+    document.addEventListener('folder-status', function (event) {
+        (event.detail.folders || []).forEach(function (folder) {
+            document.querySelectorAll('.folder-entry').forEach(function (entry) {
+                if (entry.dataset.root === folder.root) {
+                    const line = entry.querySelector('[data-field="progress"]');
+                    if (line) { line.textContent = folder.progress; }
+                }
+            });
+        });
+    });
+    // Deleting a folder's index is irreversible (the documents are kept).
+    document.querySelectorAll('.remove-folder-form').forEach(function (form) {
+        form.addEventListener('submit', function (event) {
+            const box = form.querySelector('input[name="delete_index"]');
+            if (box && box.checked && !window.confirm(
+                    'Delete this folder\'s search index? Your documents are not ' +
+                    'touched; searching the folder again re-indexes it.')) {
+                event.preventDefault();
+            }
+        });
+    });
     attachDirPicker('source-browse-btn', 'source-path-input', { allowNewFolder: false });
     attachDirPicker('vault-browse-btn', 'vault-path-input', { allowNewFolder: true });
 

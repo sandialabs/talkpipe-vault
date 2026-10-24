@@ -894,10 +894,17 @@
                     </div>
                 </div>
                 <div class="vault-stats">
+                    {% if folder_mode %}
+                    <div class="vault-stat">
+                        <span class="vault-stat-label">Folders</span>
+                        <span class="vault-stat-value" title="{{ folder_names|join(', ') }}">{{ folder_names|join(', ') }}</span>
+                    </div>
+                    {% else %}
                     <div class="vault-stat">
                         <span class="vault-stat-label">Vault</span>
                         <span class="vault-stat-value" title="{{ vault_path or 'No vault selected' }}">{% if vault_path %}&lrm;{{ vault_path }}&lrm;{% else %}none selected{% endif %}</span>
                     </div>
+                    {% endif %}
                     <div class="vault-stat">
                         <span class="vault-stat-label">Chunks:</span>
                         <span class="vault-stat-value">{{ shingled_chunks_count|default(0)|int }}</span>
@@ -926,8 +933,33 @@
         {% if flash_error %}
         <div class="flash-error" role="alert">{{ flash_error }}</div>
         {% endif %}
+        {% if folder_mode %}
+        <div class="flash-status folder-banner" id="folder-banner" role="status"
+             aria-live="polite" {% if not folder_banner %}hidden{% endif %}>{{ folder_banner }}</div>
+        {% endif %}
         {% block content %}{% endblock %}
     </div>
+    {% if folder_mode %}
+    <script>
+        // Folders index in the background: keep the still-indexing notice
+        // current, and drop it once every folder is done.
+        (function () {
+            const banner = document.getElementById('folder-banner');
+            async function poll() {
+                try {
+                    const status = await (await fetch('/api/index-status')).json();
+                    banner.textContent = status.banner || '';
+                    banner.hidden = !status.banner;
+                    document.dispatchEvent(new CustomEvent('folder-status', { detail: status }));
+                } catch (err) {
+                    /* The next poll retries. */
+                }
+                setTimeout(poll, banner.hidden ? 10000 : 3000);
+            }
+            poll();
+        })();
+    </script>
+    {% endif %}
 
 </body>
 </html>

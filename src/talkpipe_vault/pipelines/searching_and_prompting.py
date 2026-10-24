@@ -881,15 +881,24 @@ class VaultSearch(AbstractFieldSegment):
         )
 
         def run(value: Any) -> list[SearchResult]:
-            results = search(str(value))
             if not keyword_fallback:
-                return results
-            # Re-checked per query: the index finishes embedding over time.
-            unfinished = [
-                view
-                for view in search.views
-                if not folder_index.vectors_complete(view.path)
-            ]
+                return search(str(value))
+            try:
+                results = search(str(value))
+            except Exception:
+                # The embedder is unreachable: answer from keywords alone
+                # rather than not at all.
+                logger.warning(
+                    "Semantic search failed; using keyword search only", exc_info=True
+                )
+                results, unfinished = [], search.views
+            else:
+                # Re-checked per query: the index finishes embedding over time.
+                unfinished = [
+                    view
+                    for view in search.views
+                    if not folder_index.vectors_complete(view.path)
+                ]
             if not unfinished:
                 return results
             keyword_hits = _FanOutTextSearch(unfinished, result_limit)(
