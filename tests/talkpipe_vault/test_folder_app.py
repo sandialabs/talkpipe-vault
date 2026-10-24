@@ -250,3 +250,56 @@ def test_cli_resume_reopens_the_last_folders(monkeypatch, docs, captured_run):
     monkeypatch.setattr("sys.argv", ["vault-server", "--resume", "--no-browser"])
     vault_server.main()
     assert captured_run["folders"] == [str(Path(docs).resolve())]
+
+
+# -- named vaults next to folder mode -------------------------------------------
+
+
+def _named_vault(tmp_path, docs):
+    vault = tmp_path / "named-vault"
+    vault.mkdir()
+    query.index_documents_into_vault(
+        str(vault),
+        str(docs / "**" / "*"),
+        embedding_model="fake",
+        embedding_source=FAKE_EMBEDDING_SOURCE,
+    )
+    return vault
+
+
+def test_named_vault_from_one_folder_offers_the_folder(client, docs, tmp_path):
+    vault = _named_vault(tmp_path, docs)
+    query.init_pipelines(str(vault))
+    assert query._vault_source_folder(query._state) == str(docs.resolve())
+    page = client.get("/documents").text
+    assert "Search the folder instead" in page
+
+
+def test_a_second_run_on_the_same_named_vault_is_refused(tmp_path, docs):
+    import filelock
+
+    from talkpipe_vault.pipelines import folder_index
+
+    vault = tmp_path / "named-vault"
+    vault.mkdir()
+    held = filelock.FileLock(
+        str(vault / folder_index.WRITER_LOCK_FILENAME), is_singleton=False
+    )
+    held.acquire()
+    try:
+        query._run_index_job(
+            str(vault),
+            str(docs),
+            str(docs / "**" / "*"),
+            "fake",
+            FAKE_EMBEDDING_SOURCE,
+            300,
+            3,
+            1,
+            False,
+        )
+    finally:
+        held.release()
+    assert "Another vault process is indexing this vault" in str(
+        query._index_job_snapshot()["error"]
+    )

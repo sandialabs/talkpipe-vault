@@ -34,6 +34,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Annotated, Any
 
+import filelock
 import uvicorn
 from fastapi import Depends, FastAPI, Form, Request
 from fastapi.responses import (
@@ -192,6 +193,9 @@ class AppState:
     # While any is open, vault_path is the first folder's index so the
     # single-vault helpers keep working, and the pipelines search them all.
     folders: list[str] = field(default_factory=list)
+    # The folder all of the open named vault's documents come from, offered
+    # as "search that folder instead"; None until computed for this vault.
+    vault_source_folder: str | None = None
 
 
 # Application state singleton
@@ -803,6 +807,7 @@ def init_pipelines(vault_path: str) -> None:
     """
     ensure_supported_vault_layout(vault_path)
     _state.vault_path = vault_path
+    _state.vault_source_folder = None
     _apply_vault_embedding_config(vault_path)
     # Opening a vault must always rebuild the pipelines — the 5-second throttle
     # would otherwise leave the previous vault's state (including
@@ -1983,6 +1988,7 @@ async def documents_page(
         recent_vaults=user_settings.get_recent_vaults(),
         folders=folders_status(state),
         recent_folders=user_settings.get_recent_folders(),
+        vault_source_folder=_vault_source_folder(state),
         vault_example=vault_example,
         confirm_vault_path=str(confirmed_vault) if confirm_entry_count else None,
         confirm_entry_count=confirm_entry_count,
@@ -1992,6 +1998,34 @@ async def documents_page(
         flash_message=message,
         flash_error=error,
     )
+
+
+def _vault_source_folder(state: AppState) -> str:
+    """The folder every document of the open named vault lies in, or "".
+
+    A named vault cannot be converted in place (its chunk ids are random),
+    but when its documents share one folder the page offers to search that
+    folder directly instead. Computed once per opened vault: it reads the
+    docs table's paths.
+    """
+    if state.folders or not state.vault_path:
+        return ""
+    if state.vault_source_folder is None:
+        state.vault_source_folder = ""
+        with contextlib.suppress(Exception):
+            sources = [
+                path
+                for path in _indexed_source_paths(state.vault_path)
+                if os.path.isabs(path)
+            ]
+            if sources:
+                common = Path(os.path.commonpath(sources))
+                if common.is_file():
+                    common = common.parent
+                real = Path(os.path.realpath(common))
+                if common.is_dir() and not _is_dangerous_delete_target(real):
+                    state.vault_source_folder = str(common)
+    return state.vault_source_folder
 
 
 def _retrieval_filter_context(state: AppState, **pending: Any) -> dict[str, Any]:
@@ -2034,6 +2068,7 @@ def _render_documents_with_filter(
         recent_vaults=user_settings.get_recent_vaults(),
         folders=folders_status(state),
         recent_folders=user_settings.get_recent_folders(),
+        vault_source_folder=_vault_source_folder(state),
         vault_example=str(root / "my-vault") if root else "~/my-vault",
         confirm_vault_path=None,
         confirm_entry_count=0,
@@ -2322,6 +2357,35 @@ def _index_job_snapshot() -> dict[str, Any]:
         return asdict(_index_job)
 
 
+@contextlib.contextmanager
+def _index_run_guard(vault_path: str) -> Iterator[None]:
+    """Held while a named-vault run writes the vault.
+
+    No other vault process may index the same vault meanwhile (two
+    concurrent runs would interleave their writes), and this process's
+    folder indexer waits, so only one embedding run is in memory at a time.
+    """
+    lock = filelock.FileLock(
+        os.path.join(vault_path, folder_index.WRITER_LOCK_FILENAME),
+        is_singleton=False,
+    )
+    try:
+        lock.acquire(timeout=0)
+    except filelock.Timeout:
+        raise RuntimeError(
+            "Another vault process is indexing this vault; wait for it to finish."
+        ) from None
+    try:
+        with (
+            _folder_scheduler.paused()
+            if _folder_scheduler is not None
+            else contextlib.nullcontext()
+        ):
+            yield
+    finally:
+        lock.release()
+
+
 def _run_index_job(
     vault_path: str,
     source: str,
@@ -2346,67 +2410,60 @@ def _run_index_job(
             _index_job.files_done = files_done
             _index_job.current_file = Path(current).name if current else ""
 
-    # One embedding run at a time in this process: the folder indexer waits.
-    pause = (
-        _folder_scheduler.paused()
-        if _folder_scheduler is not None
-        else contextlib.nullcontext()
-    )
     try:
-        pause.__enter__()
-        any_match = False
-        total_files = 0
-        for matched in globlib.iglob(pattern, recursive=True):
-            any_match = True
-            if os.path.isfile(matched):
-                total_files += 1
+        with _index_run_guard(vault_path):
+            any_match = False
+            total_files = 0
+            for matched in globlib.iglob(pattern, recursive=True):
+                any_match = True
+                if os.path.isfile(matched):
+                    total_files += 1
+                    with _index_job_lock:
+                        _index_job.total_files = total_files
+            if not any_match:
                 with _index_job_lock:
-                    _index_job.total_files = total_files
-        if not any_match:
-            with _index_job_lock:
-                _index_job.error = (
-                    f"'{source}' matched no files. Check the folder path "
-                    "or glob pattern."
-                )
-            return
-        with _index_job_lock:
-            _index_job.phase = "indexing"
-
-        chunk_count, skipped = index_documents_into_vault(
-            vault_path=vault_path,
-            source_pattern=pattern,
-            embedding_model=embedding_model,
-            embedding_source=embedding_source,
-            chunk_size=chunk_size,
-            shingle_size=shingle_size,
-            shingle_overlap=shingle_overlap,
-            overwrite=overwrite,
-            progress=report,
-        )
-        _refresh_pipelines(force=True)
-        _update_document_counts(vault_path)
-        with _index_job_lock:
-            if chunk_count == 0:
-                _index_job.error = (
-                    "The matched files contained no readable document "
-                    "content; nothing was indexed."
-                )
-            else:
-                _index_job.message = (
-                    f"Indexed {chunk_count} chunk(s) from "
-                    f"{_index_job.files_done} file(s) using "
-                    f"{embedding_source}/{embedding_model}."
-                )
-                if skipped:
-                    _index_job.message += (
-                        f" Skipped {skipped} chunk(s) that failed to embed "
-                        "— check the server log for details."
+                    _index_job.error = (
+                        f"'{source}' matched no files. Check the folder path "
+                        "or glob pattern."
                     )
+                return
+            with _index_job_lock:
+                _index_job.phase = "indexing"
+
+            chunk_count, skipped = index_documents_into_vault(
+                vault_path=vault_path,
+                source_pattern=pattern,
+                embedding_model=embedding_model,
+                embedding_source=embedding_source,
+                chunk_size=chunk_size,
+                shingle_size=shingle_size,
+                shingle_overlap=shingle_overlap,
+                overwrite=overwrite,
+                progress=report,
+            )
+            _refresh_pipelines(force=True)
+            _update_document_counts(vault_path)
+            with _index_job_lock:
+                if chunk_count == 0:
+                    _index_job.error = (
+                        "The matched files contained no readable document "
+                        "content; nothing was indexed."
+                    )
+                else:
+                    _index_job.message = (
+                        f"Indexed {chunk_count} chunk(s) from "
+                        f"{_index_job.files_done} file(s) using "
+                        f"{embedding_source}/{embedding_model}."
+                    )
+                    if skipped:
+                        _index_job.message += (
+                            f" Skipped {skipped} chunk(s) that failed to embed "
+                            "— check the server log for details."
+                        )
     except Exception as exc:
         with _index_job_lock:
             _index_job.error = str(exc)
     finally:
-        pause.__exit__(None, None, None)
         with _index_job_lock:
             _index_job.running = False
             _index_job.current_file = ""
@@ -2560,25 +2617,26 @@ def _run_fulltext_index_job(vault_path: str) -> None:
             next_log_pct = (pct // 10 + 1) * 10
 
     try:
-        documents = _iter_lancedb_docs_for_whoosh(vault_path)
-        with _fulltext_index_job_lock:
-            _fulltext_index_job.total_docs = len(documents)
-        print(
-            f"Building full-text index: {len(documents)} document(s) from {vault_path}",
-            flush=True,
-        )
-        _build_whoosh_index(vault_path, documents, progress=report)
-        _refresh_pipelines(force=True)
-        _update_document_counts(vault_path)
-        elapsed = time.monotonic() - started
-        print(
-            f"Full-text index built: {len(documents)} document(s) in {elapsed:.1f}s",
-            flush=True,
-        )
-        with _fulltext_index_job_lock:
-            _fulltext_index_job.message = (
-                f"Full-text index created with {len(documents)} document(s)."
+        with _index_run_guard(vault_path):
+            documents = _iter_lancedb_docs_for_whoosh(vault_path)
+            with _fulltext_index_job_lock:
+                _fulltext_index_job.total_docs = len(documents)
+            print(
+                f"Building full-text index: {len(documents)} document(s) from {vault_path}",
+                flush=True,
             )
+            _build_whoosh_index(vault_path, documents, progress=report)
+            _refresh_pipelines(force=True)
+            _update_document_counts(vault_path)
+            elapsed = time.monotonic() - started
+            print(
+                f"Full-text index built: {len(documents)} document(s) in {elapsed:.1f}s",
+                flush=True,
+            )
+            with _fulltext_index_job_lock:
+                _fulltext_index_job.message = (
+                    f"Full-text index created with {len(documents)} document(s)."
+                )
     except Exception as exc:
         print(f"Full-text index build failed: {exc}", flush=True)
         with _fulltext_index_job_lock:

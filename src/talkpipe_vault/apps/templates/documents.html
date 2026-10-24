@@ -149,6 +149,19 @@
 
         <fieldset class="index-step">
             <legend>Step 2 &middot; Vault to index into</legend>
+            {% if vault_path and vault_source_folder %}
+            <div class="vault-current" id="vault-folder-hint">
+                <span class="vault-current-path">
+                    Every document in this vault comes from
+                    <code>{{ vault_source_folder }}</code>. Search that folder
+                    directly instead: it is indexed in the background and kept
+                    up to date as files change (this vault is left as it is).
+                </span>
+                <button type="submit" form="vault-folder-hint-form" class="btn-secondary">
+                    Search the folder instead
+                </button>
+            </div>
+            {% endif %}
             {% if vault_path %}
             <div class="vault-current" id="vault-current">
                 <span class="vault-current-path">
@@ -378,6 +391,12 @@
     {% endif %}
 </div>
 </details>
+
+{% if vault_path and vault_source_folder %}
+<form method="post" action="/folders/add" id="vault-folder-hint-form">
+    <input type="hidden" name="folder_path" value="{{ vault_source_folder }}">
+</form>
+{% endif %}
 
 {% include "_dir_picker.html" %}
 
