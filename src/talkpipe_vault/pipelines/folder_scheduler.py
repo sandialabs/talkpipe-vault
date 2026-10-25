@@ -27,8 +27,7 @@ class FolderScheduler:
     files go through the keyword phase before any vector backlog. A
     machine-wide ``ingest.lock`` is held for each batch, so two vault
     processes interleave instead of both reaching ingestion's memory peak at
-    once; ``ingesting()`` lets another indexing run in this process take the
-    same turn.
+    once.
     """
 
     def __init__(self, ingest_lock_dir: Path | None = None):
@@ -152,22 +151,6 @@ class FolderScheduler:
             return
         try:
             yield True
-        finally:
-            self._ingest_lock.release()
-
-    @contextlib.contextmanager
-    def ingesting(self, timeout: float = 600.0) -> Iterator[None]:
-        """Hold the machine-wide ingestion turn for another indexing run.
-
-        Waits for the batch in progress (here or in another process) to
-        finish, so only one embedding run is in memory at a time.
-        """
-        if self._ingest_lock is None:
-            yield
-            return
-        self._ingest_lock.acquire(timeout=timeout)
-        try:
-            yield
         finally:
             self._ingest_lock.release()
 
