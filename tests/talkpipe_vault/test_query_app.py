@@ -480,8 +480,10 @@ def test_keyword_search_probe_detects_built_index(tmp_path):
     assert query._keyword_search_enabled(str(tmp_path)) is True
 
 
-def test_keyword_search_page_can_rebuild_existing_whoosh_index():
+def test_keyword_search_page_can_rebuild_existing_whoosh_index(monkeypatch):
     """Keyword search UI should expose index rebuild when Whoosh is available."""
+    # The page refreshes the pipelines itself, so the index check decides.
+    monkeypatch.setattr(query, "_keyword_search_enabled", lambda _vault_path: True)
     query._state.keyword_search_enabled = True
     client = TestClient(query.app)
 

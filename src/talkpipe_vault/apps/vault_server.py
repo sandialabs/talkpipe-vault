@@ -14,9 +14,8 @@ from talkpipe_vault.apps import access_control, user_settings
 from talkpipe_vault.apps.query import (
     _port_in_use,
     _running_instance_url,
-    is_documents_folder,
-    resumable_folders,
     run_app,
+    startup_folders,
 )
 from talkpipe_vault.pipelines.config import ensure_supported_vault_layout
 
@@ -177,19 +176,15 @@ def main() -> None:
     memtune.limit_malloc_arenas()
 
     vault_path = ""
-    resumed = False
-    folders = [str(Path(p).expanduser()) for p in args.dir]
-    if args.vault_path and not args.as_vault and is_documents_folder(args.vault_path):
-        folders.insert(0, str(Path(args.vault_path).expanduser()))
-        args.vault_path = ""
-    if not folders and (args.resume or not args.vault_path):
-        # The last session's folders reopen by default; --resume also falls
-        # back to the most recently used vault.
-        folders = resumable_folders()
-        resumed = bool(folders)
-        if not folders and args.resume:
-            vault_path = _most_recent_usable_vault()
-            resumed = bool(vault_path)
+    args.vault_path, folders, resumed, error = startup_folders(
+        args.vault_path, args.dir, resume=args.resume, as_vault=args.as_vault
+    )
+    if error:
+        parser.error(error)
+    if not folders and args.resume:
+        # --resume also falls back to the most recently used vault.
+        vault_path = _most_recent_usable_vault()
+        resumed = bool(vault_path)
     new_vault = False
     if not vault_path and not folders and args.vault_path:
         vault_path = str(Path(args.vault_path).expanduser())

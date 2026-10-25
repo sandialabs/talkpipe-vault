@@ -116,9 +116,8 @@ def _mkdir_failure(path: Path, exc: OSError) -> str:
 
 
 # The web page's notice, in this interface's names.
-SEMANTIC_SEARCH_WAITING = (
-    "Semantic search starts once the first documents are embedded (progress is "
-    "on the Vault tab). Keywords and Ask work now."
+SEMANTIC_SEARCH_WAITING = query.SEMANTIC_SEARCH_WAITING_TEMPLATE.format(
+    progress="the Vault tab", others="Keywords and Ask"
 )
 
 
@@ -166,15 +165,11 @@ class VaultService:
             return _fail(" ".join(problems))
         credentials.apply()
         query.load_saved_model_overrides()
-        folders = [str(Path(p).expanduser()) for p in folders or []]
-        if vault_path and not as_vault and query.is_documents_folder(vault_path):
-            folders.insert(0, str(Path(vault_path).expanduser()))
-            vault_path = ""
-        resumed_folders = False
-        if not folders and (resume or not vault_path):
-            # The last session's folders reopen by default, as in vault-server.
-            folders = query.resumable_folders()
-            resumed_folders = bool(folders)
+        vault_path, folders, resumed_folders, error = query.startup_folders(
+            vault_path, folders or [], resume=resume, as_vault=as_vault
+        )
+        if error:
+            return _fail(error)
         if folders:
             if progress is not None:
                 progress(self.opening_note(", ".join(folders)))
@@ -560,8 +555,7 @@ class VaultService:
             return _fail("Enter a folder or glob pattern to index.")
         if self.state.folders and not vault.strip():
             return _fail(
-                "Folders index themselves: add the folder under Folders above. "
-                "To index into a named vault instead, enter the vault."
+                query.FOLDERS_INDEX_THEMSELVES_TEMPLATE.format(how="enter the vault")
             )
         pattern = query._resolve_source_pattern(source)
         doc_roots = access_control.document_roots()
@@ -672,8 +666,8 @@ class VaultService:
             return _fail("The search pipeline is not available; check Settings.")
         if gone := self.vault_gone_note():
             return _fail(gone)
-        if query.semantic_search_waiting(state):
-            return _fail(SEMANTIC_SEARCH_WAITING)
+        if waiting := query.semantic_search_waiting(state, SEMANTIC_SEARCH_WAITING):
+            return _fail(waiting)
         try:
             query._refresh_pipelines()
             query._update_document_counts(state.vault_path)
@@ -720,10 +714,7 @@ class VaultService:
         if not state.keyword_search_enabled or not state.keyword_search_pipeline:
             if state.folders:
                 # As the web page says: folders build their own keyword index.
-                return _fail(
-                    "Keyword search starts shortly: the open folders are being "
-                    "scanned, and their keyword index is built first."
-                )
+                return _fail(query.KEYWORD_SEARCH_STARTING)
             return _fail(
                 "Keyword search needs a full-text index for this vault. Build "
                 "one with the Build full-text index button above."
@@ -761,18 +752,7 @@ class VaultService:
         if not self.state.vault_path:
             return _fail("No vault is open.")
         try:
-            found = (
-                query._folder_chunk(self.state, lookup_path)
-                if self.state.folders
-                else None
-            )
-            text = (
-                str(found[0].get("content", ""))
-                if found
-                else query._get_chunk_text_for_path_and_snippet(
-                    self.state.vault_path, lookup_path, snippet
-                )
-            )
+            text = query.chunk_text(self.state, lookup_path, snippet)
         except Exception as exc:
             return _fail(f"Could not load the chunk: {exc}")
         if not text:
@@ -784,13 +764,7 @@ class VaultService:
         if not self.state.vault_path:
             return _fail("No vault is open.")
         try:
-            path = (
-                query._folder_source_file(self.state, lookup_path)
-                if self.state.folders
-                else query._resolve_indexed_source_file(
-                    self.state.vault_path, lookup_path
-                )
-            )
+            path = query.resolve_source_file(self.state, lookup_path)
         except Exception as exc:
             return _fail(f"Could not resolve the source document: {exc}")
         if path is None:
@@ -1030,10 +1004,8 @@ class VaultService:
             previous["embedding_model"],
         ) != (models["embedding_source"], models["embedding_model"])
         if embedding_changed and state.folders:
-            message += (
-                " The embedding model changed. Each folder keeps searching with "
-                "the model it was indexed with until you re-embed it (Re-embed "
-                "selected, on the Vault tab)."
+            message += query.FOLDERS_KEEP_EMBEDDER_TEMPLATE.format(
+                action="Re-embed selected, on the Vault tab"
             )
         elif embedding_changed:
             message += (

@@ -119,3 +119,18 @@ class TestRetrievalTemplate:
         )
         assert get_retrieval_template("embeddinggemma") == "q: {query}"
         assert get_retrieval_template("nomic-embed-text") == "q: {query}"
+
+
+def test_a_leftover_writer_lock_does_not_make_a_vault_look_like_documents(tmp_path):
+    from talkpipe_vault.pipelines.config import (
+        WRITER_LOCK_FILENAME,
+        existing_non_vault_entries,
+    )
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    # A named-vault run that failed before writing anything leaves its lock.
+    (vault / WRITER_LOCK_FILENAME).write_text("")
+    assert existing_non_vault_entries(vault) == 0
+    (vault / "note.md").write_text("x")
+    assert existing_non_vault_entries(vault) == 1

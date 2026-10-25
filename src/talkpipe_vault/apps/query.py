@@ -536,7 +536,7 @@ def _folder_progress_text(status: dict[str, Any]) -> str:
 
 def _folder_banner(state: AppState) -> str:
     """The still-indexing notice every page shows, or "" when all are done."""
-    unfinished = [s for s in folders_status(state) if not s["complete"]]
+    unfinished = [s for s in folders_status(state) if not s["finished"]]
     if not unfinished:
         return ""
     names = ", ".join(_folder_progress_text(s) for s in unfinished)
@@ -546,13 +546,32 @@ def _folder_banner(state: AppState) -> str:
     )
 
 
-SEMANTIC_SEARCH_WAITING = (
+# Notices both interfaces show, worded once; the terminal interface fills in
+# its own page names (the Vault tab, the Keywords tab, ...).
+SEMANTIC_SEARCH_WAITING_TEMPLATE = (
     "Semantic search starts once the first documents are embedded (progress "
-    "is on Vaults & Documents). Keyword Search and Ask work now."
+    "is on {progress}). {others} work now."
+)
+SEMANTIC_SEARCH_WAITING = SEMANTIC_SEARCH_WAITING_TEMPLATE.format(
+    progress="Vaults & Documents", others="Keyword Search and Ask"
+)
+KEYWORD_SEARCH_STARTING = (
+    "Keyword search starts shortly: the open folders are being scanned, and "
+    "their keyword index is built first."
+)
+FOLDERS_INDEX_THEMSELVES_TEMPLATE = (
+    "Folders index themselves: add the folder under Folders above. To index "
+    "into a named vault instead, {how}."
+)
+FOLDERS_KEEP_EMBEDDER_TEMPLATE = (
+    " The embedding model changed: each folder keeps searching with the model "
+    "it was indexed with until you re-embed it ({action})."
 )
 
 
-def semantic_search_waiting(state: AppState) -> str:
+def semantic_search_waiting(
+    state: AppState, notice: str = SEMANTIC_SEARCH_WAITING
+) -> str:
     """Why semantic search is not offered yet, or "" when it is.
 
     In folder mode it waits until some open folder has vectors: before that
@@ -562,7 +581,7 @@ def semantic_search_waiting(state: AppState) -> str:
     if state.folders and not any(
         folder_index.vectors_started(path) for path in _index_paths(state)
     ):
-        return SEMANTIC_SEARCH_WAITING
+        return notice
     return ""
 
 
@@ -589,7 +608,7 @@ def ask_waiting(state: AppState) -> str:
 
 def _partial_index_note(state: AppState) -> str:
     """The Ask "Answered by" addition while folders are still embedding."""
-    unfinished = [s for s in folders_status(state) if not s["complete"]]
+    unfinished = [s for s in folders_status(state) if not s["finished"]]
     if not unfinished:
         return ""
     parts = ", ".join(
@@ -634,6 +653,11 @@ def _clear_pipelines(state: AppState) -> None:
     state.shingled_chunks_count = 0
 
 
+# Held while the list of open folders changes: two requests adding the same
+# folder at once (a double click) must not both get past the duplicate check.
+_folders_lock = threading.Lock()
+
+
 def add_folder(state: AppState, raw_path: str) -> tuple[str, str]:
     """Start searching the folder *raw_path* (and everything under it).
 
@@ -642,6 +666,11 @@ def add_folder(state: AppState, raw_path: str) -> tuple[str, str]:
     searched), and one containing open folders replaces them. Opening the
     first folder leaves named-vault mode. Indexing starts in the background.
     """
+    with _folders_lock:
+        return _add_folder(state, raw_path)
+
+
+def _add_folder(state: AppState, raw_path: str) -> tuple[str, str]:
     text = raw_path.strip()
     if not text:
         return "", "Choose a folder to search."
@@ -724,11 +753,12 @@ def remove_folder(
     Returns (message, error). Only the index directory is ever deleted,
     never the documents, and not while another process is indexing it.
     """
-    if root not in state.folders:
-        return "", f"{root} is not being searched."
-    folder = _close_folder(state, root)
-    user_settings.set_open_folders(state.folders)
-    _activate_folders(state)
+    with _folders_lock:
+        if root not in state.folders:
+            return "", f"{root} is not being searched."
+        folder = _close_folder(state, root)
+        user_settings.set_open_folders(state.folders)
+        _activate_folders(state)
     message = f"Stopped searching {root}."
     if delete_index and folder is not None:
         problem = folder_index.delete_folder_index(folder)
@@ -810,10 +840,44 @@ def resumable_folders() -> list[str]:
     return [p for p in user_settings.get_open_folders() if Path(p).is_dir()]
 
 
+def startup_folders(
+    vault_path: str, dirs: list[str], *, resume: bool, as_vault: bool
+) -> tuple[str, list[str], bool, str]:
+    """What a command line opens: the folders, and the vault path left over.
+
+    Shared by vault-server and vault-tui. A ``vault_path`` naming a folder
+    of documents joins the ``--dir`` folders unless *as_vault*; with no
+    folders, the last session's folders reopen when *resume* is set or no
+    path was given. Returns (vault_path, folders, resumed, error): a vault
+    path given together with ``--dir`` is an error, since folders and a
+    named vault do not open together.
+    """
+    folders = [str(Path(p).expanduser()) for p in dirs]
+    if vault_path and not as_vault and is_documents_folder(vault_path):
+        folders.insert(0, str(Path(vault_path).expanduser()))
+        vault_path = ""
+    if vault_path and folders:
+        return (
+            vault_path,
+            folders,
+            False,
+            (
+                "--dir cannot be combined with a vault path: folders and a named "
+                "vault do not open together."
+            ),
+        )
+    resumed = False
+    if not folders and (resume or not vault_path):
+        folders = resumable_folders()
+        resumed = bool(folders)
+    return vault_path, folders, resumed, ""
+
+
 def _leave_folder_mode(state: AppState) -> None:
     """Close every folder (they stay remembered) before opening a vault."""
-    for root in list(state.folders):
-        _close_folder(state, root)
+    with _folders_lock:
+        for root in list(state.folders):
+            _close_folder(state, root)
 
 
 def _folder_chunk(state: AppState, key: str) -> tuple[dict[str, Any], str] | None:
@@ -834,16 +898,49 @@ def _folder_chunk(state: AppState, key: str) -> tuple[dict[str, Any], str] | Non
 
 
 def _folder_source_file(state: AppState, key: str) -> Path | None:
-    """The document behind a folder result, confined to the open folders."""
+    """The document behind a folder result, confined to the open folders.
+
+    Only a stored chunk's own path is ever served: a key that names no
+    chunk resolves to nothing, so a request cannot pick an arbitrary file
+    under an open folder (the indexer skips dotfiles on purpose).
+    """
     found = _folder_chunk(state, key)
-    candidate = found[0].get("path", "") if found else key
-    if found:
-        root = folder_index.index_folder_root(found[1])
-        recorded = folder_index.read_index_status(found[1]).get("recorded_root")
-        if root is not None and recorded and candidate.startswith(recorded + os.sep):
-            candidate = str(root) + candidate[len(recorded) :]
+    if found is None:
+        return None
+    candidate = str(found[0].get("path", ""))
+    root = folder_index.index_folder_root(found[1])
+    recorded = folder_index.read_index_status(found[1]).get("recorded_root")
+    if root is not None and recorded and candidate.startswith(recorded + os.sep):
+        candidate = str(root) + candidate[len(recorded) :]
     confined = access_control.confine(candidate, [Path(r) for r in state.folders])
     return confined if confined is not None and confined.is_file() else None
+
+
+def chunk_text(state: AppState, key: str, snippet: str = "") -> str:
+    """The full text of the chunk a result's lookup key names ("" if none).
+
+    Both interfaces resolve results through this: in folder mode the key is
+    a chunk id found in the folders' keyword indexes, else it is a docs-row
+    id or indexed path in the open vault.
+    """
+    if state.folders:
+        found = _folder_chunk(state, key)
+        return str(found[0].get("content", "")) if found else ""
+    return next(
+        (
+            text
+            for index in _index_paths(state)
+            if (text := _get_chunk_text_for_path_and_snippet(index, key, snippet))
+        ),
+        "",
+    )
+
+
+def resolve_source_file(state: AppState, key: str) -> Path | None:
+    """The source document behind a result's lookup key, or None."""
+    if state.folders:
+        return _folder_source_file(state, key)
+    return _resolve_indexed_source_file(state.vault_path, key)
 
 
 def init_pipelines(vault_path: str) -> None:
@@ -2949,9 +3046,8 @@ async def index_documents(
         # folder indexer; a named-vault run must not write into it.
         return _redirect_with_message(
             "/documents",
-            error=(
-                "Folders index themselves: add the folder under Folders above. "
-                "To index into a named vault instead, choose the vault in Step 2."
+            error=FOLDERS_INDEX_THEMSELVES_TEMPLATE.format(
+                how="choose the vault in Step 2"
             ),
             source_path=source,
         )
@@ -3151,10 +3247,8 @@ async def save_settings(
         models["embedding_model"],
     )
     if embedding_changed and state.folders:
-        message += (
-            " The embedding model changed: each folder keeps searching with the "
-            "model it was indexed with until you re-embed it (Re-embed, on "
-            "Vaults & Documents)."
+        message += FOLDERS_KEEP_EMBEDDER_TEMPLATE.format(
+            action="Re-embed, on Vaults & Documents"
         )
     elif embedding_changed:
         message += (
@@ -3302,6 +3396,10 @@ async def keyword_search_page(
     state: AppState = Depends(get_state),
 ) -> Response:
     """Render the keyword search interface page."""
+    # Folders build their keyword index in the background: pick it up when it
+    # appears rather than showing the page as disabled until some other
+    # request refreshes the pipelines.
+    _refresh_pipelines()
     return _render_page(
         request,
         state,
@@ -3339,7 +3437,11 @@ async def keyword_search_results(
     _update_document_counts(state.vault_path)
 
     if query.strip() and not state.keyword_search_enabled:
-        error = "Keyword search is disabled because this vault has no Whoosh index."
+        error = (
+            KEYWORD_SEARCH_STARTING
+            if state.folders
+            else "Keyword search is disabled because this vault has no Whoosh index."
+        )
     elif query.strip() and state.keyword_search_pipeline:
         try:
             # Perform search with refreshed pipeline
@@ -3418,22 +3520,7 @@ async def chunk_content(
         )
 
     try:
-        found = _folder_chunk(state, path) if state.folders else None
-        if found:
-            full_text = str(found[0].get("content", ""))
-        else:
-            full_text = next(
-                (
-                    text
-                    for index in _index_paths(state)
-                    if (
-                        text := _get_chunk_text_for_path_and_snippet(
-                            index, path, snippet
-                        )
-                    )
-                ),
-                "",
-            )
+        full_text = chunk_text(state, path, snippet)
     except Exception:
         # The exception text can carry paths and library internals; it goes
         # to the server log, not the response.
@@ -3526,11 +3613,7 @@ async def open_file(
         )
 
     try:
-        source_path = (
-            _folder_source_file(state, path)
-            if state.folders
-            else _resolve_indexed_source_file(state.vault_path, path)
-        )
+        source_path = resolve_source_file(state, path)
     except Exception:
         logger.exception("Failed to look up the source file")
         return JSONResponse(

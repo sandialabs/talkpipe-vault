@@ -335,16 +335,33 @@ def test_cli_as_vault_keeps_the_old_behavior(monkeypatch, docs, captured_run):
     assert captured_run["vault_path"] == str(docs)
 
 
-def test_cli_dir_flags_and_an_empty_vault_folder(
-    monkeypatch, docs, tmp_path, captured_run
-):
-    vault = tmp_path / "new-vault"
+def test_cli_dir_flags(monkeypatch, docs, captured_run):
     monkeypatch.setattr(
         "sys.argv",
-        ["vault-server", str(vault), "--dir", str(docs), "--dir", str(docs / "sub")],
+        ["vault-server", "--dir", str(docs), "--dir", str(docs / "sub")],
     )
     vault_server.main()
     assert captured_run["folders"] == [str(docs), str(docs / "sub")]
+
+
+def test_cli_refuses_a_vault_path_together_with_dir(
+    monkeypatch, docs, tmp_path, captured_run, capsys
+):
+    # Folders and a named vault do not open together; the vault must not be
+    # dropped silently (the same resolver serves vault-tui).
+    vault = tmp_path / "new-vault"
+    monkeypatch.setattr(
+        "sys.argv", ["vault-server", str(vault), "--dir", str(docs), "--no-browser"]
+    )
+    with pytest.raises(SystemExit):
+        vault_server.main()
+    assert "--dir cannot be combined with a vault path" in capsys.readouterr().err
+    assert not captured_run
+    _, folders, _, error = query.startup_folders(
+        str(vault), [str(docs)], resume=False, as_vault=False
+    )
+    assert folders == [str(docs)]
+    assert error
 
 
 def test_cli_resume_reopens_the_last_folders(monkeypatch, docs, captured_run):
@@ -464,3 +481,75 @@ def test_the_first_folders_embedder_does_not_become_everyones(client, docs, tmp_
     assert by_name["first"]["embedding_differs"]
     assert not by_name["docs"]["embedding_differs"]
     assert by_name["docs"]["embedding"] == f"{FAKE_EMBEDDING_SOURCE}/fake"
+
+
+def test_open_file_serves_only_indexed_documents(client, docs):
+    # Dotfiles are never indexed, so a request naming one must not be served
+    # just because it lies under an open folder.
+    (docs / ".env").write_text("SECRET=1\n")
+    query.add_folder(query._state, str(docs))
+    assert _wait(_complete)
+    query._refresh_pipelines(force=True)
+    assert (
+        client.get("/open-file", params={"path": str(docs / ".env")}).status_code == 404
+    )
+    assert (
+        client.get(
+            "/open-file", params={"path": str(docs / "lighthouse.txt")}
+        ).status_code
+        == 404
+    )
+    [hit] = query._process_semantic_results(
+        query._state.search_pipeline("lighthouse storm")
+    )[:1]
+    served = client.get("/open-file", params={"path": hit["lookup_path"]})
+    assert served.status_code == 200
+    assert b"lighthouse keeper" in served.content
+
+
+def test_an_empty_folder_is_finished_not_still_indexing(client, tmp_path):
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    query.add_folder(query._state, str(empty))
+    assert _wait(
+        lambda: all(s["phase"] == "ready" for s in query.folders_status(query._state))
+    )
+    assert query._folder_banner(query._state) == ""
+    assert query._partial_index_note(query._state) == ""
+    assert client.get("/api/index-status").json()["banner"] == ""
+
+
+def test_adding_the_same_folder_twice_at_once_opens_it_once(docs):
+    import threading
+
+    outcomes = []
+    threads = [
+        threading.Thread(
+            target=lambda: outcomes.append(query.add_folder(query._state, str(docs)))
+        )
+        for _ in range(4)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert query._state.folders == [str(docs.resolve())]
+    assert len(query._open_folder_indexes(query._state)) == 1
+    assert sum(1 for message, _ in outcomes if message.startswith("Searching")) == 1
+
+
+def test_keyword_page_picks_up_the_folder_index_on_its_own(client, docs, monkeypatch):
+    query.add_folder(query._state, str(docs))
+    assert _wait(_searchable_by_keyword)
+    # Stale: nothing has refreshed the pipelines since the index appeared.
+    query._state.keyword_search_enabled = False
+    query._state.last_refresh_time = 0.0
+    page = client.get("/keyword-search").text
+    assert "Keyword search starts shortly" not in page
+    assert 'id="search-btn" disabled' not in page
+    # Before the index exists, a search says it is coming, in folder terms.
+    monkeypatch.setattr(query, "_refresh_pipelines", lambda force=False: None)
+    query._state.keyword_search_enabled = False
+    page = client.post("/keyword-search", data={"query": "lighthouse"}).text
+    assert html.escape(query.KEYWORD_SEARCH_STARTING, quote=False) in page
+    assert "no Whoosh index" not in page
