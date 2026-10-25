@@ -722,3 +722,18 @@ def test_ask_says_indexing_just_started(tmp_path, monkeypatch):
     assert outcome["ok"]
     assert outcome["answer"] == query.ASK_WAITING
     assert outcome["answered_by"] == ""
+
+
+def test_startup_reopens_the_last_sessions_folders(tmp_path):
+    docs = tmp_path / "notes"
+    docs.mkdir()
+    (docs / "a.md").write_text("# Lighthouse\n\nThe keeper logged a storm.\n")
+    assert VaultService().startup()["message"].startswith("No vault selected yet")
+    user_settings.set_open_folders([str(docs)])
+    user_settings.set_last_session(user_settings.SESSION_FOLDERS)
+    service = VaultService()
+    outcome = service.startup()
+    assert outcome["ok"]
+    assert outcome["folders"]
+    assert "(last session)" in outcome["message"]
+    assert service.state.folders == [str(docs.resolve())]

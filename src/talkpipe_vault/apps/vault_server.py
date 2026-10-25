@@ -152,7 +152,8 @@ def main() -> None:
         help=(
             "Reopen what the web interface last had open: its folders, or "
             "the most recently used vault. Falls back to vault_path — or the "
-            "Vaults & Documents page — when nothing is usable."
+            "Vaults & Documents page — when nothing is usable. Without a "
+            "path, the last session's folders reopen even without --resume."
         ),
     )
 
@@ -181,10 +182,12 @@ def main() -> None:
     if args.vault_path and not args.as_vault and is_documents_folder(args.vault_path):
         folders.insert(0, str(Path(args.vault_path).expanduser()))
         args.vault_path = ""
-    if args.resume and not folders:
+    if not folders and (args.resume or not args.vault_path):
+        # The last session's folders reopen by default; --resume also falls
+        # back to the most recently used vault.
         folders = resumable_folders()
         resumed = bool(folders)
-        if not folders:
+        if not folders and args.resume:
             vault_path = _most_recent_usable_vault()
             resumed = bool(vault_path)
     new_vault = False

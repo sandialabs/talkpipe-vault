@@ -57,7 +57,8 @@ src/talkpipe_vault/
 
 `vault-server [folder|vault_path] [--dir FOLDER ...] [--as-vault] [--resume] [--host] [--port] [--show-source-paths] [--no-browser]` —
 `--resume` opens the most recently used vault (fallback: vault_path); the vault path is
-optional; without it the UI starts on the Vaults & Documents page.
+optional; without it the last session's folders reopen, else the UI starts on the
+Vaults & Documents page.
 
 Startup (`apps/vault_server.py`): if a vault already serves the port (checked
 through the unauthenticated `GET /api/health`, which reports `DIST_NAME` and
@@ -232,7 +233,8 @@ keep it that way so `indexFolder`/`watchFolders` stay usable in other applicatio
   indexer (`_index_run_guard`), and refuse a folder's index.
 - CLI (`vault-server`, `vault-tui`): a folder of documents opens in folder mode
   (`is_documents_folder`), `--dir` repeats, `--as-vault` restores the old behavior,
-  `--resume` prefers the last session's folders (`resumable_folders`). Settings:
+  `--resume` prefers the last session's folders (`resumable_folders`), which also
+  reopen by default when no path or `--dir` is given. Settings:
   `open_folders`, `recent_folders`, `last_session`, `index_location`.
 - `pipelines/folder_changes.py` (`folderChanges`) reuses the indexer's walk, change filter,
   watcher and location rules but shares no state with it: it reads no contents (pipelines

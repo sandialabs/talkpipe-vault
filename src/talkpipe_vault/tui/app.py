@@ -2310,7 +2310,8 @@ def main(argv: list[str] | None = None) -> None:
         action="store_true",
         help=(
             "Reopen the last session's folders, or the most recently used "
-            "vault (falls back to vault_path)."
+            "vault (falls back to vault_path). Without a path, the last "
+            "session's folders reopen even without --resume."
         ),
     )
     parser.add_argument(

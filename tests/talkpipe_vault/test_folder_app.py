@@ -355,6 +355,29 @@ def test_cli_resume_reopens_the_last_folders(monkeypatch, docs, captured_run):
     assert captured_run["folders"] == [str(Path(docs).resolve())]
 
 
+def test_cli_reopens_the_last_folders_by_default(monkeypatch, docs, captured_run):
+    monkeypatch.setattr("sys.argv", ["vault-server", "--no-browser"])
+    vault_server.main()
+    assert captured_run["folders"] == []  # nothing opened yet: choose a folder
+    assert captured_run["vault_path"] == ""
+    user_settings.set_open_folders([str(Path(docs).resolve())])
+    user_settings.set_last_session(user_settings.SESSION_FOLDERS)
+    vault_server.main()
+    assert captured_run["folders"] == [str(Path(docs).resolve())]
+    # A last session on a named vault does not reopen its folders, nor the vault.
+    user_settings.set_last_session(user_settings.SESSION_VAULT)
+    vault_server.main()
+    assert captured_run["folders"] == []
+    assert captured_run["vault_path"] == ""
+    # A path given on the command line wins over the last session.
+    user_settings.set_last_session(user_settings.SESSION_FOLDERS)
+    vault = docs.parent / "named"
+    monkeypatch.setattr("sys.argv", ["vault-server", str(vault), "--no-browser"])
+    vault_server.main()
+    assert captured_run["folders"] == []
+    assert captured_run["vault_path"] == str(vault)
+
+
 # -- named vaults next to folder mode -------------------------------------------
 
 

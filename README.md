@@ -80,7 +80,8 @@ vault-server
 
 Your browser opens at http://127.0.0.1:8002 (`--no-browser` skips that), or
 start it on a folder straight away with `vault-server ~/notes` (see
-[Folders](#folders)). Then:
+[Folders](#folders)). Started again later, `vault-server` reopens the folders
+you had open. Then:
 
 1. **Vaults & Documents** — add the folders you want to ask about (type a
    path or click **Browse…**, then **Add folder**). Each is indexed in the
@@ -171,7 +172,7 @@ by the same `pip install talkpipe-vault` (or container image) as
 vault-tui ~/notes         # search a folder of documents (add more with --dir)
 vault-tui ~/my-vault      # open (or create) a named vault — the index folder, not your documents
 vault-tui --resume        # reopen the last session's folders, or the most recent vault
-vault-tui                 # start on the Vault tab and choose there
+vault-tui                 # reopen the last session's folders, else choose on the Vault tab
 ```
 
 A folder of documents opens in folder mode, as with `vault-server`: it is

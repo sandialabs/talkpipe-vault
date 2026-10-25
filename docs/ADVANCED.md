@@ -37,8 +37,9 @@ not match the index.
 vault-server [~/notes | ~/my-vault] [--dir FOLDER ...] [--as-vault] [--resume] [--host 0.0.0.0] [--port 8002] [--show-source-paths] [--no-browser]
 ```
 
-- The path is optional; without it the app starts on the
-  Vaults & Documents page.
+- The path is optional; without it the app reopens the folders the last
+  session had open, or starts on the Vaults & Documents page when the last
+  session had none (it used a named vault, or every folder was removed).
 - A folder of documents opens in **folder mode** (see
   [Folder mode](#folder-mode)): it is searched directly, indexed in the
   background into `~/notes/.tpvault`. A vault folder, or an empty or

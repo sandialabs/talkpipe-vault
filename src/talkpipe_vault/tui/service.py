@@ -157,8 +157,9 @@ class VaultService:
 
         Folder mode, as with ``vault-server``: *folders* (``--dir``) are
         searched directly, a ``vault_path`` that is a folder of documents
-        joins them unless *as_vault*, and *resume* reopens the last
-        session's folders before falling back to the last vault.
+        joins them unless *as_vault*, and with no path at all the last
+        session's folders reopen; *resume* also reopens them (ahead of a
+        ``vault_path``) and falls back to the last vault.
         """
         problems = access_control.startup_errors()
         if problems:
@@ -170,7 +171,8 @@ class VaultService:
             folders.insert(0, str(Path(vault_path).expanduser()))
             vault_path = ""
         resumed_folders = False
-        if resume and not folders:
+        if not folders and (resume or not vault_path):
+            # The last session's folders reopen by default, as in vault-server.
             folders = query.resumable_folders()
             resumed_folders = bool(folders)
         if folders:
