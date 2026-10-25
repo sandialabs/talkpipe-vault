@@ -78,19 +78,26 @@ uv tool install talkpipe-vault
 vault-server
 ```
 
-Your browser opens at http://127.0.0.1:8002 (`--no-browser` skips that). Then:
+Your browser opens at http://127.0.0.1:8002 (`--no-browser` skips that), or
+start it on a folder straight away with `vault-server ~/notes` (see
+[Folders](#folders)). Then:
 
-1. **Vaults & Documents** — pick the folder (or glob pattern) to index. A
-   vault name is suggested for you (under your home directory); one click
-   creates the vault and indexes into it. The first index downloads the
-   default embedding model from Hugging Face (about 250 MB on disk, cached
-   afterward).
-2. **Semantic Search** and **Ask** away.
-3. **Keyword Search** works once you build its index: that page starts
-   disabled and offers a **Create Full-Text Index** button, which builds a
-   separate full-text index from the documents already in the vault. It is a
-   one-off, but indexing more documents later does not refresh it — rebuild
-   it from the same page when you do.
+1. **Vaults & Documents** — add the folders you want to ask about (type a
+   path or click **Browse…**, then **Add folder**). Each is indexed in the
+   background and kept up to date; its progress shows in the list. The
+   first index downloads the default embedding model from Hugging Face
+   (about 250 MB on disk, cached afterward).
+2. **Semantic Search**, **Keyword Search** and **Ask** away — right away,
+   while indexing is still running.
+
+Prefer an index kept in a separate folder of its own? That is a named
+vault, under **Named vaults (advanced)** on the same page: pick the
+documents (a folder or glob pattern) and a vault name is suggested; one
+click creates the vault and indexes into it. A named vault's **Keyword
+Search** starts disabled and offers a **Create Full-Text Index** button;
+indexing more documents later does not refresh that index — rebuild it from
+the same page when you do. (Folders keep their keyword index current on
+their own.)
 
 Search and indexing need nothing more. Answers on the Ask page need a chat
 provider — Ollama, OpenAI, or Anthropic. Pick it on the **Settings** page
@@ -161,14 +168,17 @@ by the same `pip install talkpipe-vault` (or container image) as
 `vault-server`; there is nothing extra to install.
 
 ```bash
-vault-tui ~/my-vault      # open (or create) a vault — the index folder, not your documents
-vault-tui --resume        # reopen the most recently used vault
-vault-tui                 # start on the Vault tab and choose one there
+vault-tui ~/notes         # search a folder of documents (add more with --dir)
+vault-tui ~/my-vault      # open (or create) a named vault — the index folder, not your documents
+vault-tui --resume        # reopen the last session's folders, or the most recent vault
+vault-tui                 # start on the Vault tab and choose there
 ```
 
-A vault is a folder that holds the search index; the documents live wherever
-they already are and are named on the Vault tab. Point `vault-tui` at a folder
-of documents by mistake and it asks before turning that folder into a vault.
+A folder of documents opens in folder mode, as with `vault-server`: it is
+indexed in the background and searchable at once (see [Folders](#folders));
+`--as-vault` opens it as a named vault instead. A named vault is a folder
+that holds only the search index; its documents live wherever they already
+are and are named on the Vault tab.
 Opening a vault loads the embedding model, which on a first run means
 downloading it (about 250 MB for the default model2vec model) — the Vault tab
 says so while it waits, and the header reads "opening…" until the vault is
@@ -245,8 +255,12 @@ That is all: there is no vault to name or create. Each folder, and
 everything under it, is indexed in the background — keywords first, so it
 is searchable within minutes, then meaning — and you can search and ask
 right away; until indexing finishes, every page says so and keyword matches
-are included for files not embedded yet. New, changed and deleted files are
-picked up as they happen. Quitting part-way loses nothing: indexing resumes
+are included for files not embedded yet. With several folders open, every
+result names the folder it came from. New, changed and deleted files are
+picked up as they happen. Hidden files and folders (`.git`, `.obsidian`,
+…), editor temporary files and formats no extractor reads are skipped, so
+a folder's file count can be lower than what `ls -R` shows. Quitting
+part-way loses nothing: indexing resumes
 where it left off, and a second vault-server or vault-tui opened on the same
 folder shares its index instead of building another.
 
@@ -306,10 +320,11 @@ scripts, or to follow a folder's changes as a stream of documents, see
   an error note quoting what the server said. To use the agent's tools in
   your own application, or over your own search backend, see the
   [agent retrieval developer's guide](docs/AGENT_RETRIEVAL.md).
-- **Keyword Search** — boolean and phrase queries, over a separate full-text
-  index you build once with the button on that page (the page says so, and
-  stays disabled until you do). Indexing documents never updates it, so
-  rebuild it there after adding more. Matching is case-insensitive but on
+- **Keyword Search** — boolean and phrase queries. Folders keep their
+  full-text index current on their own; a named vault's is separate, built
+  once with the button on that page (the page says so, and stays disabled
+  until you do), and indexing documents never updates it, so rebuild it
+  there after adding more. Matching is case-insensitive but on
   exact word tokens (`apple` won't match `apples`), and very common words are
   not indexed; use semantic search for meaning-based lookups.
 - **Ask** — single-turn Q&A with source citations you can open and copy.
@@ -408,6 +423,9 @@ The [Advanced Guide](docs/ADVANCED.md) covers:
 
 - Command-line indexing with `makevectordatabase` and the full `vault-server`
   flag reference
+- [Folder pipelines](docs/FOLDER_PIPELINES.md) — indexing, watching,
+  following and searching folders from Python or ChatterLang
+  (`indexFolder`, `watchFolders`, `folderChanges`)
 - The compose service and deriving a customized container image
 - The complete model configuration reference
 - Architecture, the reusable TalkPipe sources/segments, and building your own

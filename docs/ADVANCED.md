@@ -42,9 +42,12 @@ vault-server [~/notes | ~/my-vault] [--dir FOLDER ...] [--as-vault] [--resume] [
 - A folder of documents opens in **folder mode** (see
   [Folder mode](#folder-mode)): it is searched directly, indexed in the
   background into `~/notes/.tpvault`. A vault folder, or an empty or
-  missing one, opens as a named vault as before; `--as-vault` forces that
-  for a folder of documents (the behavior before folder mode).
-- `--dir FOLDER` adds a folder to search; repeat it for several.
+  missing one, opens as a named vault as before (a missing one is created,
+  and the startup banner says it is new and empty, so a mistyped folder
+  name shows); `--as-vault` forces that for a folder of documents (the
+  behavior before folder mode).
+- `--dir FOLDER` adds a folder to search; repeat it for several. One that
+  does not exist is left out with a warning.
 - `--resume` reopens what the web interface last had open: its folders, or
   else the vault most recently used, falling back to the given path (or the
   Vaults & Documents page) when nothing is usable. This is how the container

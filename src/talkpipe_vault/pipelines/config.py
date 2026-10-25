@@ -52,8 +52,11 @@ Configuration can be set via:
 """
 
 import os
+from pathlib import Path
 
 from talkpipe.util.config import get_config
+
+from .vault_metadata import METADATA_FILENAME
 
 # Default values (used if not specified in TalkPipe config).
 # model2vec runs in-process (no server or API key); the model is downloaded
@@ -194,6 +197,27 @@ def ensure_supported_vault_layout(vault_path: str) -> None:
             "Migrate by moving LanceDB contents from vector_vault/ into the "
             "vault root path, then retry."
         )
+
+
+def existing_non_vault_entries(vault_path: Path) -> int:
+    """Return how many entries an existing folder holds if it has no vault data.
+
+    Zero means the folder is missing, empty, or already contains vault data
+    (docs table, vault metadata, full-text index, or the rejected legacy
+    layout) — i.e. opening it as a vault touches nothing that isn't ours, or
+    fails with the proper migration guidance.
+    """
+    if not vault_path.is_dir():
+        return 0
+    vault_markers = (
+        f"{DEFAULT_VECTOR_TABLE_NAME}.lance",
+        METADATA_FILENAME,
+        FULLTEXT_VAULT_SUBDIR,
+        VECTOR_VAULT_SUBDIR,
+    )
+    if any((vault_path / marker).exists() for marker in vault_markers):
+        return 0
+    return sum(1 for _ in vault_path.iterdir())
 
 
 def get_chat_model() -> str:

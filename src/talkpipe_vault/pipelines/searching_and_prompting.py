@@ -42,6 +42,7 @@ from .config import (
     RAG_PROMPT_DIRECTIVE,
     RAG_SYSTEM_PROMPT,
     ensure_supported_vault_layout,
+    existing_non_vault_entries,
     get_chat_model,
     get_chat_source,
     get_retrieval_template,
@@ -461,6 +462,33 @@ def resolve_vault_paths(vault_path: str | Iterable[str]) -> list[str]:
     return resolved
 
 
+def check_searchable(paths: list[str]) -> None:
+    """Refuse a search of a path that does not exist, or of a folder of
+    documents that has no index yet, with a ValueError that says so.
+
+    Searching either would otherwise create folders (an empty vault at a
+    mistyped path, a full-text index inside the documents folder) and
+    quietly find nothing. Checked when a search runs, not when the segment
+    is built, so an interface can build its pipelines for a vault before
+    the vault is indexed or while it reports one that went missing.
+    """
+    for path in paths:
+        if not os.path.isdir(path):
+            what = "is not a folder" if os.path.exists(path) else "does not exist"
+            raise ValueError(f"Cannot search {path!r}: it {what}. Check the path.")
+        if (
+            folder_index.index_folder_root(path) is None
+            and existing_non_vault_entries(Path(path)) > 0
+        ):
+            raise ValueError(
+                f"Cannot search {path!r}: it holds documents but no index yet. "
+                "Index a folder with indexFolder (once) or watchFolders (kept "
+                "up to date), or open it in vault-server or vault-tui; build a "
+                "named vault with makevectordatabase or the Vaults & Documents "
+                "page."
+            )
+
+
 def needs_fan_out(paths: list[str]) -> bool:
     """True unless *paths* is one named vault, which keeps its own pipeline.
 
@@ -569,17 +597,33 @@ class _FanOutVectorSearch:
         }
 
     def __call__(self, query: str) -> list[SearchResult]:
+        results, failed = self.search_reachable(query)
+        if failed:
+            raise failed[0][1]
+        return results
+
+    def search_reachable(
+        self, query: str
+    ) -> tuple[list[SearchResult], list[tuple[_IndexView, Exception]]]:
+        """Search with every embedder that answers; also return the indexes
+        whose embedder failed, with the error, so the caller can fall back
+        for just those rather than for every folder."""
         lists: list[list[SearchResult]] = []
+        failed: list[tuple[_IndexView, Exception]] = []
         for embedder, template, views in self.groups:
-            vector = embedder.execute_one(template.replace("{query}", str(query)))
+            try:
+                vector = embedder.execute_one(template.replace("{query}", str(query)))
+            except Exception as exc:
+                failed.extend((view, exc) for view in views)
+                continue
             hits: list[tuple[float, SearchResult]] = []
             for view in views:
                 hits.extend(self._search(view, vector))
             hits.sort(key=lambda hit: hit[0])
             lists.append([result for _, result in hits[: self.limit]])
-        if len(lists) == 1:
-            return lists[0]
-        return reciprocal_rank_fusion(lists, limit=self.limit)
+        if len(lists) <= 1:
+            return (lists[0] if lists else []), failed
+        return reciprocal_rank_fusion(lists, limit=self.limit), failed
 
     def _search(
         self, view: _IndexView, vector: Any
@@ -846,6 +890,7 @@ class VaultSearch(AbstractFieldSegment):
         for path in paths:
             ensure_supported_vault_layout(path)
         self.vault_path = vault_path
+        self._paths = paths
         if needs_fan_out(paths):
             self.pipeline = self._fan_out(
                 paths, embedding_model, embedding_source, limit, keyword_fallback
@@ -883,22 +928,23 @@ class VaultSearch(AbstractFieldSegment):
         def run(value: Any) -> list[SearchResult]:
             if not keyword_fallback:
                 return search(str(value))
-            try:
-                results = search(str(value))
-            except Exception:
-                # The embedder is unreachable: answer from keywords alone
-                # rather than not at all.
+            results, failed = search.search_reachable(str(value))
+            for view, exc in failed:
+                # Its embedder is unreachable: answer for that folder from
+                # keywords alone rather than not at all.
                 logger.warning(
-                    "Semantic search failed; using keyword search only", exc_info=True
+                    "Semantic search of %s failed (%s); using keyword search for it",
+                    view.label,
+                    exc,
                 )
-                results, unfinished = [], search.views
-            else:
-                # Re-checked per query: the index finishes embedding over time.
-                unfinished = [
-                    view
-                    for view in search.views
-                    if not folder_index.vectors_complete(view.path)
-                ]
+            failed_paths = {view.path for view, _ in failed}
+            # Re-checked per query: the index finishes embedding over time.
+            unfinished = [
+                view
+                for view in search.views
+                if view.path in failed_paths
+                or not folder_index.vectors_complete(view.path)
+            ]
             if not unfinished:
                 return results
             keyword_hits = _FanOutTextSearch(unfinished, result_limit)(
@@ -913,6 +959,7 @@ class VaultSearch(AbstractFieldSegment):
         return run
 
     def process_value(self, value: str) -> Any:
+        check_searchable(self._paths)
         return self.pipeline(value)
 
 
@@ -1004,6 +1051,7 @@ class VaultChat(AbstractFieldSegment):
     ):
         super().__init__(field=field, set_as=set_as, multi_emit=multi_emit)
         paths = resolve_vault_paths(vault_path)
+        self._paths = paths
         fan_out = needs_fan_out(paths)
         if include_background and not (
             keyword_search or result_filter_script or fan_out
@@ -1191,6 +1239,7 @@ class VaultChat(AbstractFieldSegment):
         self._emits_item = keyword_search or bool(result_filter_script) or fan_out
 
     def process_value(self, value: str) -> Any:
+        check_searchable(self._paths)
         result = self.pipeline(value)
         if not self._emits_item:
             return result
@@ -1248,6 +1297,7 @@ class VaultTextSearch(AbstractFieldSegment):
         for path in paths:
             ensure_supported_vault_layout(path)
         self.vault_path = vault_path
+        self._paths = paths
         self._fan_out = (
             _FanOutTextSearch(_index_views(paths), limit)
             if needs_fan_out(paths)
@@ -1264,6 +1314,7 @@ class VaultTextSearch(AbstractFieldSegment):
         ).as_function(single_in=True, single_out=False)
 
     def process_value(self, value: str) -> list[dict[str, Any]]:
+        check_searchable(self._paths)
         if self._fan_out is not None:
             return self._fan_out(value)
         results = []

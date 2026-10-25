@@ -998,10 +998,17 @@ class VaultService:
                 )
         models = query._effective_models(state)
         message = "Settings saved."
-        if (previous["embedding_source"], previous["embedding_model"]) != (
-            models["embedding_source"],
-            models["embedding_model"],
-        ):
+        embedding_changed = (
+            previous["embedding_source"],
+            previous["embedding_model"],
+        ) != (models["embedding_source"], models["embedding_model"])
+        if embedding_changed and state.folders:
+            message += (
+                " The embedding model changed. Each folder keeps searching with "
+                "the model it was indexed with until you re-embed it (Re-embed "
+                "selected, on the Vault tab)."
+            )
+        elif embedding_changed:
             message += (
                 " The embedding model changed. A vault keeps the embedder it was "
                 "indexed with when it is reopened (Ctrl+R restores it for the "

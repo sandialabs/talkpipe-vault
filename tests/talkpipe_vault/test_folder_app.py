@@ -129,6 +129,28 @@ def test_search_ask_and_lookups_work_over_a_folder(client, docs):
     assert answer.status_code == 200
 
 
+def test_results_name_their_folder_when_several_are_open(client, docs, tmp_path):
+    page = client.get("/documents").text
+    assert ".flash-status[hidden]" in page  # an empty banner stays hidden
+    query.add_folder(query._state, str(docs))
+    assert _wait(_complete)
+    query._refresh_pipelines(force=True)
+    one = client.post("/search", data={"query": "lighthouse storm"}).text
+    assert "lighthouse.txt — " not in one  # one folder: nothing to tell apart
+
+    other = tmp_path / "other"
+    other.mkdir()
+    (other / "lighthouse.txt").write_text("A second lighthouse, on the south cape.\n")
+    query.add_folder(query._state, str(other))
+    assert _wait(_complete)
+    query._refresh_pipelines(force=True)
+    page = client.post("/search", data={"query": "lighthouse"}).text
+    assert "lighthouse.txt — docs" in page
+    assert "lighthouse.txt — other" in page
+    keywords = client.post("/keyword-search", data={"query": "lighthouse"}).text
+    assert "lighthouse.txt — other" in keywords
+
+
 def test_unfinished_folder_is_flagged_and_still_answers(client, docs, folder_app):
     folder_app["fail_after"] = 0  # the embedder is down: keywords only
     query.add_folder(query._state, str(docs))
@@ -155,6 +177,14 @@ def test_nested_folders_are_covered_once(client, docs):
     assert query._state.folders == [str(docs.resolve())]
     _, error = query.add_folder(query._state, str(docs / "sub"))
     assert "already covered" in error
+
+
+def test_adding_a_missing_folder_or_a_file_says_which(client, docs):
+    _, error = query.add_folder(query._state, str(docs.parent / "dcos"))
+    assert error.endswith("does not exist.")
+    _, error = query.add_folder(query._state, str(docs / "lighthouse.txt"))
+    assert error.endswith("is not a folder.")
+    assert query._state.folders == []
 
 
 def test_removing_a_folder_can_delete_its_index_only(client, docs):
@@ -307,3 +337,38 @@ def test_a_second_run_on_the_same_named_vault_is_refused(tmp_path, docs):
     assert "Another vault process is indexing this vault" in str(
         query._index_job_snapshot()["error"]
     )
+
+
+def test_changing_the_embedder_points_folders_at_re_embed(client, docs):
+    query.add_folder(query._state, str(docs))
+    response = client.post(
+        "/settings",
+        data={"embedding_source": FAKE_EMBEDDING_SOURCE, "embedding_model": "fake-2"},
+        follow_redirects=False,
+    )
+    location = response.headers["location"]
+    assert "Re-embed" in location
+    assert "Overwrite" not in location
+
+
+def test_the_first_folders_embedder_does_not_become_everyones(client, docs, tmp_path):
+    from talkpipe_vault.pipelines import folder_index
+
+    first = tmp_path / "first"
+    first.mkdir()
+    (first / "note.txt").write_text("Indexed earlier with another model.\n")
+    folder_index.index_folder_now(
+        folder_index.open_folder(
+            first, embedding_source=FAKE_EMBEDDING_SOURCE, embedding_model="fake-2"
+        )
+    )
+    query.add_folder(query._state, str(first))
+    query.add_folder(query._state, str(docs))
+    assert _wait(_complete)
+
+    by_name = {s["name"]: s for s in query.folders_status(query._state)}
+    # Settings say "fake": the folder made with fake-2 offers Re-embed, the
+    # one indexed now with the Settings model does not.
+    assert by_name["first"]["embedding_differs"]
+    assert not by_name["docs"]["embedding_differs"]
+    assert by_name["docs"]["embedding"] == f"{FAKE_EMBEDDING_SOURCE}/fake"

@@ -174,3 +174,91 @@ def test_chat_answers_from_several_folders(two_folders):
         "notes (a)",
         "notes (b)",
     }
+
+
+@pytest.mark.parametrize("segment", ["semantic", "keyword"])
+def test_a_missing_path_is_refused_not_created(
+    tmp_path, vault_home, fake_embedder, segment
+):
+    missing = tmp_path / "nots"
+    search = (
+        _search(str(missing))
+        if segment == "semantic"
+        else VaultTextSearch(vault_path=str(missing)).process_value
+    )
+    with pytest.raises(ValueError, match="does not exist"):
+        search("lighthouse")
+    assert not missing.exists()
+
+
+@pytest.mark.parametrize("segment", ["semantic", "keyword"])
+def test_an_unindexed_documents_folder_is_refused_and_left_alone(
+    tmp_path, vault_home, fake_embedder, segment
+):
+    root = _folder(tmp_path, "docs", {"log.txt": "The lighthouse lamp failed.\n"})
+    search = (
+        _search(str(root))
+        if segment == "semantic"
+        else VaultTextSearch(vault_path=str(root)).process_value
+    )
+    with pytest.raises(ValueError, match=r"no index yet.*indexFolder"):
+        search("lighthouse")
+    assert sorted(p.name for p in root.iterdir()) == ["log.txt"]
+
+
+def test_an_empty_vault_and_a_folder_still_starting_are_searchable(
+    tmp_path, vault_home, fake_embedder
+):
+    empty_vault = tmp_path / "new-vault"
+    empty_vault.mkdir()
+    assert VaultTextSearch(vault_path=str(empty_vault)).process_value("lamp") == []
+    root = _folder(tmp_path, "docs", {"log.txt": "The lighthouse lamp failed.\n"})
+    folder_index.open_folder(
+        root, embedding_source=FAKE_EMBEDDING_SOURCE, embedding_model="fake"
+    )
+    # Its index exists but holds nothing yet: no hits, and no error.
+    assert _search(str(root))("lighthouse") == []
+
+
+def test_one_unreachable_embedder_leaves_the_other_folders_semantic(
+    tmp_path, vault_home, fake_embedder
+):
+    from talkpipe.llm import config as llm_config
+
+    from tests.conftest import _fake_hash_vector
+
+    down = {"now": False}
+
+    class _FlakyEmbedder:
+        def __init__(self, model=None, *args, **kwargs):
+            pass
+
+        def execute_one(self, text):
+            if down["now"]:
+                raise ConnectionError("flaky embedder is down")
+            return _fake_hash_vector(text)
+
+        def execute_batch(self, texts):
+            return [self.execute_one(text) for text in texts]
+
+    llm_config.registerEmbeddingAdapter("flaky", _FlakyEmbedder)
+    try:
+        work = _folder(tmp_path, "work", {"log.txt": "The lighthouse lamp failed.\n"})
+        home = _folder(tmp_path, "home", {"garden.txt": "Basil and tomatoes.\n"})
+        _index(work)
+        folder_index.index_folder_now(
+            folder_index.open_folder(
+                home, embedding_source="flaky", embedding_model="flaky"
+            )
+        )
+        down["now"] = True
+        paths = [str(work), str(home)]
+        with pytest.raises(ConnectionError):
+            _search(paths)("basil")  # no fallback asked for: the failure shows
+        results = _search(paths, keyword_fallback=True, limit=10)("basil garden")
+        by_folder = {r.document["folder"] for r in results}
+        # work's embedder still answers, so its chunk comes back by meaning
+        # (it shares no word with the query); home falls back to keywords.
+        assert by_folder == {"work", "home"}
+    finally:
+        llm_config._embeddingAdapter.pop("flaky", None)

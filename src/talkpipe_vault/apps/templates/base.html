@@ -213,6 +213,9 @@
         }
 
         /* ---------- Flash banners ---------- */
+        /* display: flex below would otherwise show a hidden banner. */
+        .flash-status[hidden], .flash-error[hidden] { display: none; }
+
         .flash-status, .flash-error {
             align-items: center;
             border-radius: var(--radius-sm);

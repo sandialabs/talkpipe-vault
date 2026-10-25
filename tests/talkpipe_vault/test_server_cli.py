@@ -132,6 +132,44 @@ def test_resume_without_path_or_recents_starts_unselected(tmp_path, monkeypatch)
     assert calls["vault_path"] == ""
 
 
+def test_a_missing_path_says_it_becomes_a_new_empty_vault(
+    tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setenv(user_settings.VAULT_HOME_ENV, str(tmp_path / "home"))
+    calls = {}
+    monkeypatch.setattr(vault_server, "run_app", lambda **k: calls.update(k))
+    typo = tmp_path / "nots"
+    monkeypatch.setattr("sys.argv", ["vault-server", str(typo), "--no-browser"])
+
+    vault_server.main()
+
+    out = capsys.readouterr().out
+    assert calls["vault_path"] == str(typo)  # opened as before
+    assert "new, empty named vault" in out
+    assert "check the path" in out
+
+
+def test_banner_lists_only_the_folders_that_exist(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv(user_settings.VAULT_HOME_ENV, str(tmp_path / "home"))
+    calls = {}
+    monkeypatch.setattr(vault_server, "run_app", lambda **k: calls.update(k))
+    real = tmp_path / "notes"
+    real.mkdir()
+    typo = tmp_path / "nots"
+    argv = ["vault-server", "--dir", str(typo), "--dir", str(real), "--no-browser"]
+    monkeypatch.setattr("sys.argv", argv)
+
+    vault_server.main()
+
+    folders_line = next(
+        line for line in capsys.readouterr().out.splitlines() if "Folders:" in line
+    )
+    assert str(real) in folders_line
+    assert str(typo) not in folders_line
+    # The app still gets both, and warns about the missing one when opening.
+    assert calls["folders"] == [str(typo), str(real)]
+
+
 def test_launch_browser_opens_once_server_accepts(monkeypatch):
     opened = []
     monkeypatch.setattr(query.webbrowser, "open", lambda url: opened.append(url))

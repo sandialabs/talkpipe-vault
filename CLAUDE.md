@@ -210,7 +210,10 @@ keep it that way so `indexFolder`/`watchFolders` stay usable in other applicatio
   by recorded embedder (distance merge inside a group, `reciprocal_rank_fusion` across),
   tags hits with `folder`, and rebases sources when a folder moved.
   `keyword_fallback` adds keyword hits for folders still embedding (and keyword-only
-  results when the embedder fails).
+  results when the embedder fails). `check_searchable` refuses a missing path or a
+  documents folder with no index (`existing_non_vault_entries`, in `pipelines/config.py`)
+  when a search *runs*, never at construction: the interfaces build pipelines for vaults
+  not indexed yet and for one that vanished (they report that themselves).
 - App glue in `apps/query.py` ("Folder mode" block): `add_folder`, `remove_folder`,
   `reembed_folder`, `rebuild_folder`, `folders_status`, `_folder_banner`,
   `_partial_index_note`, `_folder_chunk`/`_folder_source_file` for lookups. In folder

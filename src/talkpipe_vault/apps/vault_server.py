@@ -187,8 +187,10 @@ def main() -> None:
         if not folders:
             vault_path = _most_recent_usable_vault()
             resumed = bool(vault_path)
+    new_vault = False
     if not vault_path and not folders and args.vault_path:
         vault_path = str(Path(args.vault_path).expanduser())
+        new_vault = not Path(vault_path).exists()
         try:
             Path(vault_path).mkdir(parents=True, exist_ok=True)
             ensure_supported_vault_layout(vault_path)
@@ -201,15 +203,26 @@ def main() -> None:
     print("=" * 60)
     if folders:
         suffix = " (last session)" if resumed else ""
-        print(f"Folders: {', '.join(folders)}{suffix}")
-        print("Indexed in the background; ask questions right away.")
+        # A missing --dir is warned about when the app opens the folders;
+        # list only the ones it can search.
+        usable = [folder for folder in folders if Path(folder).is_dir()]
+        if usable:
+            print(f"Folders: {', '.join(usable)}{suffix}")
+            print("Indexed in the background; ask questions right away.")
+        else:
+            print("Folders: none of those given can be searched (see below);")
+            print("add folders in the web interface after it starts.")
     elif resumed:
         print(f"Vault storage: {vault_path} (most recently used)")
+    elif new_vault:
+        print(f"Vault storage: {vault_path} (a new, empty named vault:")
+        print("that folder did not exist). To search a folder of documents")
+        print("instead, check the path.")
     elif vault_path:
         print(f"Vault storage: {vault_path}")
     else:
-        print("Vault storage: none selected yet — create or choose a vault")
-        print("in the web interface after it starts.")
+        print("Folders: none yet — add the folders to search in the web")
+        print("interface after it starts (or open a named vault there).")
     print(f"Web interface: http://{args.host}:{port}")
     if not args.no_browser:
         print("Opening in your web browser...")

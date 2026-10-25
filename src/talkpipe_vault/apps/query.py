@@ -72,10 +72,9 @@ from talkpipe_vault.pipelines.config import (
     DEFAULT_SHINGLE_SIZE,
     DEFAULT_VECTOR_TABLE_NAME,
     FOLDER_INDEX_DIRNAME,
-    FULLTEXT_VAULT_SUBDIR,
-    VECTOR_VAULT_SUBDIR,
     WHOOSH_INDEX_FIELDS,
     ensure_supported_vault_layout,
+    existing_non_vault_entries,
     get_chat_model,
     get_chat_source,
     get_embedding_model,
@@ -563,7 +562,10 @@ def _activate_folders(state: AppState) -> None:
         _clear_pipelines(state)
         return
     state.vault_path = paths[0]
-    _apply_vault_embedding_config(paths[0])
+    # Not the first folder's recorded embedder, as for a named vault: every
+    # folder is searched with its own, so the active one stays the Settings
+    # choice, which new folders are indexed with and Re-embed offers.
+    _apply_vault_embedding_config(None)
     _refresh_pipelines(force=True)
     _update_document_counts(state.vault_path)
 
@@ -602,7 +604,8 @@ def add_folder(state: AppState, raw_path: str) -> tuple[str, str]:
             f"Folders on this server must be under {access_control.describe(roots)}."
         )
     if not confined.is_dir():
-        return "", f"{confined} is not a folder."
+        what = "is not a folder" if confined.exists() else "does not exist"
+        return "", f"{confined} {what}."
     root = str(confined)
     for existing in state.folders:
         if root == existing:
@@ -818,7 +821,7 @@ def init_pipelines(vault_path: str) -> None:
     _update_document_counts(vault_path)
 
 
-def _apply_vault_embedding_config(vault_path: str) -> None:
+def _apply_vault_embedding_config(vault_path: str | None) -> None:
     """Set the active embedder to the one the vault was indexed with.
 
     Embeddings are only comparable to a query embedded with the same model, so on
@@ -826,9 +829,10 @@ def _apply_vault_embedding_config(vault_path: str) -> None:
     keep the user's saved override / default unchanged (the same behavior as
     before this was tracked) — resolved from the saved overrides rather than from
     whatever a previously opened vault left behind — and the mismatch is surfaced
-    on the Settings page's configuration status.
+    on the Settings page's configuration status. With no vault path the saved
+    override / default is applied, as for a legacy vault.
     """
-    recorded = vault_metadata.load_embedding_config(vault_path)
+    recorded = vault_metadata.load_embedding_config(vault_path) if vault_path else None
     saved = user_settings.get_model_overrides()
     saved_source, saved_model = _drop_unavailable_source(
         saved.get("embedding_source"),
@@ -1216,6 +1220,16 @@ def _resolve_title(title: str, filename: str, path: str) -> str:
     return "Unknown"
 
 
+def _with_folder(title: str, document: Any) -> str:
+    """A result's title, followed by its folder's name when several folders
+    are open, so same-named files from different folders can be told apart
+    without showing paths."""
+    folder = _get_field(document, "folder", "")
+    if folder and len(_state.folders) > 1:
+        return f"{title} — {folder}"
+    return title
+
+
 def _result_doc_id(result: Any, doc: Any) -> str:
     """Return the stable result row id when the search result exposes one."""
     doc_id = _get_field(result, "doc_id", "")
@@ -1275,7 +1289,7 @@ def _process_semantic_results(raw_results: Any) -> list[dict[str, Any]]:
             {
                 "path": path,
                 "lookup_path": doc_id or path,
-                "filename": _resolve_title(title, filename, path),
+                "filename": _with_folder(_resolve_title(title, filename, path), doc),
                 "snippet": _create_snippet(snippet_text),
                 # Some vector backends (e.g. model2vec) don't return a usable similarity
                 # score and report 0.0 for every hit. Rendering "Score: 0.0000" on every
@@ -1367,7 +1381,9 @@ def _process_keyword_results(raw_results: list[Any]) -> list[dict[str, Any]]:
             {
                 "path": path,
                 "lookup_path": doc_id or path,
-                "filename": _resolve_title(title, filename, path),
+                "filename": _with_folder(
+                    _resolve_title(title, filename, path), document
+                ),
                 "snippet": _create_snippet(content),
                 "score": f"{score:.4f}",
             }
@@ -1541,7 +1557,7 @@ def _require_vault(state: AppState) -> RedirectResponse | None:
     if _vault_selected(state):
         return None
     return _redirect_with_message(
-        "/documents", message="Choose the documents to index to get started."
+        "/documents", message="Add a folder to search to get started."
     )
 
 
@@ -1685,25 +1701,9 @@ async def home(
     )
 
 
-def _existing_non_vault_entries(vault_path: Path) -> int:
-    """Return how many entries an existing folder holds if it has no vault data.
-
-    Zero means the folder is missing, empty, or already contains vault data
-    (docs table, vault metadata, full-text index, or the rejected legacy
-    layout) — i.e. opening it as a vault touches nothing that isn't ours, or
-    fails with the proper migration guidance.
-    """
-    if not vault_path.is_dir():
-        return 0
-    vault_markers = (
-        f"{DEFAULT_VECTOR_TABLE_NAME}.lance",
-        vault_metadata.METADATA_FILENAME,
-        FULLTEXT_VAULT_SUBDIR,
-        VECTOR_VAULT_SUBDIR,
-    )
-    if any((vault_path / marker).exists() for marker in vault_markers):
-        return 0
-    return sum(1 for _ in vault_path.iterdir())
+# The check lives with the vault layout helpers so pipelines can use it; the
+# old name stays for the callers here and in the terminal interface.
+_existing_non_vault_entries = existing_non_vault_entries
 
 
 @app.get("/vaults", response_class=HTMLResponse)
@@ -3102,7 +3102,13 @@ async def save_settings(
         models["embedding_source"],
         models["embedding_model"],
     )
-    if embedding_changed:
+    if embedding_changed and state.folders:
+        message += (
+            " The embedding model changed: each folder keeps searching with the "
+            "model it was indexed with until you re-embed it (Re-embed, on "
+            "Vaults & Documents)."
+        )
+    elif embedding_changed:
         message += (
             " The embedding model changed: existing vaults were indexed with "
             "the previous model, so re-index their documents (with Overwrite) "

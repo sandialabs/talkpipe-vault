@@ -1997,7 +1997,7 @@ def test_first_run_redirect_is_not_an_error():
         assert response.status_code == 303
         location = response.headers["location"]
         assert location.startswith("/documents?")
-        assert "message=Choose+the+documents" in location
+        assert "message=Add+a+folder" in location
         assert "error=" not in location
 
 

@@ -107,8 +107,9 @@ again) is not emitted. A rename is a `deleted` for the old path, then an
 `added` for the new one.
 
 **It remembers what it has sent.** The record is a small file per name,
-`<folder>/.tpstream/<name>.db` (`name` defaults to `default`), so a restarted
-pipeline emits only what changed while it was stopped. Folders that cannot
+`<folder>/.tpstream/<name>.db` (`name` defaults to `default`; letters,
+digits, `.`, `_` and `-`), so a restarted pipeline emits only what changed
+while it was stopped. Folders that cannot
 hold it (read-only, network, synced) keep it in the app's data directory
 instead, and `state="/some/file.db"` puts it anywhere. Each pipeline that
 follows a folder on its own needs its own `name`: one name is one record,
@@ -196,7 +197,17 @@ run starts after it.
 (question answering) take a folder as `vault_path`, or a list of folders and
 vaults to search together. Results from several folders are merged, and
 each hit names its folder in `document["folder"]`. The embedder a folder was
-indexed with is used for it automatically.
+indexed with is used for it automatically. A folder has to be indexed
+first (`indexFolder`, `watchFolders`, or opening it in `vault-server`):
+searching one with no index yet, or a path that does not exist, raises a
+`ValueError` that says so.
+
+The two searches emit different shapes. `vaultSearch` emits one list per
+query of `SearchResult` objects (`hit.score`, `hit.doc_id`, and
+`hit.document` with `content`, `source`, `title` and `folder`);
+`vaultTextSearch` emits each hit as its own dict: `{"doc_id", "score",
+"document": {"content", "path", "filename", "folder"}}`, with a Whoosh
+relevance score rather than a similarity.
 
 Python:
 
