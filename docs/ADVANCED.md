@@ -496,8 +496,6 @@ two folders, then ask across both:
 ```python
 import talkpipe
 
-talkpipe.load_plugins()
-
 index = talkpipe.compile("| indexFolder | print").as_function(single_in=False)
 index(["/path/to/notes", "/path/to/papers"])  # status dicts, one per folder
 
@@ -558,39 +556,52 @@ layout above, in a hidden `.tpvault` subfolder of the folder:
   CACHEDIR.TAG   # borg, restic --exclude-caches and tar --exclude-caches skip it
 ```
 
-The index is kept under the app's data directory instead
+The index goes under the app's data directory instead
 (`$TALKPIPE_VAULT_HOME/folder-indexes/<name>-<hash>/`, or under
-`TALKPIPE_VAULT_ROOT` when one is set) when the folder is read-only, on a
-network share (nfs, cifs/smb, sshfs, …), or inside a sync client's folder
-(Dropbox, OneDrive, Google Drive, iCloud, Syncthing), or when Settings says
-so. An index already in place is always reused, wherever it is.
+`TALKPIPE_VAULT_ROOT` when one is set) when the folder is:
 
-**Indexing** runs in one background thread per process, keyword phase
-first: every file is read and chunked once into the Whoosh index, so a
-folder is searchable by keyword within minutes; the vector phase then
-embeds those stored chunks into LanceDB. Changes are noticed by a file
-watcher, by a full scan whenever the folder is opened, and by a rescan every
-30 minutes (10 where file events are unreliable). A file whose size or
-modification time changed is hashed, so a touched but unchanged file is not
-re-embedded; a changed or deleted file's chunks leave both indexes at once.
-Chunk ids are derived from the index and the file's path relative to the
-folder, so redoing a batch after a crash replaces rather than duplicates,
-and a moved folder keeps its index.
+- read-only;
+- on a network share (nfs, cifs/smb, sshfs, …);
+- inside a sync client's folder (Dropbox, OneDrive, Google Drive, iCloud,
+  Syncthing);
+- or when Settings says so.
 
-**Several processes** may open one folder: the one holding `writer.lock` (an
-OS lock, released when the process exits however it exits) indexes it; the
-others search it and show its progress, and one of them takes over when it
-exits. A machine-wide `ingest.lock` in the app's data directory lets only
-one batch run at a time across processes, which bounds memory.
+An index already in place is always reused, wherever it is.
 
-**Searching several folders** fuses their results: semantic hits from
-folders indexed with the same embedder merge by distance, other lists by
-reciprocal rank, and every hit names its folder. While a folder is still
-embedding, keyword matches for its unembedded files are included and the
-pages say the index is partial. The embedder a folder was indexed with is
-recorded in its `vault_metadata.json` and used for its queries; when
-Settings names another, the folder offers **Re-embed** (keyword search keeps
-answering meanwhile), and when the chunk settings differ, **Rebuild**.
+**Indexing**, in one background thread per process:
+
+- The keyword phase reads and chunks every file once into the Whoosh index,
+  so a folder is searchable by keyword within minutes.
+- The vector phase then embeds those stored chunks into LanceDB.
+- Changes are noticed by a file watcher, by a full scan when the folder is
+  opened, and by a rescan every 30 minutes (10 where file events are
+  unreliable).
+- A file whose size or modification time changed is hashed, so a touched but
+  unchanged file is not re-embedded. A changed or deleted file's chunks leave
+  both indexes at once.
+- Chunk ids are derived from the index and the file's path relative to the
+  folder, so redoing a batch after a crash replaces rather than duplicates,
+  and a moved folder keeps its index.
+
+**Several processes** may open one folder:
+
+- The one holding `writer.lock` (an OS lock, released when the process
+  exits however it exits) indexes it.
+- The others search it and show its progress, and one of them takes over
+  when the writer exits.
+- A machine-wide `ingest.lock` in the app's data directory lets only one
+  batch run at a time across processes, which bounds memory.
+
+**Searching several folders** fuses their results:
+
+- Semantic hits from folders indexed with the same embedder merge by
+  distance; other lists merge by reciprocal rank. Every hit names its folder.
+- While a folder is still embedding, keyword matches for its unembedded
+  files are included and the pages say the index is partial.
+- The embedder a folder was indexed with is recorded in its
+  `vault_metadata.json` and used for its queries. When Settings names
+  another, the folder offers **Re-embed** (keyword search keeps answering
+  meanwhile); when the chunk settings differ, **Rebuild**.
 
 Folder and named-vault modes are exclusive in the interfaces; a named vault
 whose documents all lie in one folder offers to search that folder instead.
@@ -598,11 +609,11 @@ Retrieval filters apply when one folder is open, not several.
 
 A pipeline following a folder with `folderChanges` keeps its record of what
 it has sent in another hidden subfolder, `<folder>/.tpstream/<name>.db`
-(with a `.gitignore`, but no `CACHEDIR.TAG`: a restore should bring it back
-with the documents), or under `folder-streams/` in app data where an index
-would go there. It is separate from `.tpvault`, so rebuilding or deleting a
-folder's index never makes a stream send the whole folder again; delete a
-`<name>.db` to have that stream start over.
+(with a `.gitignore` but no `CACHEDIR.TAG`, since a restore should bring it
+back with the documents), or under `folder-streams/` in app data where an
+index would go there. It is separate from `.tpvault`, so rebuilding or
+deleting a folder's index never makes a stream send the whole folder again.
+Delete a `<name>.db` to have that stream start over.
 
 ## Experimental directory monitoring
 

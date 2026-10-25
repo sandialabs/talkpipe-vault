@@ -47,7 +47,10 @@ src/talkpipe_vault/
     ├── cli.py                  # Experimental watcher CLI helpers (not installed as scripts)
     ├── building_and_watching.py # Experimental watch/batch vector DB pipelines
     ├── searching_and_prompting.py # VaultSearch / VaultChat / VaultTextSearch segments
-    ├── folder_index.py         # Folder mode: per-folder index, background indexer, indexFolder/watchFolders
+    ├── folder_files.py         # Folder mode's shared rules: index location, document files, change tracker, file diff
+    ├── folder_manifest.py      # Manifest: a folder index's per-file state (sqlite)
+    ├── folder_scheduler.py     # FolderScheduler: the background indexing thread
+    ├── folder_index.py         # FolderIndex, open_folder helpers, indexFolder/watchFolders
     ├── folder_changes.py       # folderChanges: a folder's document files as a stream of changes
     ├── agent_tools.py          # The vault's agent tool pack (session + bound-tool factories)
     └── agent_search.py         # vaultAgentSearch / vaultAgentChat, built on llmAgent
@@ -186,65 +189,88 @@ Segments: `buildVectorDBFromPaths`, `vaultSearch`, `vaultChat`, `vaultTextSearch
 
 ## Folder mode
 
-Users point at folders instead of creating vaults. `pipelines/folder_index.py` is the
-engine and depends on nothing in `apps/` except `default_index_home()` (lazy import);
-keep it that way so `indexFolder`/`watchFolders` stay usable in other applications.
+Users point at folders instead of creating vaults. The engine lives in four
+`pipelines/` modules that depend on nothing in `apps/` except
+`default_index_home()` (lazy import); keep it that way so `indexFolder`,
+`watchFolders` and `folderChanges` stay usable in other applications.
 
-- `FolderIndex` is one folder: `try_become_writer()` takes `writer.lock` (filelock, an
-  OS lock released on any exit); a process without it is a reader that shows the
-  writer's `status.json`. `scan()` reconciles the manifest with the disk (size/mtime,
-  then sha256, so a touched file is not re-embedded; changed/deleted files lose their
-  chunks from both stores at once), `keyword_batch()` chunks pending files into Whoosh,
-  `vector_window()` embeds stored chunks via `build_rag_database(chunks=…)`. Chunk ids
-  are `{uuid8}-{sha1(relpath)[:16]}:{n:05d}` — same id in Whoosh and LanceDB, so redone
-  batches replace rather than duplicate. Mark a file done only after the store call
-  returns.
-- `FolderScheduler` is one daemon thread per process: scans, then keyword work for every
-  folder, then vectors; `ingest.lock` in the vault home serializes batches across
-  processes. Maintenance (`reembed`, `rebuild`) and closing a folder run on the worker
-  through `submit()` / `remove()`. The watcher drops events with any hidden path
-  component — watchdog's `.*` ignore matches only the last component, so `.tpvault`'s
-  own writes would otherwise re-trigger it.
-- Search: `VaultSearch`/`VaultTextSearch`/`VaultChat`/`AgentVaultSearch` accept a list of
-  paths; `resolve_vault_paths` maps a documents folder to its index, and
-  `needs_fan_out` keeps a single named vault on its old pipeline. Fan-out groups indexes
-  by recorded embedder (distance merge inside a group, `reciprocal_rank_fusion` across),
-  tags hits with `folder`, and rebases sources when a folder moved.
-  `keyword_fallback` adds keyword hits for folders still embedding (and keyword-only
-  results when the embedder fails). `check_searchable` refuses a missing path or a
-  documents folder with no index (`existing_non_vault_entries`, in `pipelines/config.py`)
-  when a search *runs*, never at construction: the interfaces build pipelines for vaults
-  not indexed yet and for one that vanished (they report that themselves). Before that
-  check, `_SearchesVaultPaths` re-resolves `vault_path` and rebuilds the segment in place
-  (keeping its pipeline links) when the indexes behind it changed, so a segment built
-  before its folder was indexed starts searching it once it is.
-  `_FanOutVectorSearch` makes its embedders on first use and skips indexes with no
-  vectors yet (`folder_index.vectors_started`), so building a search or asking before
-  anything is embedded never waits on the model's first download; the Search page and
-  the TUI Search tab stay off until then (`query.semantic_search_waiting`).
-- App glue in `apps/query.py` ("Folder mode" block): `add_folder`, `remove_folder`,
-  `reembed_folder`, `rebuild_folder`, `folders_status`, `_folder_banner`,
-  `_partial_index_note`, `_folder_chunk`/`_folder_source_file` for lookups. In folder
-  mode `_state.folders` lists the roots and `_state.vault_path` is the first folder's
-  index; folder and named-vault modes are exclusive (`_activate_vault` leaves folder
-  mode). Routes: `/folders/add`, `/folders/remove`, `/folders/reembed`,
-  `/folders/rebuild`; `/api/index-status` carries `folders` and `banner`. Named-vault
-  index runs and full-text rebuilds hold the vault's `writer.lock` and pause the folder
-  indexer (`_index_run_guard`), and refuse a folder's index.
-- CLI (`vault-server`, `vault-tui`): a folder of documents opens in folder mode
-  (`is_documents_folder`), `--dir` repeats, `--as-vault` restores the old behavior,
-  `--resume` prefers the last session's folders (`resumable_folders`), which also
-  reopen by default when no path or `--dir` is given. Settings:
-  `open_folders`, `recent_folders`, `last_session`, `index_location`.
-- `pipelines/folder_changes.py` (`folderChanges`) reuses the indexer's walk, change filter,
-  watcher and location rules but shares no state with it: it reads no contents (pipelines
-  use talkpipe's `readFile`, never vault extraction code) and keeps a per-name record in
-  `<folder>/.tpstream/<name>.db` (`stream_state_path`; app data where the folder can't hold
-  it), apart from `.tpvault` so an index rebuild never re-sends a folder. A file is recorded
-  only when the consumer asks for the next item (at-least-once); keep it that way.
-  `docs/FOLDER_PIPELINES.md` shows every folder component in Python and ChatterLang — every
-  block there was run; keep it so.
-- Tests use the offline `fake_embedder` fixture (`tests/conftest.py`, source `fakehash`).
+- `folder_files.py`: what both components share. `resolve_index_location`
+  (in the folder, else app data for read-only, network, synced folders or a
+  set `TALKPIPE_VAULT_ROOT`), `document_files` (hidden paths, temporary
+  files and out-of-folder symlinks skipped; only extractor-readable
+  extensions), `diff_files` (known-versus-disk comparison: stat, then hash,
+  so a touched file is "touched" not "changed"), `ChangeTracker` (watcher
+  events debounced, periodic rescans; `due()` returns the subtrees to
+  compare) and `watch`. The watcher drops events with any hidden path
+  component, since watchdog's `.*` ignore matches only the last component.
+- `folder_manifest.py`: `Manifest`, the writer's per-file state in
+  `manifest.db` (`pending` → `keyword` → `done`, or `error`).
+- `folder_scheduler.py`: `FolderScheduler`, one daemon thread per process:
+  scans, then keyword work for every folder, then vectors; `ingest.lock` in
+  the vault home serializes batches across processes. Maintenance
+  (`reembed`, `rebuild`) and closing a folder run on the worker through
+  `submit()` / `remove()`.
+- `folder_index.py`: `FolderIndex` is one folder. `try_become_writer()`
+  takes `writer.lock` (filelock, an OS lock released on any exit); without it
+  the folder is a reader showing the writer's `status.json`. `scan()`
+  applies `diff_files` to the manifest (changed and deleted files lose their
+  chunks from both stores at once), `keyword_batch()` chunks pending files
+  into Whoosh, `vector_window()` embeds stored chunks via
+  `build_rag_database(chunks=…)`. Chunk ids are
+  `{uuid8}-{sha1(relpath)[:16]}:{n:05d}` in both stores, so redone batches
+  replace rather than duplicate. Mark a file done only after the store call
+  returns. `status()["finished"]` is true for a complete folder and for one
+  whose scan found nothing to index; the interfaces' "still indexing" notices
+  key off it, not `complete`.
+- `folder_changes.py` (`folderChanges`) builds on `folder_files` and shares
+  no state with the indexer: it reads no contents (pipelines use talkpipe's
+  `readFile`) and keeps a per-name record in `<folder>/.tpstream/<name>.db`
+  (`stream_state_path`; app data where the folder cannot hold it), apart from
+  `.tpvault` so an index rebuild never re-sends a folder. A file is recorded
+  only when the consumer asks for the next item (at-least-once); keep it
+  that way.
+
+Three LanceDB operations the vault needs (prefix delete, table drop,
+raw-distance search) have no public `LanceDBDocumentStore` method yet, so
+`_docs_table`, `_drop_docs_table` and `_FanOutVectorSearch._search` use its
+internals; a talkpipe issue asks for them. Remove the private calls when it
+lands.
+
+**Search** (`searching_and_prompting.py`): `VaultSearch`, `VaultTextSearch`,
+`VaultChat` and `AgentVaultSearch` accept a list of paths; `resolve_vault_paths`
+maps a documents folder to its index and `needs_fan_out` keeps a single named
+vault on its old pipeline. The three segments share `_SearchesVaultPaths`:
+options are attributes, what depends on the paths is built in `_build(paths)`,
+and `_ensure_searchable()` (called before every query) runs `_build` again when
+the indexes behind `vault_path` changed, then `check_searchable` refuses a
+missing path or a documents folder with no index. `VaultChat._build` has one
+pipeline shape: retrieval stages added as the options ask, then RAG prompt →
+completion → sources. Fan-out groups indexes by recorded embedder (distance
+merge inside a group, `reciprocal_rank_fusion` across), tags hits with
+`folder`, rebases sources when a folder moved, and makes its embedders on
+first use, skipping indexes with no vectors yet (`vectors_started`).
+`keyword_fallback` adds keyword hits for folders still embedding.
+
+**App glue** (`apps/query.py`, "Folder mode" block): `add_folder`,
+`remove_folder`, `reembed_folder`, `rebuild_folder` (all under
+`_folders_lock`), `folders_status`, `_folder_banner`, `_partial_index_note`,
+and the lookups both interfaces use: `chunk_text`, `resolve_source_file`
+(folder mode serves only a stored chunk's own path, never the request value).
+`startup_folders` resolves what a command line opens for both `vault-server`
+and `vault-tui`, and refuses a vault path together with `--dir`. Notices both
+interfaces show are worded once (`SEMANTIC_SEARCH_WAITING_TEMPLATE`,
+`KEYWORD_SEARCH_STARTING`, `FOLDERS_INDEX_THEMSELVES_TEMPLATE`,
+`FOLDERS_KEEP_EMBEDDER_TEMPLATE`); the TUI fills in its page names. In folder
+mode `_state.folders` lists the roots and `_state.vault_path` is the first
+folder's index; folder and named-vault modes are exclusive. Routes:
+`/folders/add`, `/folders/remove`, `/folders/reembed`, `/folders/rebuild`;
+`/api/index-status` carries `folders` and `banner`. Named-vault index runs
+hold the vault's `writer.lock` (ignored by `existing_non_vault_entries`) and
+pause the folder indexer (`_index_run_guard`). Settings: `open_folders`,
+`recent_folders`, `last_session`, `index_location`. Tests use the offline
+`fake_embedder` fixture (`tests/conftest.py`, source `fakehash`);
+`docs/FOLDER_PIPELINES.md` shows every folder component in Python and
+ChatterLang, and every block there was run; keep it so.
 
 **Agent retrieval** is split in two, deliberately: `pipelines/agent_tools.py` owns *what
 the tools do*, `pipelines/agent_search.py` owns *the pipeline that runs them*. Nothing in

@@ -91,14 +91,8 @@ you had open. Then:
 2. **Semantic Search**, **Keyword Search** and **Ask** away — right away,
    while indexing is still running.
 
-Prefer an index kept in a separate folder of its own? That is a named
-vault, under **Named vaults (advanced)** on the same page: pick the
-documents (a folder or glob pattern) and a vault name is suggested; one
-click creates the vault and indexes into it. A named vault's **Keyword
-Search** starts disabled and offers a **Create Full-Text Index** button;
-indexing more documents later does not refresh that index — rebuild it from
-the same page when you do. (Folders keep their keyword index current on
-their own.)
+Prefer an index kept apart from your documents? See
+[Named vaults](#named-vaults).
 
 Search and indexing need nothing more. Answers on the Ask page need a chat
 provider — Ollama, OpenAI, or Anthropic. Pick it on the **Settings** page
@@ -246,38 +240,48 @@ script syntax is in the Advanced Guide under
 
 ## Folders
 
-Choose the folders you want to ask about — on the **Vaults & Documents**
-page, the terminal interface's Vault tab, or the command line:
+Choose the folders you want to ask about: on the **Vaults & Documents**
+page, on the terminal interface's Vault tab, or on the command line.
 
 ```bash
 vault-server ~/notes                      # or: vault-server --dir ~/notes --dir ~/papers
 ```
 
-That is all: there is no vault to name or create. Each folder, and
-everything under it, is indexed in the background — keywords first, so it
-is searchable within minutes, then meaning — and you can search and ask
-right away; until indexing finishes, every page says so and keyword matches
-are included for files not embedded yet. With several folders open, every
-result names the folder it came from. New, changed and deleted files are
-picked up as they happen. Hidden files and folders (`.git`, `.obsidian`,
-…), editor temporary files and formats no extractor reads are skipped, so
-a folder's file count can be lower than what `ls -R` shows. Quitting
-part-way loses nothing: indexing resumes
-where it left off, and a second vault-server or vault-tui opened on the same
-folder shares its index instead of building another.
+There is no vault to name or create. For each folder, and everything under
+it:
+
+- **Indexing runs in the background**, keywords first (searchable within
+  minutes), then meaning. Search and ask right away: every page says how far
+  indexing has got, and keyword matches cover files not embedded yet.
+- **Changes are picked up as they happen**: new, changed, renamed and
+  deleted files.
+- **Some files are skipped**: hidden files and folders (`.git`, `.obsidian`,
+  …), editor temporary files, and formats no extractor reads, so the file
+  count can be lower than `ls -R` shows.
+- **Quitting loses nothing**: indexing resumes where it left off, and a
+  second vault-server or vault-tui on the same folder shares the index.
+- **Several folders** can be open together; every result names its folder.
 
 The index lives in a hidden `.tpvault` folder inside each folder (git and
 most backup tools skip it), or in the app's data directory when the folder
-is read-only, on a network share, or synced by a cloud client — see
+is read-only, on a network share or synced by a cloud client; see
 [Folder mode](docs/ADVANCED.md#folder-mode). Removing a folder keeps its
-index unless you ask for it to be deleted; your documents are never touched.
-
-Named vaults — an index kept in a separate folder of its own — still work
-as before, under **Named vaults (advanced)**.
+index unless you ask for it to be deleted. Your documents are never touched.
 
 To index, watch or search folders from your own Python code or ChatterLang
 scripts, or to follow a folder's changes as a stream of documents, see
 [Folder pipelines](docs/FOLDER_PIPELINES.md).
+
+### Named vaults
+
+A named vault is an index kept in a separate folder of its own, for
+documents you would rather not index in place. It works as before, under
+**Named vaults (advanced)** on the Vaults & Documents page: pick the
+documents (a folder or glob pattern), accept the suggested vault name, and
+one click creates the vault and indexes into it. A named vault's **Keyword
+Search** starts disabled and offers a **Create Full-Text Index** button;
+indexing more documents later does not refresh that index, so rebuild it
+from the same page when you do.
 
 ## The web interface
 

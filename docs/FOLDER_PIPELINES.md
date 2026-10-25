@@ -54,13 +54,17 @@ chatterlang_script --script '
   | print'
 ```
 
-Options: `vectors=False` builds only the keyword index (fast, no embedder
-needed) — search such a folder with `vaultTextSearch` or
-`vaultSearch[keyword_fallback=True]`, since a plain `vaultSearch` finds
-nothing in it until its vectors are built; `embedding_source` /
-`embedding_model` choose the embedder for a folder that has no vectors yet
-(a folder already embedded keeps the model it was embedded with). When another process is already indexing a folder,
-`indexFolder` leaves it alone and its status says so (`"role": "reader"`).
+Options:
+
+- `vectors=False` builds only the keyword index (fast, no embedder needed).
+  Search such a folder with `vaultTextSearch` or
+  `vaultSearch[keyword_fallback=True]`: a plain `vaultSearch` finds nothing
+  in it until its vectors are built.
+- `embedding_source` / `embedding_model` choose the embedder for a folder
+  that has no vectors yet. A folder already embedded keeps the model it was
+  embedded with.
+- When another process is already indexing a folder, `indexFolder` leaves it
+  alone and its status says so (`"role": "reader"`).
 
 ## Keep folders indexed: `watchFolders`
 
@@ -111,11 +115,11 @@ again) is not emitted. A rename is a `deleted` for the old path, then an
 **It remembers what it has sent.** The record is a small file per name,
 `<folder>/.tpstream/<name>.db` (`name` defaults to `default`; letters,
 digits, `.`, `_` and `-`), so a restarted pipeline emits only what changed
-while it was stopped. Folders that cannot
-hold it (read-only, network, synced) keep it in the app's data directory
-instead, and `state="/some/file.db"` puts it anywhere. Each pipeline that
-follows a folder on its own needs its own `name`: one name is one record,
-and only one process may use it at a time.
+while it was stopped. Folders that cannot hold it (read-only, network,
+synced) keep it in the app's data directory instead, and
+`state="/some/file.db"` puts it anywhere. Each pipeline that follows a
+folder on its own needs its own `name`: one name is one record, and only
+one process may use it at a time.
 
 **Nothing is lost if the pipeline stops.** A file counts as handled when the
 pipeline asks for the next item, so one being handled when the process
@@ -197,24 +201,27 @@ run starts after it.
 
 `vaultSearch` (semantic), `vaultTextSearch` (keyword) and `vaultChat`
 (question answering) take a folder as `vault_path`, or a list of folders and
-vaults to search together. Results from several folders are merged, and
-each hit names its folder in `document["folder"]`. The embedder a folder was
-indexed with is used for it automatically. A folder has to be indexed
-first (`indexFolder`, `watchFolders`, or opening it in `vault-server`):
-searching one with no index yet, or a path that does not exist, raises a
-`ValueError` that says so. The check runs on every query, so a segment
-built before its folder was indexed (while `watchFolders` is still
-starting, say) searches the folder as soon as its index exists.
+vaults to search together. Results from several folders are merged, and each
+hit names its folder in `document["folder"]`. The embedder a folder was
+indexed with is used for it automatically.
 
-The two searches emit different shapes. `vaultSearch` emits one list per
-query of `SearchResult` objects (`hit.score`, `hit.doc_id`, and
-`hit.document` with `content`, `source`, `title` and `folder`);
-`vaultTextSearch` emits each hit as its own dict: `{"doc_id", "score",
-"document": {"content", "path", "filename", "folder"}}`, with a Whoosh
-relevance score rather than a similarity. Hits from several folders are
-interleaved by their rank within each folder (reciprocal rank fusion), so a
-score compares only with others from the same folder and the scores need
-not descend down the list.
+A folder has to be indexed first (`indexFolder`, `watchFolders`, or opening
+it in `vault-server`). Searching one with no index yet, or a path that does
+not exist, raises a `ValueError` that says so. The check runs on every
+query, so a segment built before its folder was indexed (while
+`watchFolders` is still starting, say) searches the folder as soon as its
+index exists.
+
+The two searches emit different shapes:
+
+| Segment | Emits per query | Each hit | Score |
+|---|---|---|---|
+| `vaultSearch` | one list of `SearchResult` objects | `hit.score`, `hit.doc_id`, `hit.document` with `content`, `source`, `title`, `folder` | similarity |
+| `vaultTextSearch` | one dict per hit | `{"doc_id", "score", "document": {"content", "path", "filename", "folder"}}` | Whoosh relevance |
+
+Hits from several folders are interleaved by their rank within each folder
+(reciprocal rank fusion), so a score compares only with others from the same
+folder and the scores need not descend down the list.
 
 Python:
 

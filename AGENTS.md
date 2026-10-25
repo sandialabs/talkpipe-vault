@@ -19,8 +19,9 @@ application, but constituent parts can also be used in other applications.
  - `apps/` - Application code (query interface, vault server)
  - `pipelines/` - Pipeline implementations (building vector DBs, searching, watching,
    agent-driven result selection in `agent_search.py` on top of talkpipe-agents,
-   folder mode's background indexer and its segments in `folder_index.py`, the
-   `folderChanges` source in `folder_changes.py`)
+   folder mode in `folder_files.py` (shared file rules), `folder_manifest.py`,
+   `folder_scheduler.py`, `folder_index.py` (`indexFolder`, `watchFolders`) and
+   `folder_changes.py` (`folderChanges`))
  - `segments.py` - Text extraction segments
  - `watchdog.py` - File monitoring source
  - `initialize_plugin.py` - TalkPipe plugin initialization
