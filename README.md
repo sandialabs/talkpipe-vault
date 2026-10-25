@@ -2,13 +2,16 @@
   <img src="docs/talkpipe_vault.jpg" alt="TalkPipe Vault Logo" width="300">
 </p>
 
-# TalkPipe Vault
+<h1 align="center">TalkPipe Vault</h1>
 
-> Point it at folders of documents and ask questions. Everything stays on your machine.
+<p align="center"><em>Point it at folders of documents and ask questions.<br>
+Indexed on your machine, answered by the model you choose.</em></p>
 
-[![Python 3.11.4+](https://img.shields.io/badge/python-3.11.4+-blue.svg)](https://www.python.org/downloads/)
-[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![Development Status](https://img.shields.io/badge/status-alpha-yellow.svg)](https://github.com/sandialabs/talkpipe-vault)
+<p align="center">
+  <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.11.4+-blue.svg" alt="Python 3.11.4+"></a>
+  <a href="https://opensource.org/licenses/Apache-2.0"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License"></a>
+  <a href="https://github.com/sandialabs/talkpipe-vault"><img src="https://img.shields.io/badge/status-alpha-yellow.svg" alt="Development Status"></a>
+</p>
 
 <p align="center">
 <img src="docs/vault-homepage.png" alt="Talkpipe Homepage" width="100%">
@@ -27,11 +30,11 @@ explore them three ways, in a browser or in a terminal:
 - **Keyword search**: precise full-text queries with boolean operators.
 - **Ask**: single-turn Q&A with answers grounded in your documents.
 
-Everything runs locally by default. The built-in embedding model runs
-in-process with no server or API key. Answers come from the chat provider
-you choose: a local [Ollama](https://ollama.com/) server, OpenAI, or
-Anthropic (see [LLM providers](#llm-providers)). Your documents are only
-ever sent to that provider.
+Indexing happens on your machine: the built-in embedding model runs
+in-process with no server or API key, and the indexes live next to your
+documents. Answers come from the chat provider you choose: an
+[Ollama](https://ollama.com/) server, OpenAI, or Anthropic (see
+[LLM providers](#llm-providers)).
 
 It is built on the [TalkPipe](https://github.com/sandialabs/talkpipe)
 pipeline framework, and its indexing and search components are reusable in
@@ -200,6 +203,11 @@ registers for that role:
 | `openai` | yes | yes | An API key; optionally a base URL for an OpenAI-compatible endpoint |
 | `anthropic` | no | yes | An API key |
 | `eliza` | no | plumbing check only | Nothing; its replies ignore your documents |
+
+Your documents and indexes stay on your disk. Each question, together with
+the snippets retrieved to answer it, goes to the chat provider you
+configure; nothing else is sent anywhere, and with `model2vec` embeddings
+and a local Ollama server nothing leaves your machine at all.
 
 Pick the source and model for each role on the **Settings** page; the
 choice persists and the **Configuration status** panel tests it. Enter keys
