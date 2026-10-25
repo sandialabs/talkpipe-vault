@@ -17,11 +17,16 @@
     <form method="post" action="/folders/add" class="folder-add-form">
         <div class="index-field-row">
             <input type="text" name="folder_path" id="folder-path-input"
-                   placeholder="Folder to search &mdash; click Browse, or type a path">
-            <button type="button" id="folder-browse-btn" class="btn-secondary">Browse&hellip;</button>
-            <button type="submit" id="folder-add-btn">Add folder</button>
+                   placeholder="Folder to search">
+            <button type="button" id="folder-browse-btn">Browse&hellip;</button>
+            <button type="submit" id="folder-add-btn" class="btn-secondary" disabled>Add folder</button>
         </div>
     </form>
+    <p class="panel-hint" id="folder-add-hint">
+        Click <strong>Browse&hellip;</strong> to choose a folder (or type its
+        path); <strong>Add folder</strong> becomes available once the folder
+        is found.
+    </p>
     {% if folders %}
     <ul class="vault-list folder-list" id="folder-list">
         {% for folder in folders %}
@@ -83,8 +88,10 @@
     {% endif %}
 </div>
 
+{# Closed unless a named vault is open or one of its steps is pending:
+   showing both modes at once confuses, so the advanced one takes a click. #}
 <details class="named-vaults" id="named-vaults"
-         {% if vault_path or confirm_vault_path or pending_source_path or (not folders and not recent_folders and recent_vaults) %}open{% endif %}>
+         {% if vault_path or confirm_vault_path or pending_source_path %}open{% endif %}>
 <summary class="named-vaults-summary">Named vaults (advanced): index documents into a separate vault folder</summary>
 {% if confirm_vault_path %}
 <div class="search-box vault-confirm-box">
@@ -402,6 +409,8 @@
 
 <style>
     .folder-add-form { display: block; }
+    #folder-add-btn:disabled { filter: grayscale(1); }
+    #folder-add-hint { margin: 0.4rem 0 0; }
     .folder-entry .vault-entry-path { display: flex; flex-direction: column; gap: 0.2rem; }
     .folder-progress { font-weight: 600; }
     .folder-meta { color: var(--text-muted, #666); font-size: 0.9em; }
@@ -691,6 +700,44 @@
 
 <script>
     attachDirPicker('folder-browse-btn', 'folder-path-input', { allowNewFolder: false });
+    // Add folder stays disabled until the path names a folder the picker can
+    // open, and Browse is the highlighted step until then. The server checks
+    // the path again when the form is sent.
+    (function () {
+        const input = document.getElementById('folder-path-input');
+        const browseBtn = document.getElementById('folder-browse-btn');
+        const addBtn = document.getElementById('folder-add-btn');
+        const hint = document.getElementById('folder-add-hint');
+        let checking = 0;
+        function setFound(found) {
+            addBtn.disabled = !found;
+            addBtn.classList.toggle('btn-secondary', !found);
+            browseBtn.classList.toggle('btn-secondary', found);
+            hint.style.display = found ? 'none' : '';
+        }
+        async function check() {
+            const path = input.value.trim();
+            const ticket = ++checking;
+            if (!path) { setFound(false); return; }
+            let found = false;
+            try {
+                const response = await fetch(
+                    '/api/directories?path=' + encodeURIComponent(path));
+                found = response.ok;
+            } catch (error) {
+                found = false;
+            }
+            if (ticket === checking) { setFound(found); }
+        }
+        let timer = null;
+        input.addEventListener('input', function () {
+            setFound(false);
+            clearTimeout(timer);
+            timer = setTimeout(check, 250);
+        });
+        setFound(false);
+        check();
+    })();
     // Keep each folder's progress line current (base.html polls the status).
     document.addEventListener('folder-status', function (event) {
         (event.detail.folders || []).forEach(function (folder) {

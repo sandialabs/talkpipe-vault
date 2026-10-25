@@ -288,3 +288,23 @@ def test_one_unreachable_embedder_leaves_the_other_folders_semantic(
         assert by_folder == {"work", "home"}
     finally:
         llm_config._embeddingAdapter.pop("flaky", None)
+
+
+def test_the_embedder_is_made_on_the_first_query(two_folders, monkeypatch):
+    # Making one can download its model; building the search (opening a
+    # folder in the web interface) must not wait for that.
+    from talkpipe_vault.pipelines import searching_and_prompting
+
+    made = []
+    real = searching_and_prompting.LLMEmbed
+
+    def counting(*args, **kwargs):
+        made.append(kwargs["model"])
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(searching_and_prompting, "LLMEmbed", counting)
+    search = _search(list(two_folders))
+    assert made == []
+    assert search("lighthouse keeper")
+    search("basil pesto")
+    assert made == ["fake"]

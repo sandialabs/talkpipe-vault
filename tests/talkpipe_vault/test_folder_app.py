@@ -1,5 +1,6 @@
 """Tests for folder mode in the web application and the vault-server CLI."""
 
+import re
 import time
 from pathlib import Path
 
@@ -104,6 +105,17 @@ def test_adding_a_folder_searches_it_in_place(client, docs):
     assert "lighthouse" not in page or root in page
     assert "Ready · 2 files" in page
     assert "Named vaults (advanced)" in page
+
+
+def test_the_documents_page_leads_with_folders(client, tmp_path):
+    # Named vaults stay closed, even for someone who used one before, and
+    # Add folder waits for a folder to be chosen (the page's script enables
+    # it once the picker can open the path).
+    user_settings.remember_vault(str(tmp_path / "old-vault"))
+    page = client.get("/documents").text
+    assert re.search(r'<details class="named-vaults" id="named-vaults"\s*>', page)
+    assert 'id="folder-add-btn" class="btn-secondary" disabled' in page
+    assert 'id="folder-browse-btn">' in page
 
 
 def test_search_ask_and_lookups_work_over_a_folder(client, docs):

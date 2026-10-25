@@ -609,14 +609,15 @@ class _FanOutVectorSearch:
                 else (default_source, default_model)
             )
             grouped.setdefault(key, []).append(view)
+        # Embedders are made on first use, not here: making one can load or
+        # download its model, which would hold up whatever builds this search
+        # (opening a folder in the web interface) when the indexer, already
+        # running in the background, needs the same model anyway.
         self.groups = [
-            (
-                LLMEmbed(model=model, source=source, field=None).embedder,
-                get_retrieval_template(model),
-                views,
-            )
-            for (source, model), views in grouped.items()
+            (key, get_retrieval_template(key[1]), views)
+            for key, views in grouped.items()
         ]
+        self._embedders: dict[tuple[str, str], Any] = {}
         self.stores = {
             view.path: LanceDBDocumentStore(
                 path=get_vector_db_path(view.path),
@@ -639,9 +640,11 @@ class _FanOutVectorSearch:
         for just those rather than for every folder."""
         lists: list[list[SearchResult]] = []
         failed: list[tuple[_IndexView, Exception]] = []
-        for embedder, template, views in self.groups:
+        for key, template, views in self.groups:
             try:
-                vector = embedder.execute_one(template.replace("{query}", str(query)))
+                vector = self._embedder(key).execute_one(
+                    template.replace("{query}", str(query))
+                )
             except Exception as exc:
                 failed.extend((view, exc) for view in views)
                 continue
@@ -653,6 +656,14 @@ class _FanOutVectorSearch:
         if len(lists) <= 1:
             return (lists[0] if lists else []), failed
         return reciprocal_rank_fusion(lists, limit=self.limit), failed
+
+    def _embedder(self, key: tuple[str, str]) -> Any:
+        if key not in self._embedders:
+            source, model = key
+            self._embedders[key] = LLMEmbed(
+                model=model, source=source, field=None
+            ).embedder
+        return self._embedders[key]
 
     def _search(
         self, view: _IndexView, vector: Any
