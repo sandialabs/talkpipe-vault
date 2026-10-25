@@ -1,8 +1,10 @@
-# TalkPipe Vault — Advanced Guide
+# TalkPipe Vault — Advanced Usage
 
 Reference material beyond [getting the web app running](../README.md):
-command-line tools, container customization, the full model-configuration
-reference, architecture, reusable pipeline components, and development setup.
+command-line tools, the terminal interface, containers, the model
+configuration reference, agent search, retrieval filters, and where indexes
+live on disk. To use the vault's components in pipelines of your own, see
+the [Developer Guide](DEVELOPER_GUIDE.md).
 
 ## Command-line tools
 
@@ -337,26 +339,6 @@ page), not from `~/.talkpipe.toml`.
   [Deriving a customized image](#deriving-a-customized-image) for installing
   plugin packages in the container.
 
-### Overriding in code
-
-Explicit parameters take precedence over all configuration. Note that
-calling a segment factory only *constructs* a pipeline segment — nothing is
-indexed until items are fed through it and consumed:
-
-```python
-from talkpipe_vault.pipelines.building_and_watching import build_vector_db_from_paths
-
-indexer = build_vector_db_from_paths(
-    vault_path="/path/to/vault",
-    embedding_model="minishlab/potion-retrieval-32M",
-    embedding_source="model2vec",
-)
-
-items = [{"path": "/path/to/documents/notes.txt"}]
-for chunk in indexer(items):
-    print(f"Indexed chunk: {chunk['shingle_id']}")
-```
-
 ## Agent search
 
 **Let an agent select the results** (Semantic Search) and **Use Agent**
@@ -393,60 +375,14 @@ listed under the results.
 To use the agent's tools in your own application, or over your own search
 backend, see the [agent retrieval developer's guide](AGENT_RETRIEVAL.md).
 
-## Architecture
+## Retrieval filters
 
-TalkPipe Vault is built on [TalkPipe](https://github.com/sandialabs/talkpipe),
-a Python framework for composable data pipelines, and provides custom
-TalkPipe sources and segments for document processing and vector database
-creation.
-
-**Technology stack:** TalkPipe (pipelines), LanceDB (vector search), Whoosh
-(full-text search), Watchdog (filesystem events), FastAPI + Jinja2 (web),
-model2vec / Ollama / OpenAI / Anthropic (models).
-
-The stable path: the **Vaults & Documents** page (or `makevectordatabase`) builds
-a LanceDB `docs` table via TalkPipe's document pipeline — read, chunk,
-shingle, embed, store — and `vault-server` searches it.
-
-### Registered TalkPipe components
-
-**Sources:**
-
-- `fileWatcher` — file system event monitoring; experimental
-- `watchIntoVectorDB` — combined watching and vector database creation;
-  experimental
-- `listIntoVectorDB` — batch processing from glob patterns for the
-  experimental vault layout
-
-- `watchFolders` — keeps folders indexed for [folder mode](#folder-mode)
-  and emits each folder's status as it changes; the same background indexer
-  the interfaces use
-- `folderChanges` — emits a folder's document files, then each one again as
-  it is added, changed or deleted, remembering per name what it has sent
-
-**Segments:**
-
-- `indexFolder` — brings each folder it is given up to date for folder mode
-  (new and changed files indexed, deleted ones removed, keywords then
-  vectors) and emits its status
-- `buildVectorDBFromPaths` — complete document processing pipeline
-- `vaultSearch` — semantic search on a vault's vector database
-- `vaultTextSearch` — full-text keyword search using the Whoosh index
-- `vaultChat` — RAG-based Q&A using vault contents
-- `vaultAgentSearch` / `vaultAgentChat` — agent-driven retrieval: an agent
-  searches the vault with tools and keeps the chunks a question needs (and,
-  for `vaultAgentChat`, answers from them); see the
-  [agent retrieval developer's guide](AGENT_RETRIEVAL.md)
-- `filterSearchResults` — runs a ChatterLang script over a list of search
-  results held on a field, keeping, dropping, or rewriting each one; backs
-  the per-vault retrieval filter
-
-`vaultSearch`, `vaultTextSearch`, `vaultChat`, `vaultAgentSearch` and
-`vaultAgentChat` take a list of paths as `vault_path` to search several
-vaults or folders together, and a folder with a folder-mode index can be
-named directly instead of its index. A single named vault keeps its own
-pipeline unchanged. [Folder pipelines](FOLDER_PIPELINES.md) has Python and
-ChatterLang examples of every folder component.
+A retrieval filter is a per-index ChatterLang script that runs over each
+retrieved result before Ask builds its prompt. It is edited on the Vaults &
+Documents page (or the Vault tab), for the open named vault or the one open
+folder, and applies on this machine only once **Enabled on this machine** is
+ticked. The same mechanism is a segment, `filterSearchResults`, for
+pipelines of your own ([Developer Guide](DEVELOPER_GUIDE.md#filtering-results-filtersearchresults)).
 
 ### Writing a retrieval filter
 
@@ -487,130 +423,6 @@ every result — a missing field raises, which leaves retrieval unfiltered
 (or fails the question when the filter is marked strict). Use
 `lambdaFilter` when a field may be absent, when case should be ignored, or
 when the test is more than containment.
-
-### Building your own pipelines
-
-TalkPipe's strength is composability — complex functionality built from
-simple pipeline operators.
-
-> **Note:** Examples 1–3 use the **experimental** watcher/list components.
-> They are useful for understanding composition, but the watcher pipelines
-> write the experimental `full_documents`/`shingled_chunks` layout, **not**
-> the `docs` table that `vault-server` reads. For the stable path, index
-> with `makevectordatabase` or the **Vaults & Documents** page.
-
-**Example 1: Simple file watching pipeline**
-
-```python
-from talkpipe_vault.watchdog import file_watcher
-from talkpipe.pipe.io import Print
-
-# Watch a directory and print events
-pipeline = file_watcher(path="/path/to/watch") | Print()
-
-# Run the pipeline. file_watcher runs until interrupted (Ctrl+C), so this
-# loop does not return on its own — each iteration yields one event.
-for event in pipeline():
-    pass
-```
-
-Give the watcher a few seconds after startup before expecting output —
-events raised immediately after it starts can arrive noticeably late. And
-if you redirect or pipe the output, run with `python -u`: `Print()` writes
-to stdout, which Python block-buffers when it isn't a terminal, so events
-can otherwise sit unseen in the buffer.
-
-**Example 2: Complete document processing**
-
-`ReadFile` stores an `ExtractionResult` object (with `.content`, `.source`,
-`.title` fields) in the target field, not a plain string — filter
-expressions must go through `.content` to reach the text:
-
-```python
-from talkpipe_vault.watchdog import file_watcher
-from talkpipe.data.extraction import ReadFile
-from talkpipe.pipe.basic import FilterExpression
-from talkpipe.pipelines.vector_databases import MakeVectorDatabaseSegment
-
-pipeline = (
-    file_watcher(path="/path/to/watch")
-    | FilterExpression(expression="item['event'] != 'deleted'")
-    | ReadFile(field="path", set_as="full_content")
-    | FilterExpression(expression="len(item['full_content'].content.strip()) > 0")
-    | MakeVectorDatabaseSegment(
-        path="~/my-vault",
-        embedding_model="mxbai-embed-large:latest",
-        embedding_source="ollama",
-        embedding_field="full_content",
-        table_name="documents",
-        doc_id_field="path",
-    )
-)
-
-for result in pipeline():
-    print(f"Processed: {result['path']}")
-```
-
-Two practical notes: Ollama components read the server URL from
-`TALKPIPE_OLLAMA_SERVER_URL` (or `OLLAMA_SERVER_URL` in `~/.talkpipe.toml`,
-default `http://localhost:11434`). Also expect a single file save to produce
-more than one event (typically `created` then `modified`), so a file can be
-processed twice in a row; the vector database deduplicates by
-`doc_id_field`, so the end state is still one record per file.
-
-**Example 3: Using registered components via configuration**
-
-Registered sources and segments can be referenced by name from a TalkPipe
-**chatterlang** script, compiled with `talkpipe.compile`. This batch example
-indexes a glob of files with the experimental `listIntoVectorDB` source
-(note the parameter is `source_pattern`, not a directory path):
-
-```python
-import talkpipe
-
-# talkpipe.compile loads the registered components itself.
-pipeline = talkpipe.compile(
-    "INPUT FROM listIntoVectorDB["
-    '  source_pattern="/path/to/documents/**/*.txt",'
-    '  vault_path="~/watched-vault",'
-    '  embedding_source="model2vec",'
-    '  embedding_model="minishlab/potion-retrieval-32M",'
-    "  overwrite=True"
-    "]"
-)
-
-# Run it. Each yielded item is an indexed chunk
-# (keys: shingle_id, shingle, source, title).
-chunks = list(pipeline())
-print(f"Indexed {len(chunks)} chunk(s) into the vault.")
-```
-
-Folder mode's components work the same way outside the interfaces. Index
-two folders, then ask across both:
-
-```python
-import talkpipe
-
-index = talkpipe.compile("| indexFolder | print").as_function(single_in=False)
-index(["/path/to/notes", "/path/to/papers"])  # status dicts, one per folder
-
-ask = talkpipe.compile(
-    '| vaultChat[vault_path=["/path/to/notes", "/path/to/papers"], '
-    'chat_source="ollama", chat_model="qwen3:8b"]'
-).as_function(single_in=True, single_out=True)
-print(ask("What changed in the deployment plan?"))
-```
-
-`INPUT FROM watchFolders[paths="/path/to/notes,/path/to/papers"] | print`
-keeps both indexed instead, printing each folder's status as it changes, and
-can run next to a `vault-server` on the same folders: whichever starts first
-indexes, the other searches and takes over if it exits. More examples, in
-Python and ChatterLang, are in [Folder pipelines](FOLDER_PIPELINES.md).
-
-To watch a directory instead of a fixed glob, use the `watchIntoVectorDB`
-source (parameters `source_path` and `polling`) in place of
-`listIntoVectorDB` — it runs until interrupted. Both write the experimental
-layout rather than the `docs` table used by `vault-server`.
 
 ## Vault storage structure
 
@@ -702,7 +514,7 @@ Folder and named-vault modes are exclusive in the interfaces; a named vault
 whose documents all lie in one folder offers to search that folder instead.
 Retrieval filters apply when one folder is open, not several.
 
-A pipeline following a folder with `folderChanges` keeps its record of what
+A pipeline following a folder with `folderChanges` ([Developer Guide](DEVELOPER_GUIDE.md#following-changes-folderchanges)) keeps its record of what
 it has sent in another hidden subfolder, `<folder>/.tpstream/<name>.db`
 (with a `.gitignore` but no `CACHEDIR.TAG`, since a restore should bring it
 back with the documents), or under `folder-streams/` in app data where an
@@ -710,102 +522,7 @@ index would go there. It is separate from `.tpvault`, so rebuilding or
 deleting a folder's index never makes a stream send the whole folder again.
 Delete a `<name>.db` to have that stream start over.
 
-## Experimental directory monitoring
+## Developing
 
-Directory monitoring is not the recommended production path yet; the watcher
-components should be treated as experimental until the indexing and serving
-paths are unified. The old `vault-watch-into-vectordb` and
-`vault-list-into-vectordb` console scripts are not installed; their helper
-functions remain for development testing:
-
-```bash
-python -c "from talkpipe_vault.pipelines.cli import watch_vectordb_main; watch_vectordb_main()" \
-    /path/to/documents \
-    --vault-path ~/watched-vault \
-    --patterns "*.txt" "*.md" \
-    --polling \
-    --overwrite
-
-python -c "from talkpipe_vault.pipelines.cli import list_vectordb_main; list_vectordb_main()" \
-    "/path/to/documents/**/*.txt" \
-    --vault-path ~/watched-vault \
-    --overwrite
-```
-
-Expectations: the watcher reacts only to filesystem events that happen
-**after** it starts — pre-existing files are not indexed (use
-`list_vectordb_main` for those). Each indexed chunk is printed as a
-`{'shingle_id': ...}` line; results land in the experimental vault layout
-described above.
-
-## Development setup
-
-```bash
-git clone https://github.com/sandialabs/talkpipe-vault.git
-cd talkpipe-vault
-
-# A fresh clone lands on the release-only default branch, `stable`.
-# Development happens on `master`; switch to it before anything else.
-git checkout master
-
-# Virtual environment
-python -m venv .venv
-source .venv/bin/activate      # Windows: .venv\Scripts\activate
-
-pip install -e ".[dev]"
-
-# Tests
-pytest
-pytest --cov=src --cov-report=term-missing --cov-report=html
-
-# Quality (CI fails on any finding from these -- no advisory mode)
-ruff check .           # lint; fix most findings with: ruff check --fix .
-ruff format --check .  # formatting; apply with: ruff format .
-mypy                   # static types over src/ (config in pyproject.toml)
-pre-commit install     # optional: run the same checks on every commit
-
-# Security scanning. safety runs in an environment of its own: it caps
-# filelock below talkpipe's security floor, so it cannot be installed here.
-# Run it from an empty directory (it rejects this repo's v3.0 policy file).
-bandit -r src/
-pip freeze --exclude-editable | (cd "$(mktemp -d)" && uvx safety check --stdin)
-```
-
-### Project structure
-
-```
-talkpipe-vault/
-├── src/
-│   └── talkpipe_vault/
-│       ├── pipelines/
-│       │   ├── folder_files.py             # Folder mode's shared rules: index location, document files, change tracking
-│       │   ├── folder_index.py             # FolderIndex, indexFolder, watchFolders
-│       │   ├── folder_scheduler.py         # The background indexing thread
-│       │   ├── folder_manifest.py          # Per-file index state (sqlite)
-│       │   ├── folder_changes.py           # folderChanges: a folder as a stream of changes
-│       │   ├── searching_and_prompting.py  # Search and RAG segments
-│       │   ├── retrieval_filter.py         # Per-index filter scripts
-│       │   ├── agent_tools.py              # Agent tool pack (what the tools do) — see AGENT_RETRIEVAL.md
-│       │   ├── agent_search.py             # Agent retrieval segments (llmAgent) — see AGENT_RETRIEVAL.md
-│       │   ├── diagnostics.py              # Configuration status checks
-│       │   ├── vault_metadata.py           # The embedder an index was built with
-│       │   ├── config.py                   # Config resolution + vault layout
-│       │   ├── building_and_watching.py    # Experimental watcher pipelines
-│       │   └── cli.py                      # Experimental watcher CLI helpers
-│       ├── apps/
-│       │   ├── query.py                    # Web application
-│       │   ├── vault_server.py             # vault-server CLI entry point
-│       │   ├── user_settings.py            # Persisted UI settings
-│       │   ├── credentials.py              # Keys and URLs saved on the Settings page
-│       │   ├── access_control.py           # TALKPIPE_VAULT_ROOT / TALKPIPE_DOCUMENT_ROOTS fences
-│       │   ├── templates/                  # HTML templates
-│       │   └── static/                     # Static assets
-│       ├── tui/
-│       │   ├── app.py                      # Textual app + vault-tui entry point
-│       │   ├── service.py                  # VaultService facade over the app helpers
-│       │   └── app.tcss                    # Terminal-interface styles
-│       └── watchdog.py                     # File system monitoring
-├── docs/                                   # Images and this guide
-├── tests/                                  # Test suite
-└── pyproject.toml                          # Package configuration
-```
+Contributing to the vault, the project layout, and the test and lint
+commands are in the [Developer Guide](DEVELOPER_GUIDE.md#contributing-to-the-vault).

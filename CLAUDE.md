@@ -269,8 +269,9 @@ hold the vault's `writer.lock` (ignored by `existing_non_vault_entries`) and
 pause the folder indexer (`_index_run_guard`). Settings: `open_folders`,
 `recent_folders`, `last_session`, `index_location`. Tests use the offline
 `fake_embedder` fixture (`tests/conftest.py`, source `fakehash`);
-`docs/FOLDER_PIPELINES.md` shows every folder component in Python and
-ChatterLang, and every block there was run; keep it so.
+`docs/DEVELOPER_GUIDE.md` shows every component in Python and ChatterLang,
+and every block there was run; keep it so. `docs/ADVANCED.md` is for operators
+(Advanced Usage); component documentation goes in the Developer Guide.
 
 **Agent retrieval** is split in two, deliberately: `pipelines/agent_tools.py` owns *what
 the tools do*, `pipelines/agent_search.py` owns *the pipeline that runs them*. Nothing in

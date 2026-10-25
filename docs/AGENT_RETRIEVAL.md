@@ -73,7 +73,8 @@ kept.
 
 `vault_path` may also be a list of vaults or folders (each searched with its
 own embedder and the hits fused) or a folder with a folder-mode index; see
-the [Advanced Guide](ADVANCED.md#folder-mode).
+[Advanced Usage: Folder mode](ADVANCED.md#folder-mode) and the
+[Developer Guide](DEVELOPER_GUIDE.md).
 
 ## How a run works
 

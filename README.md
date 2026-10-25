@@ -35,7 +35,7 @@ ever sent to that provider.
 
 It is built on the [TalkPipe](https://github.com/sandialabs/talkpipe)
 pipeline framework, and its indexing and search components are reusable in
-your own pipelines; see the [Advanced Guide](docs/ADVANCED.md).
+your own pipelines; see the [Developer Guide](docs/DEVELOPER_GUIDE.md).
 
 **Status:** alpha. This page describes the `master` branch, which runs
 ahead of the PyPI release; the install commands below give the documented
@@ -124,8 +124,8 @@ is read-only, on a network share or synced by a cloud client; see
 index unless you ask for it to be deleted. Your documents are never touched.
 
 To index, watch or search folders from Python or ChatterLang, or to follow
-a folder's changes as a stream of documents, see
-[Folder pipelines](docs/FOLDER_PIPELINES.md).
+a folder's changes as a stream of documents, see the
+[Developer Guide](docs/DEVELOPER_GUIDE.md).
 
 ### Named vaults
 
@@ -213,21 +213,17 @@ any time. The full reference is in the
 
 ## More documentation
 
-The [Advanced Guide](docs/ADVANCED.md) covers:
-
-- The `vault-server` and `vault-tui` flag reference, and confining paths on
-  a shared machine
-- [Folder pipelines](docs/FOLDER_PIPELINES.md): `indexFolder`,
-  `watchFolders`, `folderChanges` and searching folders from Python or
-  ChatterLang
-- Containers: compose, a customized image, macOS and Windows notes
-- Model configuration, provider notes, and agent search
-- Architecture, the reusable TalkPipe components, retrieval filters, and
-  building your own pipelines
-- Storage layout and development setup
-
-The [agent retrieval developer's guide](docs/AGENT_RETRIEVAL.md) explains
-how to use the agent's tools in your own application.
+- [Advanced Usage](docs/ADVANCED.md): the `vault-server` and `vault-tui`
+  flag reference, confining paths on a shared machine, terminal interface
+  notes, containers (compose, a customized image, macOS and Windows), model
+  configuration and provider notes, agent search, retrieval filters, and
+  where indexes live on disk.
+- [Developer Guide](docs/DEVELOPER_GUIDE.md): every source and segment the
+  vault registers (`indexFolder`, `watchFolders`, `folderChanges`,
+  `vaultSearch`, `vaultChat`, …) with Python and ChatterLang examples, recipes
+  for pipelines of your own, the Python helpers, and contributing.
+- [Agent retrieval developer's guide](docs/AGENT_RETRIEVAL.md): the agent's
+  tools, and using them in your own application.
 
 ## Requirements
 
@@ -242,7 +238,7 @@ Contributions are welcome. Before submitting: `pytest` passes, and
 `ruff check .`, `ruff format --check .`, and `mypy` are clean -- CI fails on
 any finding from those three (`ruff check --fix . && ruff format .` fixes
 most; `pre-commit install` runs them on every commit). See
-[Development setup](docs/ADVANCED.md#development-setup).
+[Contributing to the vault](docs/DEVELOPER_GUIDE.md#contributing-to-the-vault).
 
 ### Development environment
 
