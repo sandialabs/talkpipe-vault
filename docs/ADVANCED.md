@@ -80,6 +80,45 @@ credentials under `TALKPIPE_VAULT_HOME`, default `~/.talkpipe-vault`) and
 honours the path fences below. Press `F1` inside the app for the keyboard
 reference. The module form is `python -m talkpipe_vault.tui`.
 
+### Terminal interface notes
+
+- **Opening.** A folder of documents opens in folder mode; `--as-vault`
+  opens it as a named vault. Opening a named vault loads the embedding model
+  (a first run downloads it, about 250 MB); the header reads "opening…"
+  until it is ready. `Enter` in either path field on the Vault tab runs
+  **Index documents** (it opens the vault when only the vault path is
+  filled).
+- **Settings tab.** Choose the chat provider under **Model settings**, then
+  enter its key or server URL under **Connections & credentials**, the last
+  section (one `Shift+Tab` from the Re-test button jumps to its last field;
+  `PageUp`/`PageDown` scroll). **Save connection settings** re-tests the
+  configuration. A bare `host:11434` becomes `http://host:11434`. A saved
+  value beats the environment variable (`TALKPIPE_OLLAMA_SERVER_URL`,
+  `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`); clear the field, or tick **Clear
+  the saved key**, to fall back to it. The OpenAI base URL field points the
+  OpenAI provider at any compatible endpoint ([Provider notes](#provider-notes)).
+- **Ask.** `Esc` stops waiting for an answer. The question box grows as it
+  wraps; `PageUp`/`PageDown` in it scroll a long answer. **Copy answer**
+  copies the model's text.
+- **Search results.** The result list takes the focus after a search;
+  `F3`/`F4` or `Shift+Tab` return to the query field. Long chunk text scrolls
+  once you `Tab` into its pane.
+- **Named vaults.** **Index documents** adds to the open vault; tick
+  **Overwrite existing index** to replace it (re-indexing the same folder
+  without it duplicates every chunk, and the summary says so). Indexing a
+  named vault never updates its full-text index: the header shows "keywords
+  out of date" until you rebuild it on the Keywords tab. Folders keep both
+  their indexes current on their own.
+- **Quitting.** `Ctrl+Q` quits (`Ctrl+C` only reminds you); while an indexing
+  run is in progress it asks first. `Ctrl+R` reloads the vault and settings
+  after editing `~/.talkpipe.toml` outside the app. If the open vault's
+  folder disappears from disk, Search, Ask and `Ctrl+R` say so instead of
+  recreating it empty.
+- **Retrieval filter.** The button on the Vault tab edits the same per-vault
+  ChatterLang script as the web page (its **Help** button shows the result
+  shape and recipes); a saved filter does nothing until **Enabled on this
+  machine** is ticked. Syntax: [Writing a retrieval filter](#writing-a-retrieval-filter).
+
 ### Confining paths on a shared machine
 
 Two environment variables restrict where either interface may look. Both
@@ -111,6 +150,27 @@ vault-tui --resume
 
 The [README](../README.md#option-2-container-podman-or-docker) covers the
 basic `podman run` invocation. Additional options:
+
+### macOS and Windows
+
+Containers run inside the podman machine VM (Podman Desktop sets this up).
+In PowerShell, replace the `\` line continuations with backticks and write
+the documents path explicitly (`-v C:\Users\you\Documents:/documents:ro`).
+Before indexing a large collection, give the VM more memory than its default
+(often 2 GB): a big ingestion peaks around 1.5 to 2 GB and an over-limit kill
+is silent (exit code 137, `oom=true` in `podman inspect`).
+
+```bash
+podman machine stop
+podman machine set --memory 4096    # MiB; use 8192 for very large collections
+podman machine start
+```
+
+Chat providers under a container: `TALKPIPE_OLLAMA_SERVER_URL` is only for
+Ollama on the host. Environment variables work for the others too, for
+example `-e TALKPIPE_CHAT_SOURCE=anthropic`, `-e TALKPIPE_CHAT_MODEL=<model>`
+and `-e ANTHROPIC_API_KEY=…`, as does entering the key on the Settings page,
+which is saved in the data volume.
 
 ### Compose
 
@@ -295,6 +355,41 @@ items = [{"path": "/path/to/documents/notes.txt"}]
 for chunk in indexer(items):
     print(f"Indexed chunk: {chunk['shingle_id']}")
 ```
+
+## Agent search
+
+**Let an agent select the results** (Semantic Search) and **Use Agent**
+(Ask) hand retrieval to an agent built on talkpipe-agents' `llmAgent`. It
+runs semantic and keyword searches as tools, reads what comes back, keeps the
+relevant chunks and discards the rest, and rewrites its queries from what it
+learns. **It stops when it judges that what it has kept would answer the
+question well**, after one chunk or after eight; the Settings page's chunk
+limit and iteration cap only bound a run that never gets there. The results
+note says which happened, and every tool call is printed to the server
+console and listed under the results.
+
+- It runs on the chat model chosen under Settings and needs one that can
+  call tools. Whether a model can only shows when a run starts: a server
+  without tool calling ends the run with an error note quoting what it said.
+- The default `mistral-small` often stops without keeping what it found (the
+  note then says it "stopped without saying it had enough"). In testing,
+  `qwen3:8b` and `gpt-oss` ran the agent cleanly; `minimax-m3.1-flash:cloud`
+  usually used up its iterations searching and reading without deciding
+  (the [developer's guide](AGENT_RETRIEVAL.md) says why).
+- On Ask, **Use Agent** supersedes the keyword boost (keyword search is one
+  of the agent's tools), and the answer is built from the chunks it kept,
+  which are also the citations. **Extra Effort** doubles the iterations (16
+  instead of 8 with the default); it helps models strong at tool calling and
+  mostly slows weaker ones. When the provider cannot run an agent at all
+  (`eliza`), the pages say so in place of the checkbox.
+- The keyword boost without the agent: the chat model distills the question
+  into index keywords, the matches are merged with the vector results, and
+  the "Answered by" line reports how many keyword hits were merged
+  (duplicates of vector hits are combined, so the boost can be active when
+  the source list looks unchanged).
+
+To use the agent's tools in your own application, or over your own search
+backend, see the [agent retrieval developer's guide](AGENT_RETRIEVAL.md).
 
 ## Architecture
 

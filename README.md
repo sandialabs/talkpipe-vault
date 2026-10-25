@@ -4,7 +4,7 @@
 
 # TalkPipe Vault
 
-> Turn folders of documents into a searchable, question-answerable vault — on your own machine.
+> Point it at folders of documents and ask questions. Everything stays on your machine.
 
 [![Python 3.11.4+](https://img.shields.io/badge/python-3.11.4+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
@@ -19,88 +19,57 @@
 
 ## What is TalkPipe Vault?
 
-TalkPipe Vault is a web application that indexes your documents — notes,
-papers, reports, an Obsidian vault, a project archive — into a local
-[LanceDB](https://lancedb.com/) vector database and lets you explore them
-three ways. Point it at one or more folders and start asking: each folder is
-indexed in the background and kept up to date as its files change (see
-[Folders](#folders)).
+TalkPipe Vault indexes folders of documents (notes, papers, reports, an
+Obsidian vault, a project archive) into a local search index and lets you
+explore them three ways, in a browser or in a terminal:
 
-- **Semantic search** — find documents by meaning, not just words
-- **Keyword search** — precise full-text queries with boolean operators
-- **Ask** — single-turn Q&A with answers grounded in your documents
+- **Semantic search**: find documents by meaning, not just words.
+- **Keyword search**: precise full-text queries with boolean operators.
+- **Ask**: single-turn Q&A with answers grounded in your documents.
 
-Everything runs locally by default. The built-in embedding model (model2vec)
-runs in-process with no server or API key; generated answers can come from
-any LLM provider TalkPipe supports — a local [Ollama](https://ollama.com/)
-server, OpenAI, or Anthropic — and TalkPipe plugins can add others. Ollama
-is one option, not a requirement: see [LLM providers](#llm-providers). Your
-documents are only ever sent to the provider you choose.
+Everything runs locally by default. The built-in embedding model runs
+in-process with no server or API key. Answers come from the chat provider
+you choose: a local [Ollama](https://ollama.com/) server, OpenAI, or
+Anthropic (see [LLM providers](#llm-providers)). Your documents are only
+ever sent to that provider.
 
 It is built on the [TalkPipe](https://github.com/sandialabs/talkpipe)
-pipeline framework and doubles as a real-world example of composing document
-processing, vector search, and RAG from reusable components — see the
-[Advanced Guide](docs/ADVANCED.md) if that side interests you.
+pipeline framework, and its indexing and search components are reusable in
+your own pipelines; see the [Advanced Guide](docs/ADVANCED.md).
 
-**Status:** alpha, under active development. This page is the `master` branch,
-which runs ahead of the PyPI release — if something described here is missing
-from a `pip install`, install the development branch to get the documented
-behavior:
+**Status:** alpha. This page describes the `master` branch, which runs
+ahead of the PyPI release. To get the documented behaviour before the next
+release:
 
 ```bash
 pip install "git+https://github.com/sandialabs/talkpipe-vault.git@master"
 ```
 
-The `@master` matters: the repository's default branch is the release-only
-`stable`, so a plain `git+https://…` URL installs the same code as PyPI. See
-[Development setup](docs/ADVANCED.md#development-setup) for a full clone.
+(The `@master` matters: the default branch, `stable`, is the last release.)
 
 ## Run the web app
 
 ### Option 1: pip install
 
 ```bash
-# A virtual environment avoids PEP 668 "externally managed" errors on
-# recent Linux distributions.
-python -m venv .venv
-source .venv/bin/activate      # Windows: .venv\Scripts\activate
-
+python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install talkpipe-vault
-vault-server
+vault-server ~/notes
 ```
 
-Or, with [uv](https://docs.astral.sh/uv/), install it as a standalone
-command in an environment of its own (`uv tool upgrade talkpipe-vault`
-upgrades it later):
+Or install it as a standalone command with [uv](https://docs.astral.sh/uv/):
+`uv tool install talkpipe-vault`.
 
-```bash
-uv tool install talkpipe-vault
-vault-server
-```
+Your browser opens at http://127.0.0.1:8002 with `~/notes` being indexed in
+the background. Search and ask right away; the pages say how far indexing
+has got. Started again later, `vault-server` reopens the folders you had
+open. Without a path, add folders on the **Vaults & Documents** page.
 
-Your browser opens at http://127.0.0.1:8002 (`--no-browser` skips that), or
-start it on a folder straight away with `vault-server ~/notes` (see
-[Folders](#folders)). Started again later, `vault-server` reopens the folders
-you had open. Then:
-
-1. **Vaults & Documents** — add the folders you want to ask about (type a
-   path or click **Browse…**, then **Add folder**). Each is indexed in the
-   background and kept up to date; its progress shows in the list. The
-   first index downloads the default embedding model from Hugging Face
-   (about 250 MB on disk, cached afterward).
-2. **Semantic Search**, **Keyword Search** and **Ask** away — right away,
-   while indexing is still running.
-
-Prefer an index kept apart from your documents? See
-[Named vaults](#named-vaults).
-
-Search and indexing need nothing more. Answers on the Ask page need a chat
-provider — Ollama, OpenAI, or Anthropic. Pick it on the **Settings** page
-and enter its server URL or API key under **Connections & credentials**
-there (no environment variables needed); [LLM providers](#llm-providers)
-has the details. The chat setting starts out as Ollama at
-`http://localhost:11434`, so until a reachable provider is configured, Ask
-shows a connection error that explains how to fix it.
+The first index downloads the default embedding model from Hugging Face
+(about 250 MB, cached afterward). Search and indexing need nothing more.
+**Ask** needs a chat provider: pick it on the **Settings** page and enter
+its server URL or API key there. Until one is reachable, Ask shows a
+connection error that says how to fix it.
 
 ### Option 2: Container (Podman or Docker)
 
@@ -112,131 +81,19 @@ podman run --rm -p 8002:8002 \
   ghcr.io/sandialabs/talkpipe-vault:latest
 ```
 
-Then open http://127.0.0.1:8002 (use `127.0.0.1`, not `localhost` — rootless
-podman publishes ports IPv4-only). Docker users can substitute `docker run`
-with the same arguments.
+Then open http://127.0.0.1:8002 (`127.0.0.1`, not `localhost`: rootless
+podman publishes ports IPv4-only). `docker run` takes the same arguments.
 
-What each piece does:
+- `-v vault_data:/app/data` keeps settings, indexes kept in app data and the
+  embedding-model cache across container recreation.
+- `-v ~/Documents:/documents:ro,Z` is what the folder picker can see. Drop
+  `:Z` on macOS and Windows; keep it on SELinux hosts such as Fedora.
+- `-e TALKPIPE_OLLAMA_SERVER_URL=…` is optional and only for Ollama running on
+  the host. For OpenAI or Anthropic, drop it and enter the key on the
+  Settings page instead.
 
-- `-v vault_data:/app/data` — persistent storage for vaults, settings, and
-  the embedding-model cache, so the model downloads once and your data
-  survives container recreation. On start the container reopens the vault
-  you last used; the first run starts on the Vaults & Documents page.
-- `-v ~/Documents:/documents:ro,Z` — host documents to index; the folder
-  picker only sees what you mount. Mount `~` instead to browse your whole
-  home directory. Keep `:Z` on SELinux Linux hosts (e.g. Fedora); **drop it
-  on macOS and Windows**, where it makes podman try to relabel every mounted
-  file.
-- `-e TALKPIPE_OLLAMA_SERVER_URL=…` — **optional**, and only for Ollama (the
-  default chat setting) running on the container host. Using OpenAI or
-  Anthropic instead? Drop the line, select the provider on the Settings page
-  and enter its API key under **Connections & credentials** — both are saved
-  in the data volume. Environment variables work too — for example
-  `-e TALKPIPE_CHAT_SOURCE=anthropic`, `-e TALKPIPE_CHAT_MODEL=<model>` and
-  `-e ANTHROPIC_API_KEY=…`; see [LLM providers](#llm-providers). Search and
-  indexing work without any chat provider.
-
-**macOS/Windows notes:** containers run inside the podman machine VM
-(Podman Desktop sets this up). In PowerShell, replace the `\` line
-continuations with backticks and write the documents path explicitly
-(`-v C:\Users\you\Documents:/documents:ro`). Before indexing a large
-collection, give the VM more memory than its default (often 2 GB) — a big
-ingestion peaks around 1.5–2 GB and an over-limit kill is silent
-(exit code 137, `oom=true` in `podman inspect`):
-
-```bash
-podman machine stop
-podman machine set --memory 4096    # MiB; use 8192 for very large collections
-podman machine start
-```
-
-A compose service and instructions for deriving your own customized image
-(different default models, extra packages) are in the
-[Advanced Guide](docs/ADVANCED.md#containers).
-
-## The terminal interface (`vault-tui`)
-
-Everything above is also available without a browser — in an SSH session, a
-tmux window, or on a headless machine — through `vault-tui` (the **Use Agent**
-options on Search and Ask included). It is installed
-by the same `pip install talkpipe-vault` (or container image) as
-`vault-server`; there is nothing extra to install.
-
-```bash
-vault-tui ~/notes         # search a folder of documents (add more with --dir)
-vault-tui ~/my-vault      # open (or create) a named vault — the index folder, not your documents
-vault-tui --resume        # reopen the last session's folders, or the most recent vault
-vault-tui                 # reopen the last session's folders, else choose on the Vault tab
-```
-
-A folder of documents opens in folder mode, as with `vault-server`: it is
-indexed in the background and searchable at once (see [Folders](#folders));
-`--as-vault` opens it as a named vault instead. A named vault is a folder
-that holds only the search index; its documents live wherever they already
-are and are named on the Vault tab.
-Opening a vault loads the embedding model, which on a first run means
-downloading it (about 250 MB for the default model2vec model) — the Vault tab
-says so while it waits, and the header reads "opening…" until the vault is
-ready.
-
-Enter in either path field on the Vault tab runs **Index documents** (it
-opens the vault when only the vault path is filled).
-
-It runs in-process (no server needed) and uses the same vault files, recent
-list, model settings and credentials as the web interface, so you can switch
-between the two freely. Tabs mirror the web pages:
-
-| Key | Tab | What you can do |
-|-----|-----|-----------------|
-| `F2` | Vault | Open/create a vault, browse to a documents folder, index it (with progress), open or delete recent vaults, edit the retrieval filter |
-| `F3` | Search | Semantic search; the detail pane follows the highlighted result — `Enter` loads the full chunk, `o` shows/opens the source document, `c` copies the chunk, Copy All copies every result. **Use Agent** hands the search to the agent, as in the browser |
-| `F4` | Keywords | Full-text search (Whoosh syntax), and building/rebuilding the full-text index |
-| `F5` | Ask | Question answering with the answer, its "Answered by" line and the source chunks it used; optional keyword boost, or **Use Agent** to let the agent gather the context it answers from |
-| `F6` | Settings | Configuration status (Re-test), embedding/chat model settings (including the agent's chunk limit and iteration cap), connections & credentials |
-| `F1` / `Ctrl+R` / `Ctrl+Q` | | Help / reload the vault and settings (after indexing or editing `~/.talkpipe.toml` outside the app) / quit (`Ctrl+C` only reminds you of `Ctrl+Q`; while an indexing run is in progress `Ctrl+Q` asks first, because quitting abandons it) |
-
-`--show-source-paths` shows file paths in results, as for `vault-server`.
-On a shared machine, `TALKPIPE_VAULT_ROOT` and `TALKPIPE_DOCUMENT_ROOTS`
-confine where vaults and documents may live for both interfaces — see
-[Confining paths on a shared machine](docs/ADVANCED.md#confining-paths-on-a-shared-machine).
-Long operations (embedding, Ask, indexing) run in the background and report
-progress in the tab that started them. As in the browser, Ask needs a chat
-provider (Ollama, OpenAI, or Anthropic — see [LLM providers](#llm-providers)):
-choose it under **Model settings** on the Settings tab (`F6`), then enter
-its API key or server URL under **Connections & credentials** — the last
-section on the tab (one `Shift+Tab` from the top, the Re-test button `F6`
-lands on, jumps straight to its last field, the Ollama URL;
-`PageUp`/`PageDown` scroll the tab) — and press **Save connection
-settings**, which re-tests the configuration by itself. A bare
-`host:11434` is completed to `http://host:11434` when saved. Alternatively
-export the provider's variable (`TALKPIPE_OLLAMA_SERVER_URL`,
-`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`) before starting — but a value saved
-on the Settings tab takes precedence over the variable, so clear the URL
-field (or tick **Clear the saved key**) to go back to it; the configuration
-status names which one is in effect.
-The OpenAI base URL field points the OpenAI provider at any
-OpenAI-compatible endpoint — see
-[Provider notes](docs/ADVANCED.md#provider-notes). While an
-answer is being generated, `Esc` stops waiting for it. For a named
-vault, "Index documents" adds to the open vault — tick **Overwrite existing index** to
-replace it; re-indexing the same folder without it duplicates every chunk
-(the summary line says so when it happens, and the box unticks itself after
-a replace run). Indexing a named vault never updates its full-text index:
-the header shows "keywords out of date" until you rebuild it on the
-Keywords tab, and a keyword search that finds nothing says so. (Folders
-keep both their indexes current on their own.) Long chunk text scrolls once
-you `Tab` into its pane; the question box grows as a long question wraps,
-and `PageUp`/`PageDown` in it scroll a long answer (the answer pane is also
-four `Tab` stops from the question box). After a search the result list has
-the focus, so `F3`/`F4` (or `Shift+Tab`) return to the query field before
-you type the next query. If the open vault's folder disappears from disk
-(deleted or unmounted outside the app), Search, Ask and `Ctrl+R` say so
-instead of quietly recreating it empty. The **Retrieval filter** button on the Vault tab edits the same
-per-vault ChatterLang script as the web page, with an example in the
-dialog (its **Help** button adds the result shape and more recipes); a
-saved filter does nothing until you tick **Enabled on this machine**. The
-script syntax is in the Advanced Guide under
-[Writing a retrieval filter](docs/ADVANCED.md#writing-a-retrieval-filter).
+Compose, a customized image, and podman machine memory on macOS and Windows
+are in the [Advanced Guide](docs/ADVANCED.md#containers).
 
 ## Folders
 
@@ -251,13 +108,12 @@ There is no vault to name or create. For each folder, and everything under
 it:
 
 - **Indexing runs in the background**, keywords first (searchable within
-  minutes), then meaning. Search and ask right away: every page says how far
-  indexing has got, and keyword matches cover files not embedded yet.
+  minutes), then meaning. Every page says how far it has got, and keyword
+  matches cover files not embedded yet.
 - **Changes are picked up as they happen**: new, changed, renamed and
   deleted files.
 - **Some files are skipped**: hidden files and folders (`.git`, `.obsidian`,
-  …), editor temporary files, and formats no extractor reads, so the file
-  count can be lower than `ls -R` shows.
+  …), editor temporary files, and formats no extractor reads.
 - **Quitting loses nothing**: indexing resumes where it left off, and a
   second vault-server or vault-tui on the same folder shares the index.
 - **Several folders** can be open together; every result names its folder.
@@ -268,185 +124,116 @@ is read-only, on a network share or synced by a cloud client; see
 [Folder mode](docs/ADVANCED.md#folder-mode). Removing a folder keeps its
 index unless you ask for it to be deleted. Your documents are never touched.
 
-To index, watch or search folders from your own Python code or ChatterLang
-scripts, or to follow a folder's changes as a stream of documents, see
+To index, watch or search folders from Python or ChatterLang, or to follow
+a folder's changes as a stream of documents, see
 [Folder pipelines](docs/FOLDER_PIPELINES.md).
 
 ### Named vaults
 
 A named vault is an index kept in a separate folder of its own, for
-documents you would rather not index in place. It works as before, under
-**Named vaults (advanced)** on the Vaults & Documents page: pick the
-documents (a folder or glob pattern), accept the suggested vault name, and
-one click creates the vault and indexes into it. A named vault's **Keyword
-Search** starts disabled and offers a **Create Full-Text Index** button;
-indexing more documents later does not refresh that index, so rebuild it
-from the same page when you do.
+documents you would rather not index in place. It lives under **Named
+vaults (advanced)** on the Vaults & Documents page: pick the documents (a
+folder or glob pattern), accept the suggested vault name, and one click
+creates the vault and indexes into it. A named vault's keyword index is
+built once with a button on the Keyword Search page and does not refresh
+when you index more documents; rebuild it there when you do.
 
 ## The web interface
 
-- **Vaults & Documents** — the **Folders** list (add folders to search, with
-  each one's indexing progress) and, under **Named vaults (advanced)**,
-  the documents to index and the vault to index them into, on one page with
-  a built-in folder browser. With no vault
-  open, a vault name is suggested from the documents folder and created on
-  submit; with one open, the same form adds documents to it. Recent vaults
-  are remembered for one-click reopening, and indexing shows live progress.
-- **Settings** — choose embedding and chat providers/models (the chat model
-  also drives the agent on the Search and Ask pages; the Agent retrieval
-  section bounds how much one agent run may collect), with a live
-  **Configuration status** panel that tests your selection (and can download
-  an uncached embedding model via Re-test), plus **Connections &
-  credentials** for the OpenAI and Anthropic API keys and the Ollama and
-  OpenAI-compatible server URLs — no environment variables required. See
-  [LLM providers](#llm-providers).
-- **Semantic Search** — vector similarity search over your documents. The
-  closest ten chunks are always returned, so on a small vault every chunk
-  comes back and the last few are weak matches. A **Let an agent select the results** checkbox hands the search to an agent
-  instead: it runs semantic and keyword searches as tools, reads what comes
-  back, keeps the relevant chunks and discards the rest, and rewrites its
-  queries from what it learns (it can also ask the model to turn a question
-  into keyword-search terms). **It stops when it judges that what it has kept
-  would answer your question well** — after one chunk or after eight, whichever
-  it takes — rather than after collecting a fixed number of results; the
-  Settings page's chunk limit and iteration cap only bound a run that never
-  gets there. The results note says which of those happened. Every tool call is
-  printed to the server console and listed under the results, so you can see
-  what it did. Slower than plain search, and needs a chat model that supports
-  tool calling — the agent runs on the chat model chosen under Settings. The
-  default, `mistral-small`, often stops without keeping what it found (the
-  results note then says it "stopped without saying it had enough"); in
-  testing, `qwen3:8b` and `gpt-oss` ran the agent cleanly, while
-  `minimax-m3.1-flash:cloud` usually used up its iterations searching and
-  reading without deciding (the developer's guide says why). When the chat
-  provider cannot run an agent at all (`eliza`, for instance), the page says
-  so in place of the checkbox. Whether a particular model can call tools only
-  shows when a search runs — the **Configuration status** panel tests a plain
-  chat exchange — so a model or server without tool calling ends the run with
-  an error note quoting what the server said. To use the agent's tools in
-  your own application, or over your own search backend, see the
-  [agent retrieval developer's guide](docs/AGENT_RETRIEVAL.md).
-- **Keyword Search** — boolean and phrase queries. Folders keep their
-  full-text index current on their own; a named vault's is separate, built
-  once with the button on that page (the page says so, and stays disabled
-  until you do), and indexing documents never updates it, so rebuild it
-  there after adding more. Matching is case-insensitive but on
-  exact word tokens (`apple` won't match `apples`), and very common words are
-  not indexed; use semantic search for meaning-based lookups.
-- **Ask** — single-turn Q&A with source citations you can open and copy.
-  Once a full-text index exists, a **Boost retrieval with keyword search**
-  checkbox appears: the chat model distills your question into index
-  keywords, the keyword matches are merged with the vector-search results,
-  and the combined context is used to answer. The "Answered by" line under
-  the answer confirms whether the boost ran and how many keyword hits were
-  merged (keyword hits that duplicate vector results are combined, so the
-  boost can be active even when the source list looks unchanged). A
-  **Use Agent** checkbox appears whenever the chat model can be run as an
-  agent: instead of one retrieval, the agent gathers the context the same
-  way it does on the Semantic Search page — searching, reading, keeping and
-  discarding chunks — and the answer is built from just the chunks it kept,
-  which are also the citations. Its tool calls are listed under the answer.
-  It takes considerably longer than a plain question, and it supersedes the
-  keyword boost (the agent already has keyword search as one of its tools).
-  Next to it, **Extra Effort** (greyed out until Use Agent is ticked) lets
-  the agent take twice its usual iterations — 16 instead of 8 with the
-  default Agent Search Iterations — for questions that need one fact to find
-  the next. It helps a model that is strong at tool calling; with weaker ones
-  it mostly makes the answer slower. Semantic Search and the terminal
-  interface offer the same box.
+- **Vaults & Documents**: the folders being searched, with each one's
+  progress, and the named-vault controls.
+- **Semantic Search**: the ten closest chunks. **Let an agent select the
+  results** hands the search to an agent that searches, reads, keeps what is
+  relevant and stops when it judges it could answer your question; slower,
+  and it needs a chat model that can call tools. Details and which models
+  do well are in [Agent search](docs/ADVANCED.md#agent-search).
+- **Keyword Search**: boolean and phrase queries. Matching is on exact word
+  tokens (`apple` does not match `apples`); use semantic search for meaning.
+- **Ask**: a single question, answered with citations you can open and copy.
+  **Boost retrieval with keyword search** merges keyword matches into the
+  context; **Use Agent** lets the agent gather the context instead, and
+  **Extra Effort** gives it twice the iterations for questions that need
+  one fact to find the next. The "Answered by" line says what ran.
+- **Settings**: embedding and chat providers and models, the agent's
+  limits, a **Configuration status** panel that tests the selection, and
+  **Connections & credentials** for API keys and server URLs.
 
-Every search result and Ask citation has an **Open** link that fetches the
-original document from the server — PDFs, images, and plain text open right
-in the browser; other formats download. Because the file is streamed over
-HTTP, this works the same when the server runs in a container (where your
-documents live at a container-side mount path the browser can't reach
-directly).
+Every result and citation has an **Open** link that streams the original
+document from the server, so it works the same from a container.
+
+## The terminal interface (`vault-tui`)
+
+The same features in a terminal (SSH, tmux, a headless machine), installed
+with the package. It runs in-process and shares the web interface's
+folders, settings and credentials.
+
+```bash
+vault-tui ~/notes         # search a folder of documents (add more with --dir)
+vault-tui ~/my-vault      # open (or create) a named vault
+vault-tui                 # reopen the last session's folders, else choose on the Vault tab
+```
+
+| Key | Tab | What you can do |
+|-----|-----|-----------------|
+| `F2` | Vault | Add and remove folders, open or create a named vault, index documents, edit the retrieval filter |
+| `F3` | Search | Semantic search; `Enter` shows the chunk, `o` opens the source, `c` copies; **Use Agent** as in the browser |
+| `F4` | Keywords | Full-text search |
+| `F5` | Ask | Question answering with citations; keyword boost or **Use Agent** |
+| `F6` | Settings | Configuration status, models, connections and credentials |
+| `F1` / `Ctrl+R` / `Ctrl+Q` | | Help / reload / quit |
+
+Ask needs a chat provider here too: choose it on the Settings tab and enter
+its key or URL under **Connections & credentials**. More keys and behaviour
+are in the [Advanced Guide](docs/ADVANCED.md#terminal-interface-notes).
 
 ## LLM providers
 
-TalkPipe Vault is not tied to Ollama. It uses two models — one for
-**embeddings** (indexing and semantic search) and one for **chat** (Ask
-answers) — and each can come from any provider registered with TalkPipe
-that supports that role. Out of the box:
+Two models are used: one for **embeddings** (indexing and semantic search)
+and one for **chat** (Ask). Each can come from any provider TalkPipe
+registers for that role:
 
 | Provider | Embeddings | Chat | What it needs |
 |----------|------------|------|---------------|
-| `model2vec` | yes — **default** (`minishlab/potion-retrieval-32M`) | — | Nothing: runs in-process; the model downloads from Hugging Face once |
-| `ollama` | yes | yes — **default** (`mistral-small`) | A reachable Ollama server (default `http://localhost:11434`) with the model pulled |
-| `openai` | yes | yes | An API key; optionally a base URL for any OpenAI-compatible endpoint |
-| `anthropic` | — | yes | An API key |
-| `eliza` | — | plumbing check only | Nothing — see below |
+| `model2vec` | **default** (`minishlab/potion-retrieval-32M`) | no | Nothing: runs in-process; the model downloads once |
+| `ollama` | yes | **default** (`mistral-small`) | A reachable Ollama server with the model pulled |
+| `openai` | yes | yes | An API key; optionally a base URL for an OpenAI-compatible endpoint |
+| `anthropic` | no | yes | An API key |
+| `eliza` | no | plumbing check only | Nothing; its replies ignore your documents |
 
-Any provider a TalkPipe plugin registers appears alongside these
-automatically; TalkPipe's
-[supported sources](https://github.com/sandialabs/talkpipe/blob/stable/docs/guides/model-and-source-configuration.md#supported-sources)
-has the library's full list.
-
-**Choosing.** Pick the source and model for each role on the **Settings**
-page (the Settings tab, `F6`, in `vault-tui`); choices persist and apply
-immediately, and the **Configuration status** panel tests whatever is
-selected. Only the providers you select need to be set up — the default
-combination needs just an Ollama server, and search and indexing need no
-chat provider at all. `TALKPIPE_EMBEDDING_SOURCE`/`TALKPIPE_EMBEDDING_MODEL`
-and `TALKPIPE_CHAT_SOURCE`/`TALKPIPE_CHAT_MODEL` (or `embedding_source`,
-`chat_model`, … in `~/.talkpipe.toml`) replace the defaults above; a choice
-saved on the Settings page overrides them.
-
-**Credentials.** Enter keys and URLs under **Settings → Connections &
-credentials** — no environment variables needed — or supply them through
-the environment:
-
-| Setting | Environment variable |
-|---------|----------------------|
-| OpenAI API key | `OPENAI_API_KEY` |
-| OpenAI base URL (optional) | `OPENAI_BASE_URL` |
-| Anthropic API key | `ANTHROPIC_API_KEY` |
-| Ollama server URL | `TALKPIPE_OLLAMA_SERVER_URL` |
-
-Values saved on the Settings page are stored in `credentials.json` under
-`TALKPIPE_VAULT_HOME` (default `~/.talkpipe-vault`, owner-only permissions),
-apply only to the vault process, and take precedence over the environment
-variable; clear a field to fall back to the variable.
-
-**eliza is not a model.** It is a built-in scripted responder whose
-replies do not draw on your documents. Select it only to check that the Ask
-page works end to end before a real provider is set up — its replies say
-nothing about answer quality.
-
-**The embedding model belongs to the vault.** Embeddings are only comparable
-to queries embedded by the same model, so each vault records the embedder it
-was built with and reopens with it, regardless of the current setting;
-switching embedders means re-indexing. Chat models can be switched freely at
-any time.
-
-The full reference — precedence, every configuration key, templates, and
-per-provider notes — is in the
+Pick the source and model for each role on the **Settings** page; the
+choice persists and the **Configuration status** panel tests it. Enter keys
+and URLs under **Connections & credentials** there, or set
+`OPENAI_API_KEY`, `OPENAI_BASE_URL`, `ANTHROPIC_API_KEY` or
+`TALKPIPE_OLLAMA_SERVER_URL` in the environment (a value saved in Settings
+wins). Embeddings are only comparable to queries from the same model, so
+each index keeps the embedder it was built with; chat models can change at
+any time. The full reference is in the
 [Advanced Guide](docs/ADVANCED.md#model-configuration).
 
 ## More documentation
 
 The [Advanced Guide](docs/ADVANCED.md) covers:
 
-- Command-line indexing with `makevectordatabase` and the full `vault-server`
-  flag reference
-- [Folder pipelines](docs/FOLDER_PIPELINES.md) — indexing, watching,
-  following and searching folders from Python or ChatterLang
-  (`indexFolder`, `watchFolders`, `folderChanges`)
-- The compose service and deriving a customized container image
-- The complete model configuration reference
-- Architecture, the reusable TalkPipe sources/segments, and building your own
-  pipelines
-- Vault storage layout
-- Development setup
-- The experimental directory-monitoring components
+- The `vault-server` and `vault-tui` flag reference, and confining paths on
+  a shared machine
+- [Folder pipelines](docs/FOLDER_PIPELINES.md): `indexFolder`,
+  `watchFolders`, `folderChanges` and searching folders from Python or
+  ChatterLang
+- Containers: compose, a customized image, macOS and Windows notes
+- Model configuration, provider notes, and agent search
+- Architecture, the reusable TalkPipe components, retrieval filters, and
+  building your own pipelines
+- Storage layout and development setup
+
+The [agent retrieval developer's guide](docs/AGENT_RETRIEVAL.md) explains
+how to use the agent's tools in your own application.
 
 ## Requirements
 
 - **Python** 3.11.4+ (pip install path)
-- **A chat provider** for Ask answers — any one of a local Ollama server, an
-  OpenAI API key (or OpenAI-compatible endpoint), or an Anthropic API key;
-  see [LLM providers](#llm-providers). Nothing else is needed: embeddings
-  work out of the box, and indexing and search need no chat provider.
+- **A chat provider** for Ask: a local Ollama server, an OpenAI API key (or
+  OpenAI-compatible endpoint), or an Anthropic API key. Indexing and search
+  need no chat provider.
 
 ## Contributing
 
