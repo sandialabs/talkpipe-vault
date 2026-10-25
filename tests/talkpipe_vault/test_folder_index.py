@@ -87,7 +87,7 @@ def _lance_ids(folder):
 
 
 def _ids_for(ids, folder, relpath):
-    prefix = folder._file_prefix(folder_index._file_key(relpath))
+    prefix = folder._file_prefix(folder_index.file_key(relpath))
     return {i for i in ids if i.startswith(prefix)}
 
 
@@ -400,9 +400,9 @@ def test_change_events_ignore_hidden_and_index_paths(docs, vault_home, fake_embe
     folder.note_change(str(root / ".git" / "index"))
     folder.note_change(str(root / "notes.txt.swp"))
     folder.note_change("/somewhere/else.txt")
-    assert not folder._dirty
+    assert not folder.changes.dirty
     folder.note_change(str(root / "sub" / "new.md"))
-    assert folder._dirty == {"sub/new.md"}
+    assert folder.changes.dirty == {"sub/new.md"}
 
 
 def _wait_for(folder, predicate, timeout=60.0):

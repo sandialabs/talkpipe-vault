@@ -5,7 +5,7 @@ Whoosh under ``fulltext_vault/``, ``vault_metadata.json``), so every segment
 that takes a ``vault_path`` works on it unchanged. It normally lives in the
 folder itself, in ``<folder>/.tpvault``; a folder that is read-only, on a
 network share, or inside a sync client's tree gets one under the app's data
-directory instead (``resolve_index_location``).
+directory instead (``folder_files.resolve_index_location``).
 
 Indexing runs in the background in two phases. The keyword phase reads and
 chunks each file once and writes the chunks to Whoosh, so a folder is
@@ -15,12 +15,13 @@ chunks back out of Whoosh and embeds them into LanceDB through talkpipe's
 file's path relative to the folder, so both stores share ids and redoing a
 batch after a crash replaces rows rather than duplicating them.
 
-The per-file state lives in ``manifest.db`` (sqlite), written only by the
-process holding ``writer.lock``. Any other process opening the same folder is
-a reader: it searches the index and shows the writer's progress from
-``status.json``, and takes over (resuming from the manifest) once the writer
-exits. One ``FolderScheduler`` thread per process does the work for every
-open folder: keywords for all of them before any vectors.
+The per-file state lives in ``manifest.db`` (``folder_manifest``), written
+only by the process holding ``writer.lock``. Any other process opening the
+same folder is a reader: it searches the index and shows the writer's
+progress from ``status.json``, and takes over (resuming from the manifest)
+once the writer exits. One ``FolderScheduler`` thread per process
+(``folder_scheduler``) does the work for every open folder: keywords for all
+of them before any vectors.
 """
 
 from __future__ import annotations
@@ -33,18 +34,14 @@ import logging
 import os
 import shutil
 import socket
-import sqlite3
-import threading
 import time
 import uuid
-from collections.abc import Callable, Iterable, Iterator
-from dataclasses import dataclass
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 from typing import Annotated, Any
 
 import filelock
 from talkpipe import register_segment, register_source, segment, source
-from talkpipe.data.extraction import global_extractor_registry
 from talkpipe.pipelines.vector_databases import (
     EmbeddingDimensionMismatchError,
     ProcessDocumentsSegment,
@@ -54,12 +51,7 @@ from talkpipe.pipelines.vector_databases import (
 from talkpipe.search.lancedb import LanceDBDocumentStore
 from talkpipe.search.whoosh import WhooshFullTextIndex
 from talkpipe.util.data_manipulation import assign_property, extract_property
-from watchdog.events import FileSystemEvent, FileSystemEventHandler
-from watchdog.observers import Observer
-from watchdog.utils.patterns import match_any_paths
 from whoosh.query import Prefix
-
-from talkpipe_vault.watchdog import COMMON_IGNORE_PATTERNS
 
 from . import vault_metadata
 from .config import (
@@ -69,31 +61,34 @@ from .config import (
     DEFAULT_VECTOR_TABLE_NAME,
     FOLDER_INDEX_DIRNAME,
     WHOOSH_INDEX_FIELDS,
+    WRITER_LOCK_FILENAME,
     get_retrieval_template,
     get_whoosh_index_path,
     resolve_embedding_config,
 )
+from .folder_files import (
+    EXTERNAL_INDEX_DIRNAME,
+    ROOT_RECORD_FILENAME,
+    ChangeTracker,
+    IndexLocation,
+    covering_subtrees,
+    diff_files,
+    external_index_path,
+    prepare_index_dir,
+    resolve_index_location,
+    sha256_file,
+    supported_extensions,
+)
+from .folder_manifest import MANIFEST_FILENAME, MANIFEST_SCHEMA_VERSION, Manifest
+from .folder_scheduler import FolderScheduler
 
 logger = logging.getLogger(__name__)
 
-MANIFEST_FILENAME = "manifest.db"
 STATUS_FILENAME = "status.json"
-WRITER_LOCK_FILENAME = "writer.lock"
-ROOT_RECORD_FILENAME = "root.json"
-EXTERNAL_INDEX_DIRNAME = "folder-indexes"
-INGEST_LOCK_FILENAME = "ingest.lock"
-MANIFEST_SCHEMA_VERSION = 1
 
 # Files per keyword-phase commit, and chunks per vector-phase embedding run.
 KEYWORD_BATCH_FILES = 20
 VECTOR_WINDOW_CHUNKS = 1000
-# A full rescan catches changes made while no instance ran (at open) and
-# events the watcher missed; folders without live events rescan more often.
-RESCAN_SECONDS = 30 * 60
-UNWATCHED_RESCAN_SECONDS = 10 * 60
-# Watcher events are collected for this long before the changed files are
-# reconciled, so a burst of saves is handled once.
-WATCH_DEBOUNCE_SECONDS = 2.0
 WRITER_RETRY_SECONDS = 15.0
 HEARTBEAT_SECONDS = 5.0
 # A writer whose heartbeat is older than this is shown as stalled; nothing is
@@ -101,494 +96,14 @@ HEARTBEAT_SECONDS = 5.0
 STALLED_SECONDS = 300.0
 VECTOR_RETRY_MAX_SECONDS = 300.0
 
-# Filesystem types whose files are reached over the network. An index for a
-# folder on one of these is kept on local disk instead of in the folder, so
-# no correctness argument ever depends on file locks working across hosts.
-NETWORK_FS_TYPES = frozenset(
-    {
-        "nfs",
-        "nfs4",
-        "cifs",
-        "smb3",
-        "smbfs",
-        "9p",
-        "afs",
-        "ceph",
-        "glusterfs",
-        "fuse.sshfs",
-        "fuse.rclone",
-        "fuse.davfs2",
-        "davfs",
-    }
-)
-# Path components that mark a folder synced by a cloud client, and files an
-# ancestor of a synced folder holds. An index inside one would be uploaded,
-# and downloaded half-written on every other machine.
-SYNC_FOLDER_NAMES = frozenset(
-    {
-        "Dropbox",
-        "OneDrive",
-        "Google Drive",
-        "My Drive",
-        "iCloud Drive",
-        "Mobile Documents",
-        "CloudStorage",
-    }
-)
-SYNC_FOLDER_MARKERS = (".stfolder", ".dropbox")
 
-CACHEDIR_TAG = (
-    "Signature: 8a477f597d28d172789f06886806bc55\n"
-    "# This file is a cache directory tag created by talkpipe-vault.\n"
-    "# It holds a search index rebuilt from the documents beside it.\n"
-    "# For information about cache directory tags see https://bford.info/cachedir/\n"
-)
-
-
-# --------------------------------------------------------------------------
-# Where a folder's index lives
-
-
-@dataclass(frozen=True)
-class IndexLocation:
-    """Where a folder's index is kept.
-
-    ``reason`` says why it is outside the folder (empty when it is inside),
-    and ``read_only`` is set for an existing index that cannot be written,
-    which opens as a reader only.
-    """
-
-    path: Path
-    in_folder: bool
-    read_only: bool = False
-    reason: str = ""
-
-
-def external_index_path(
-    root: Path, base: Path, dirname: str = EXTERNAL_INDEX_DIRNAME
-) -> Path:
-    """The app-data location of a folder's index, unique per folder path."""
-    digest = hashlib.sha256(str(root).encode("utf-8")).hexdigest()[:12]
-    name = "".join(ch if ch.isalnum() or ch in "._-" else "-" for ch in root.name)
-    return base / dirname / f"{name.strip('-._') or 'folder'}-{digest}"
-
-
-def _mount_type(path: Path) -> str:
-    """Filesystem type of the mount holding *path* ("" when unknown)."""
-    try:
-        with open("/proc/self/mounts", encoding="utf-8") as mounts:
-            entries = [line.split() for line in mounts]
-    except OSError:
-        return ""
-    best, fs_type = "", ""
-    text = str(path)
-    for fields in entries:
-        if len(fields) < 3:
-            continue
-        # Mount points escape spaces as \040 in /proc/self/mounts.
-        point = fields[1].replace("\\040", " ")
-        inside = text == point or text.startswith(point.rstrip("/") + "/")
-        if inside and len(point) > len(best):
-            best, fs_type = point, fields[2]
-    return fs_type
-
-
-def _sync_client(root: Path) -> str:
-    """Name of the sync folder *root* lies in, or ""."""
-    for part in root.parts:
-        if part in SYNC_FOLDER_NAMES or part.startswith("OneDrive - "):
-            return part
-    for ancestor in (root, *root.parents):
-        for marker in SYNC_FOLDER_MARKERS:
-            if (ancestor / marker).exists():
-                return ancestor.name or str(ancestor)
-    return ""
-
-
-def external_reason(root: Path) -> str:
-    """Why *root* should not hold its own index, or "" when it may."""
-    if _mount_type(root) in NETWORK_FS_TYPES:
-        return "the folder is on a network share"
-    client = _sync_client(root)
-    if client:
-        return f"the folder is synced ({client})"
-    return ""
-
-
-def resolve_index_location(
-    root: str | Path,
-    external_base: Path,
-    *,
-    force_external: str = "",
-    dirname: str = FOLDER_INDEX_DIRNAME,
-    external_dirname: str = EXTERNAL_INDEX_DIRNAME,
-) -> IndexLocation:
-    """Decide where the index of the folder *root* lives.
-
-    First match wins: an index already in the folder; an index already in
-    app data (``external_base``); app data when *force_external* gives a
-    reason (a fenced deployment, or the user's choice) or the folder is on a
-    network share or synced; otherwise the folder itself, if a ``.tpvault``
-    can be created and written there. *dirname* and *external_dirname* name
-    the two places, so other per-folder state (folderDocuments') follows
-    the same rules.
-    """
-    root = Path(os.path.realpath(root))
-    in_tree = root / dirname
-    if in_tree.is_dir():
-        writable = os.access(in_tree, os.W_OK)
-        return IndexLocation(
-            in_tree,
-            True,
-            read_only=not writable,
-            reason="" if writable else "the folder's index is read-only",
-        )
-    external = external_index_path(root, external_base, external_dirname)
-    if external.is_dir():
-        return IndexLocation(external, False, reason=_recorded_reason(external))
-    reason = force_external or external_reason(root)
-    if not reason:
-        try:
-            in_tree.mkdir(exist_ok=True)
-            probe = in_tree / f".probe-{uuid.uuid4().hex}"
-            probe.write_text("", encoding="utf-8")
-            probe.unlink()
-            return IndexLocation(in_tree, True)
-        except OSError:
-            with contextlib.suppress(OSError):
-                in_tree.rmdir()
-            reason = "the folder is not writable"
-    return IndexLocation(external, False, reason=reason)
-
-
-def _recorded_reason(external: Path) -> str:
-    try:
-        data = json.loads((external / ROOT_RECORD_FILENAME).read_text("utf-8"))
-        return str(data.get("reason") or "kept in app data")
-    except (OSError, ValueError, AttributeError):
-        return "kept in app data"
-
-
-def _prepare_index_dir(
-    location: IndexLocation, root: Path, cache_tag: bool = True
-) -> None:
-    """Create the index directory with its hygiene files.
-
-    ``.gitignore`` makes git skip the directory without editing the user's
-    own ignore file, and ``CACHEDIR.TAG`` makes borg, restic
-    ``--exclude-caches`` and ``tar --exclude-caches`` skip it. An index in
-    app data records which folder it belongs to.
-    """
-    location.path.mkdir(parents=True, exist_ok=True)
-    gitignore = location.path / ".gitignore"
-    if not gitignore.exists():
-        gitignore.write_text("*\n", encoding="utf-8")
-    tag = location.path / "CACHEDIR.TAG"
-    if cache_tag and not tag.exists():
-        tag.write_text(CACHEDIR_TAG, encoding="utf-8")
-    if not location.in_folder:
-        record = location.path / ROOT_RECORD_FILENAME
-        record.write_text(
-            json.dumps({"root": str(root), "reason": location.reason}, indent=2),
-            encoding="utf-8",
-        )
-
-
-# --------------------------------------------------------------------------
-# Per-file state
-
-
-class Manifest:
-    """The writer's per-file indexing state, in sqlite.
-
-    ``files`` has one row per document file, keyed by its path relative to
-    the folder (``/``-separated), with the stat and content hash it was
-    indexed at and its state: ``pending`` (needs keywords), ``keyword``
-    (searchable by keyword, needs vectors), ``done``, or ``error``. ``meta``
-    holds the index id, the folder it was created for, and the chunking
-    settings its chunks were made with.
-    """
-
-    def __init__(self, path: Path):
-        self._lock = threading.Lock()
-        self._conn = sqlite3.connect(str(path), check_same_thread=False, timeout=30)
-        with self._lock, self._conn:
-            self._conn.execute("PRAGMA journal_mode=WAL")
-            self._conn.execute(
-                "CREATE TABLE IF NOT EXISTS meta "
-                "(key TEXT PRIMARY KEY, value TEXT NOT NULL)"
-            )
-            self._conn.execute(
-                "CREATE TABLE IF NOT EXISTS files ("
-                "relpath TEXT PRIMARY KEY, fkey TEXT NOT NULL, size INTEGER, "
-                "mtime_ns INTEGER, sha256 TEXT, state TEXT NOT NULL, "
-                "error TEXT, n_chunks INTEGER NOT NULL DEFAULT 0)"
-            )
-            self._conn.execute(
-                "CREATE INDEX IF NOT EXISTS files_state ON files (state)"
-            )
-
-    def close(self) -> None:
-        with self._lock:
-            self._conn.close()
-
-    def get_meta(self, key: str) -> str | None:
-        with self._lock:
-            row = self._conn.execute(
-                "SELECT value FROM meta WHERE key = ?", (key,)
-            ).fetchone()
-        return None if row is None else str(row[0])
-
-    def set_meta(self, **values: Any) -> None:
-        with self._lock, self._conn:
-            self._conn.executemany(
-                "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
-                [(key, str(value)) for key, value in values.items()],
-            )
-
-    def rows_under(self, subtree: str) -> dict[str, dict[str, Any]]:
-        """Rows for the file *subtree* or every file below the directory."""
-        query = "SELECT relpath, fkey, size, mtime_ns, sha256, state FROM files"
-        params: tuple[Any, ...] = ()
-        if subtree:
-            # substr rather than LIKE: relpaths may contain % and _.
-            query += " WHERE relpath = ? OR substr(relpath, 1, ?) = ?"
-            params = (subtree, len(subtree) + 1, subtree + "/")
-        with self._lock:
-            rows = self._conn.execute(query, params).fetchall()
-        return {
-            row[0]: {
-                "fkey": row[1],
-                "size": row[2],
-                "mtime_ns": row[3],
-                "sha256": row[4],
-                "state": row[5],
-            }
-            for row in rows
-        }
-
-    def apply_scan(
-        self,
-        pending: Iterable[tuple[str, str, int, int, str | None]],
-        restat: Iterable[tuple[str, int, int]],
-        removed: Iterable[str],
-    ) -> None:
-        """Record a scan: files to (re)index, files only touched, files gone."""
-        with self._lock, self._conn:
-            self._conn.executemany(
-                "INSERT OR REPLACE INTO files "
-                "(relpath, fkey, size, mtime_ns, sha256, state, error, n_chunks) "
-                "VALUES (?, ?, ?, ?, ?, 'pending', NULL, 0)",
-                list(pending),
-            )
-            self._conn.executemany(
-                "UPDATE files SET size = ?, mtime_ns = ? WHERE relpath = ?",
-                [(size, mtime, rel) for rel, size, mtime in restat],
-            )
-            self._conn.executemany(
-                "DELETE FROM files WHERE relpath = ?", [(rel,) for rel in removed]
-            )
-
-    def files_in_state(self, state: str, limit: int | None = None) -> list[dict]:
-        query = (
-            "SELECT relpath, fkey, sha256, n_chunks FROM files WHERE state = ? "
-            "ORDER BY relpath"
-        )
-        params: tuple[Any, ...] = (state,)
-        if limit is not None:
-            query += " LIMIT ?"
-            params = (state, limit)
-        with self._lock:
-            rows = self._conn.execute(query, params).fetchall()
-        return [
-            {"relpath": r[0], "fkey": r[1], "sha256": r[2], "n_chunks": r[3]}
-            for r in rows
-        ]
-
-    def has_state(self, state: str) -> bool:
-        with self._lock:
-            row = self._conn.execute(
-                "SELECT 1 FROM files WHERE state = ? LIMIT 1", (state,)
-            ).fetchone()
-        return row is not None
-
-    def mark_keyword(self, results: Iterable[tuple[str, int, int, int, str]]) -> None:
-        """Files whose chunks are committed to Whoosh: (rel, n, size, mtime, sha)."""
-        with self._lock, self._conn:
-            self._conn.executemany(
-                "UPDATE files SET state = 'keyword', error = NULL, n_chunks = ?, "
-                "size = ?, mtime_ns = ?, sha256 = ? WHERE relpath = ?",
-                [(n, size, mtime, sha, rel) for rel, n, size, mtime, sha in results],
-            )
-
-    def mark_error(self, results: Iterable[tuple[str, str, int, int]]) -> None:
-        """Files that failed: (rel, message, size, mtime); retried when changed."""
-        with self._lock, self._conn:
-            self._conn.executemany(
-                "UPDATE files SET state = 'error', error = ?, size = ?, "
-                "mtime_ns = ? WHERE relpath = ?",
-                [(msg, size, mtime, rel) for rel, msg, size, mtime in results],
-            )
-
-    def mark_done(self, relpaths: Iterable[str]) -> None:
-        with self._lock, self._conn:
-            self._conn.executemany(
-                "UPDATE files SET state = 'done' WHERE relpath = ? "
-                "AND state = 'keyword'",
-                [(rel,) for rel in relpaths],
-            )
-
-    def remove(self, relpaths: Iterable[str]) -> None:
-        with self._lock, self._conn:
-            self._conn.executemany(
-                "DELETE FROM files WHERE relpath = ?", [(rel,) for rel in relpaths]
-            )
-
-    def reset(self, from_states: tuple[str, ...], to_state: str) -> None:
-        marks = ",".join("?" for _ in from_states)
-        with self._lock, self._conn:
-            self._conn.execute(
-                f"UPDATE files SET state = ? WHERE state IN ({marks})",  # nosec B608 - placeholders only
-                (to_state, *from_states),
-            )
-
-    def counts(self) -> dict[str, int]:
-        with self._lock:
-            rows = self._conn.execute(
-                "SELECT state, COUNT(*), SUM(n_chunks = 0), SUM(n_chunks) "
-                "FROM files GROUP BY state"
-            ).fetchall()
-        counts = {state: int(total) for state, total, _, _ in rows}
-        indexed = [row for row in rows if row[0] in ("keyword", "done")]
-        counts["empty"] = sum(int(row[2] or 0) for row in indexed)
-        counts["chunks"] = sum(int(row[3] or 0) for row in indexed)
-        return counts
+def file_key(relpath: str) -> str:
+    """The stable part of a file's chunk ids, from its path in the folder."""
+    return hashlib.sha1(relpath.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
 
 
 # --------------------------------------------------------------------------
 # One folder
-
-
-def _file_key(relpath: str) -> str:
-    return hashlib.sha1(relpath.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with open(path, "rb") as handle:
-        for block in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
-
-
-def _is_hidden(relpath: str) -> bool:
-    return any(part.startswith(".") for part in relpath.split("/"))
-
-
-def _supported_extensions() -> set[str]:
-    # Read on every scan: plugins may register extractors at any time.
-    return {ext.lower() for ext in global_extractor_registry.registered_extensions}
-
-
-def _changed_relpath(root: Path, path: str) -> str:
-    """*path* relative to *root* when a change to it matters, else "".
-
-    watchdog's pattern matching looks only at a path's last component, so a
-    ``.*`` ignore does not stop events from inside ``.tpvault`` or ``.git``;
-    any path with a hidden component is dropped here instead, or the
-    writer's own index writes would keep re-triggering it.
-    """
-    try:
-        rel = Path(path).relative_to(root).as_posix()
-    except ValueError:
-        return ""
-    if rel in ("", ".") or _is_hidden(rel):
-        return ""
-    if not match_any_paths(
-        [path], excluded_patterns=COMMON_IGNORE_PATTERNS, case_sensitive=False
-    ):
-        return ""
-    return rel
-
-
-def _document_files(
-    root: Path, subtree: str, extensions: set[str]
-) -> dict[str, os.stat_result]:
-    """Supported, visible document files at or below *subtree* of *root*."""
-    found: dict[str, os.stat_result] = {}
-    start = root / subtree if subtree else root
-
-    def consider(path: Path) -> None:
-        rel = path.relative_to(root).as_posix()
-        if _is_hidden(rel) or path.suffix[1:].lower() not in extensions:
-            return
-        if not match_any_paths(
-            [str(path)],
-            excluded_patterns=COMMON_IGNORE_PATTERNS,
-            case_sensitive=False,
-        ):
-            return
-        try:
-            if path.is_symlink():
-                target = os.path.realpath(path)
-                if not target.startswith(str(root) + os.sep):
-                    return
-            stat = path.stat()
-        except OSError:
-            return
-        found[rel] = stat
-
-    if start.is_file():
-        consider(start)
-    elif start.is_dir() and not start.is_symlink():
-        for dirpath, dirnames, filenames in os.walk(start):
-            dirnames[:] = [d for d in dirnames if not d.startswith(".")]
-            for name in filenames:
-                if not name.startswith("."):
-                    consider(Path(dirpath) / name)
-    return found
-
-
-class _ChangeHandler(FileSystemEventHandler):
-    """Passes every path watchdog reports as changed to *note_change*."""
-
-    def __init__(self, note_change: Callable[[str], None]):
-        self.note_change = note_change
-
-    def on_any_event(self, event: FileSystemEvent) -> None:
-        if event.event_type in ("opened", "closed_no_write"):
-            return
-        for raw in (event.src_path, getattr(event, "dest_path", "")):
-            if raw:
-                self.note_change(os.fsdecode(raw))
-
-
-def _watch(root: Path, note_change: Callable[[str], None]) -> tuple[Any, str]:
-    """Start watching *root*; return the observer (or None) and the mode.
-
-    The mode is "live" with change events, or "rescan" where they are not
-    reliable (a network share, a folder this process cannot write) or
-    watching failed, so the caller relies on periodic rescans.
-    """
-    if _mount_type(root) in NETWORK_FS_TYPES or not os.access(root, os.W_OK):
-        return None, "rescan"
-    try:
-        observer = Observer()
-        observer.schedule(_ChangeHandler(note_change), str(root), recursive=True)
-        observer.daemon = True
-        observer.start()
-    except Exception as exc:
-        # inotify watch limits, unsupported filesystems, and the like.
-        logger.warning("Watching %s failed (%s); rescanning instead", root, exc)
-        return None, "rescan"
-    return observer, "live"
-
-
-def _stop_observer(observer: Any) -> None:
-    if observer is not None:
-        with contextlib.suppress(Exception):
-            observer.stop()
-            observer.join(timeout=5)
 
 
 class FolderIndex:
@@ -629,8 +144,8 @@ class FolderIndex:
         self.error = ""
         self.vector_error = ""
         self.vectors_paused = False
-        self.watch_mode = ""
         self.chunks_skipped = 0
+        self.changes = ChangeTracker(self.root)
         self._lock = (
             None
             if location.read_only
@@ -642,13 +157,13 @@ class FolderIndex:
         self._vector_retry_at = 0.0
         self._vector_failures = 0
         self._needs_preflight = True
-        self._last_scan = 0.0
         self._last_status_write = 0.0
         self._scanning = False
-        self._dirty: set[str] = set()
-        self._last_change = 0.0
-        self._dirty_lock = threading.Lock()
-        self._observer: Any = None
+
+    @property
+    def watch_mode(self) -> str:
+        """ "live" with change events, "rescan" without, "" before watching."""
+        return self.changes.watch_mode
 
     # -- roles -------------------------------------------------------------
 
@@ -667,7 +182,7 @@ class FolderIndex:
         except filelock.Timeout:
             return False
         try:
-            _prepare_index_dir(self.location, self.root)
+            prepare_index_dir(self.location, self.root)
             self.manifest = Manifest(self.location.path / MANIFEST_FILENAME)
             self._init_meta()
         except Exception:
@@ -675,9 +190,9 @@ class FolderIndex:
             self._lock.release()
             raise
         self.is_writer = True
-        self._last_scan = 0.0
+        self.changes.reset()
         if watch:
-            self._start_watching()
+            self.changes.start_watching()
         self.write_status(force=True)
         return True
 
@@ -710,7 +225,7 @@ class FolderIndex:
 
     def close(self) -> None:
         """Stop watching and give up the writer role (another process may take it)."""
-        self._stop_watching()
+        self.changes.stop_watching()
         if self.manifest is not None:
             self.write_status(force=True, phase="stopped")
             self.manifest.close()
@@ -726,49 +241,15 @@ class FolderIndex:
             return self.manifest.get_meta("root") or str(self.root)
         return str(self._read_status().get("recorded_root") or self.root)
 
-    # -- watching ----------------------------------------------------------
-
-    def _start_watching(self) -> None:
-        self._observer, self.watch_mode = _watch(self.root, self.note_change)
-
-    def _stop_watching(self) -> None:
-        observer, self._observer = self._observer, None
-        _stop_observer(observer)
+    # -- scanning ----------------------------------------------------------
 
     def note_change(self, path: str) -> None:
         """Record that *path* changed; it is reconciled after a short delay."""
-        rel = _changed_relpath(self.root, path)
-        if not rel:
-            return
-        with self._dirty_lock:
-            self._dirty.add(rel)
-            self._last_change = time.monotonic()
+        self.changes.note_change(path)
 
-    # -- scanning ----------------------------------------------------------
-
-    def scan_due(self, now: float) -> bool:
-        interval = (
-            RESCAN_SECONDS if self.watch_mode == "live" else UNWATCHED_RESCAN_SECONDS
-        )
-        if not self._last_scan or now - self._last_scan >= interval:
-            return True
-        with self._dirty_lock:
-            return (
-                bool(self._dirty) and now - self._last_change >= WATCH_DEBOUNCE_SECONDS
-            )
-
-    def run_due_scan(self, now: float) -> None:
-        """Rescan everything when due, else only what the watcher reported."""
-        interval = (
-            RESCAN_SECONDS if self.watch_mode == "live" else UNWATCHED_RESCAN_SECONDS
-        )
-        with self._dirty_lock:
-            dirty, self._dirty = self._dirty, set()
-        if not self._last_scan or now - self._last_scan >= interval:
-            self.scan()
-            self._last_scan = now
-        else:
-            self.scan(sorted(dirty))
+    def scan_due(self, now: float) -> list[str] | None:
+        """The subtrees to scan now ([""] is the whole folder), or None."""
+        return self.changes.due(now)
 
     def scan(self, subtrees: Iterable[str] | None = None) -> None:
         """Reconcile the manifest with the files on disk.
@@ -782,10 +263,8 @@ class FolderIndex:
         """
         if self.manifest is None:
             return
-        extensions = _supported_extensions()
-        roots = [""] if subtrees is None else list(subtrees)
-        # A subtree inside another one is covered by it.
-        roots = [r for r in roots if not any(o != r and _within(r, o) for o in roots)]
+        extensions = supported_extensions()
+        roots = covering_subtrees([""] if subtrees is None else subtrees)
         self._scanning = True
         try:
             for subtree in roots:
@@ -797,29 +276,34 @@ class FolderIndex:
     def _scan_subtree(self, subtree: str, extensions: set[str]) -> None:
         assert self.manifest is not None  # nosec B101 - checked by scan()
         known = self.manifest.rows_under(subtree)
-        on_disk = _document_files(self.root, subtree, extensions)
+        recorded = {
+            rel: (row["size"], row["mtime_ns"], row["sha256"])
+            for rel, row in known.items()
+        }
         pending: list[tuple[str, str, int, int, str | None]] = []
         restat: list[tuple[str, int, int]] = []
+        removed: list[str] = []
         stale_keys: list[str] = []
-        for rel, stat in on_disk.items():
-            row = known.get(rel)
-            if row is None:
+        for change in diff_files(self.root, subtree, recorded, extensions):
+            rel, stat = change.relpath, change.stat
+            if change.kind == "deleted" or stat is None:
+                removed.append(rel)
+                stale_keys.append(known[rel]["fkey"])
+                continue
+            if change.kind == "added":
                 pending.append(
-                    (rel, _file_key(rel), stat.st_size, stat.st_mtime_ns, None)
+                    (rel, file_key(rel), stat.st_size, stat.st_mtime_ns, None)
                 )
                 continue
-            if row["size"] == stat.st_size and row["mtime_ns"] == stat.st_mtime_ns:
-                continue
-            digest = None
-            with contextlib.suppress(OSError):
-                digest = _sha256(self.root / rel)
-            if digest and digest == row["sha256"] and row["state"] != "error":
+            row = known[rel]
+            if change.kind == "touched" and row["state"] != "error":
                 restat.append((rel, stat.st_size, stat.st_mtime_ns))
                 continue
+            # Changed content, or a touched file whose last attempt failed.
             stale_keys.append(row["fkey"])
-            pending.append((rel, row["fkey"], stat.st_size, stat.st_mtime_ns, digest))
-        removed = [rel for rel in known if rel not in on_disk]
-        stale_keys.extend(known[rel]["fkey"] for rel in removed)
+            pending.append(
+                (rel, row["fkey"], stat.st_size, stat.st_mtime_ns, change.digest)
+            )
         if stale_keys:
             self._delete_chunks(stale_keys)
         self.manifest.apply_scan(pending, restat, removed)
@@ -850,6 +334,8 @@ class FolderIndex:
             table.delete(predicate)
 
     def _docs_table(self) -> Any:
+        # LanceDBDocumentStore has no public prefix delete or table handle;
+        # talkpipe issue filed for one, until then its internals are used.
         store = LanceDBDocumentStore(
             path=self.index_path, table_name=DEFAULT_VECTOR_TABLE_NAME
         )
@@ -896,7 +382,7 @@ class FolderIndex:
                 prefix = self._file_prefix(row["fkey"])
                 try:
                     stat = path.stat()
-                    digest = row["sha256"] or _sha256(path)
+                    digest = row["sha256"] or sha256_file(path)
                 except OSError:
                     gone.append(rel)
                     continue
@@ -1086,6 +572,7 @@ class FolderIndex:
         self.write_status(force=True)
 
     def _drop_docs_table(self) -> None:
+        # See _docs_table: no public drop on LanceDBDocumentStore yet.
         store = LanceDBDocumentStore(
             path=self.index_path, table_name=DEFAULT_VECTOR_TABLE_NAME
         )
@@ -1095,13 +582,7 @@ class FolderIndex:
     # -- status ------------------------------------------------------------
 
     def _read_status(self) -> dict[str, Any]:
-        try:
-            data = json.loads(
-                (self.location.path / STATUS_FILENAME).read_text(encoding="utf-8")
-            )
-        except (OSError, ValueError):
-            return {}
-        return data if isinstance(data, dict) else {}
+        return read_index_status(self.location.path)
 
     def _counts(self) -> dict[str, int]:
         assert self.manifest is not None  # nosec B101 - writer only
@@ -1224,6 +705,9 @@ class FolderIndex:
             keyword_coverage=(data["files_keyword"] / total) if total else 0.0,
             vector_coverage=(embedded / total) if total else 0.0,
             complete=bool(total) and embedded == total,
+            # A scanned folder with nothing to index, or whose files all
+            # failed, is finished too: nothing more will happen to it.
+            finished=data["phase"] == "ready" or (bool(total) and embedded == total),
         )
         return data
 
@@ -1253,205 +737,6 @@ def delete_folder_index(folder: FolderIndex) -> str:
     finally:
         lock.release()
     return ""
-
-
-def _within(path: str, ancestor: str) -> bool:
-    return ancestor == "" or path == ancestor or path.startswith(ancestor + "/")
-
-
-# --------------------------------------------------------------------------
-# The background worker
-
-
-class FolderScheduler:
-    """One background thread doing the indexing for every open folder.
-
-    Keyword work for all folders comes before any vector work, and changed
-    files go through the keyword phase before any vector backlog. A
-    machine-wide ``ingest.lock`` is held for each batch, so two vault
-    processes interleave instead of both reaching ingestion's memory peak at
-    once.
-    """
-
-    def __init__(self, ingest_lock_dir: Path | None = None):
-        self._folders: list[FolderIndex] = []
-        self._folders_lock = threading.Lock()
-        self._wake = threading.Event()
-        self._stop = threading.Event()
-        self._paused = threading.Event()
-        self._thread: threading.Thread | None = None
-        # Folders to release, and maintenance to run, on the worker thread
-        # (never concurrently with a batch); each entry's event is set when
-        # it is done.
-        self._closing: list[tuple[FolderIndex, threading.Event]] = []
-        self._tasks: list[tuple[FolderIndex, Callable[[], None], threading.Event]] = []
-        self._ingest_lock = (
-            filelock.FileLock(
-                str(ingest_lock_dir / INGEST_LOCK_FILENAME), is_singleton=False
-            )
-            if ingest_lock_dir is not None
-            else None
-        )
-        if ingest_lock_dir is not None:
-            ingest_lock_dir.mkdir(parents=True, exist_ok=True)
-
-    def folders(self) -> list[FolderIndex]:
-        with self._folders_lock:
-            return list(self._folders)
-
-    def add(self, folder: FolderIndex) -> None:
-        with self._folders_lock:
-            self._folders.append(folder)
-        self.wake()
-
-    def _running(self) -> bool:
-        return self._thread is not None and self._thread.is_alive()
-
-    def remove(self, folder: FolderIndex, timeout: float = 30.0) -> bool:
-        """Stop indexing *folder* and release its writer role.
-
-        Waits (up to *timeout*) for the batch in progress to finish, so the
-        index can be deleted afterwards; returns False if it did not.
-        """
-        with self._folders_lock:
-            if folder in self._folders:
-                self._folders.remove(folder)
-            if not self._running():
-                folder.close()
-                return True
-            done = threading.Event()
-            self._closing.append((folder, done))
-        self.wake()
-        return done.wait(timeout)
-
-    def submit(self, folder: FolderIndex, task: Callable[[], None]) -> threading.Event:
-        """Run *task* (maintenance on *folder*) on the worker, between batches.
-
-        The returned event is set once it has run; its outcome is recorded
-        in the folder's ``error``.
-        """
-        done = threading.Event()
-        with self._folders_lock:
-            self._tasks.append((folder, task, done))
-        self.wake()
-        return done
-
-    def start(self) -> None:
-        if self._thread is not None and self._thread.is_alive():
-            return
-        self._stop.clear()
-        self._thread = threading.Thread(
-            target=self._run, name="folder-indexer", daemon=True
-        )
-        self._thread.start()
-
-    def stop(self, timeout: float = 5.0) -> None:
-        """Finish the current batch and release every folder."""
-        self._stop.set()
-        self.wake()
-        if self._thread is not None:
-            self._thread.join(timeout)
-        with self._folders_lock:
-            closing = [folder for folder, _ in self._closing]
-            self._closing.clear()
-        for folder in self.folders() + closing:
-            with contextlib.suppress(Exception):
-                folder.close()
-
-    def wake(self) -> None:
-        self._wake.set()
-
-    @contextlib.contextmanager
-    def paused(self) -> Iterator[None]:
-        """Hold off folder indexing (while a named-vault index job runs)."""
-        self._paused.set()
-        try:
-            yield
-        finally:
-            self._paused.clear()
-            self.wake()
-
-    def _run(self) -> None:
-        while not self._stop.is_set():
-            try:
-                worked = self.step()
-            except Exception:
-                logger.exception("Folder indexing step failed")
-                worked = False
-            if not worked:
-                self._wake.wait(1.0)
-                self._wake.clear()
-
-    @contextlib.contextmanager
-    def _ingesting(self) -> Iterator[bool]:
-        if self._ingest_lock is None:
-            yield True
-            return
-        try:
-            self._ingest_lock.acquire(timeout=0.5)
-        except filelock.Timeout:
-            yield False
-            return
-        try:
-            yield True
-        finally:
-            self._ingest_lock.release()
-
-    def step(self) -> bool:
-        """Do one unit of work; return False when there was nothing to do."""
-        with self._folders_lock:
-            closing, self._closing = self._closing, []
-            tasks, self._tasks = self._tasks, []
-        for folder, done in closing:
-            try:
-                folder.close()
-            finally:
-                done.set()
-        for folder, task, done in tasks:
-            try:
-                self._guard(folder, task)
-            finally:
-                done.set()
-        now = time.monotonic()
-        folders = self.folders()
-        for folder in folders:
-            try:
-                folder.try_become_writer(now)
-            except Exception as exc:
-                logger.warning("Could not open the index of %s: %s", folder.root, exc)
-                folder.error = str(exc)
-        writers = [f for f in folders if f.is_writer]
-        for folder in writers:
-            folder.write_status()
-        if self._paused.is_set():
-            return False
-        for folder in writers:
-            if folder.scan_due(now):
-                self._guard(folder, folder.run_due_scan, now)
-                return True
-        for folder in writers:
-            if folder.has_keyword_work():
-                with self._ingesting() as allowed:
-                    if allowed:
-                        self._guard(folder, folder.keyword_batch)
-                return True
-        for folder in writers:
-            if folder.has_vector_work(now):
-                with self._ingesting() as allowed:
-                    if allowed:
-                        self._guard(folder, folder.vector_window)
-                return True
-        return False
-
-    @staticmethod
-    def _guard(folder: FolderIndex, action: Any, *args: Any) -> None:
-        try:
-            action(*args)
-            folder.error = ""
-        except Exception as exc:
-            logger.exception("Indexing %s failed", folder.root)
-            folder.error = str(exc)
-            folder.write_status(force=True)
 
 
 # --------------------------------------------------------------------------

@@ -62,6 +62,7 @@ from talkpipe_vault.apps import access_control, credentials, user_settings
 from talkpipe_vault.pipelines import (
     agent_search,
     diagnostics,
+    folder_files,
     folder_index,
     retrieval_filter,
     vault_metadata,
@@ -519,7 +520,7 @@ def _folder_progress_line(status: dict[str, Any]) -> str:
         "live": " · watching for changes",
         # No change events (read-only or network folder): rescans only.
         "rescan": " · checked for changes every "
-        f"{folder_index.UNWATCHED_RESCAN_SECONDS // 60} minutes",
+        f"{folder_files.UNWATCHED_RESCAN_SECONDS // 60} minutes",
     }.get(status.get("watch_mode") or "", "")
     return f"Ready · {total} file{'' if total == 1 else 's'}{watching}"
 

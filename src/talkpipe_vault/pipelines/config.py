@@ -125,6 +125,9 @@ DEFAULT_VECTOR_TABLE_NAME = "docs"
 # A folder opened directly (folder mode) keeps its index, an ordinary vault,
 # in this hidden subdirectory of the folder (see pipelines/folder_index.py).
 FOLDER_INDEX_DIRNAME = ".tpvault"
+# The lock a process holds while it writes a vault or folder index; filelock
+# leaves the file behind, so it is not evidence that a folder holds documents.
+WRITER_LOCK_FILENAME = "writer.lock"
 # Default chunking for indexing (talkpipe's ProcessDocumentsSegment defaults).
 DEFAULT_CHUNK_SIZE = 300
 DEFAULT_SHINGLE_SIZE = 3
@@ -217,7 +220,9 @@ def existing_non_vault_entries(vault_path: Path) -> int:
     )
     if any((vault_path / marker).exists() for marker in vault_markers):
         return 0
-    return sum(1 for _ in vault_path.iterdir())
+    return sum(
+        1 for entry in vault_path.iterdir() if entry.name != WRITER_LOCK_FILENAME
+    )
 
 
 def get_chat_model() -> str:

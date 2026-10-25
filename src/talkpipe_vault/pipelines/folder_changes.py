@@ -23,7 +23,6 @@ import logging
 import os
 import re
 import sqlite3
-import threading
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -32,21 +31,15 @@ from typing import Annotated, Any
 import filelock
 from talkpipe import register_source, source
 
-from .folder_index import (
-    RESCAN_SECONDS,
-    UNWATCHED_RESCAN_SECONDS,
-    WATCH_DEBOUNCE_SECONDS,
-    _changed_relpath,
-    _document_files,
-    _prepare_index_dir,
-    _sha256,
-    _stop_observer,
-    _supported_extensions,
-    _watch,
-    _within,
-    default_index_home,
+from .folder_files import (
+    ChangeTracker,
+    covering_subtrees,
+    diff_files,
+    prepare_index_dir,
     resolve_index_location,
+    supported_extensions,
 )
+from .folder_index import default_index_home
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +77,7 @@ def stream_state_path(
         )
     # The state is small and belongs with the documents in a restore, so it
     # carries no CACHEDIR.TAG (backup tools would skip it).
-    _prepare_index_dir(location, Path(os.path.realpath(root)), cache_tag=False)
+    prepare_index_dir(location, Path(os.path.realpath(root)), cache_tag=False)
     return location.path / f"{name}.db"
 
 
@@ -103,14 +96,13 @@ class FolderChanges:
         if not self.root.is_dir():
             raise ValueError(f"{root} is not a folder")
         self.state_path = str(state)
-        self.watch_mode = ""
+        self.tracker = ChangeTracker(self.root)
         self._lock = filelock.FileLock(self.state_path + ".lock", is_singleton=False)
         self._conn: sqlite3.Connection | None = None
-        self._observer: Any = None
-        self._dirty: set[str] = set()
-        self._dirty_lock = threading.Lock()
-        self._last_change = 0.0
-        self._last_scan = 0.0
+
+    @property
+    def watch_mode(self) -> str:
+        return self.tracker.watch_mode
 
     def open(self, watch: bool = True) -> None:
         try:
@@ -133,11 +125,10 @@ class FolderChanges:
             self._lock.release()
             raise
         if watch:
-            self._observer, self.watch_mode = _watch(self.root, self.note_change)
+            self.tracker.start_watching()
 
     def close(self) -> None:
-        _stop_observer(self._observer)
-        self._observer = None
+        self.tracker.stop_watching()
         if self._conn is not None:
             self._conn.close()
             self._conn = None
@@ -145,66 +136,38 @@ class FolderChanges:
 
     def note_change(self, path: str) -> None:
         """Record that *path* changed; it is compared after a short delay."""
-        rel = _changed_relpath(self.root, path)
-        if rel:
-            with self._dirty_lock:
-                self._dirty.add(rel)
-                self._last_change = time.monotonic()
+        self.tracker.note_change(path)
 
     def due(self, now: float) -> list[str] | None:
         """The subtrees to compare now ([""] is the whole folder), or None."""
-        interval = (
-            RESCAN_SECONDS if self.watch_mode == "live" else UNWATCHED_RESCAN_SECONDS
-        )
-        with self._dirty_lock:
-            if not self._last_scan or now - self._last_scan >= interval:
-                self._dirty.clear()
-                self._last_scan = now
-                return [""]
-            if self._dirty and now - self._last_change >= WATCH_DEBOUNCE_SECONDS:
-                dirty, self._dirty = self._dirty, set()
-                return sorted(dirty)
-        return None
+        return self.tracker.due(now)
 
     def changes(self, subtrees: list[str]) -> Iterator[dict[str, Any]]:
         """Yield an item for every difference at or below *subtrees*."""
-        # A subtree inside another one is covered by it.
-        roots = [
-            r for r in subtrees if not any(o != r and _within(r, o) for o in subtrees)
-        ]
-        extensions = _supported_extensions()
-        for subtree in roots:
+        extensions = supported_extensions()
+        for subtree in covering_subtrees(subtrees):
             yield from self._compare(subtree, extensions)
 
     def _compare(self, subtree: str, extensions: set[str]) -> Iterator[dict[str, Any]]:
         assert self._conn is not None  # nosec B101 - set by open()
         known = self._rows_under(subtree)
-        on_disk = _document_files(self.root, subtree, extensions)
-        # Deletions first, so a rename reads as the old path going, then
-        # the new one arriving.
-        for rel in sorted(set(known) - set(on_disk)):
-            yield self._item("deleted", rel)
-            with self._conn:
-                self._conn.execute("DELETE FROM files WHERE relpath = ?", (rel,))
-        for rel in sorted(on_disk):
-            stat = on_disk[rel]
-            row = known.get(rel)
-            if row is not None and row[:2] == (stat.st_size, stat.st_mtime_ns):
+        for change in diff_files(self.root, subtree, known, extensions, hash_new=True):
+            rel = change.relpath
+            if change.kind == "deleted" or change.stat is None:
+                yield self._item("deleted", rel)
+                with self._conn:
+                    self._conn.execute("DELETE FROM files WHERE relpath = ?", (rel,))
                 continue
-            try:
-                digest = _sha256(self.root / rel)
-            except OSError:
-                continue  # gone or unreadable since the walk; a later scan decides
-            if row is None or row[2] != digest:
-                yield self._item("added" if row is None else "changed", rel)
-            # Touched but unchanged content only updates the recorded stat.
+            if change.kind != "touched":
+                yield self._item(change.kind, rel)
+            # A touched file only has its recorded stat brought up to date.
             with self._conn:
                 self._conn.execute(
                     "INSERT OR REPLACE INTO files VALUES (?, ?, ?, ?)",
-                    (rel, stat.st_size, stat.st_mtime_ns, digest),
+                    (rel, change.stat.st_size, change.stat.st_mtime_ns, change.digest),
                 )
 
-    def _rows_under(self, subtree: str) -> dict[str, tuple[int, int, str]]:
+    def _rows_under(self, subtree: str) -> dict[str, tuple[int, int, str | None]]:
         assert self._conn is not None  # nosec B101 - set by open()
         query = "SELECT relpath, size, mtime_ns, sha256 FROM files"
         params: tuple[Any, ...] = ()
