@@ -1,5 +1,6 @@
 """Tests for folder mode in the web application and the vault-server CLI."""
 
+import html
 import re
 import time
 from pathlib import Path
@@ -191,11 +192,26 @@ def test_unfinished_folder_is_flagged_and_still_answers(client, docs, folder_app
     banner = query._folder_banner(query._state)
     assert banner.startswith("Still indexing docs (keywords 100%, meaning 0%)")
     assert "partial index: docs 0% embedded" in query._partial_index_note(query._state)
+    # Nothing embedded yet: semantic search waits, Ask answers from keywords.
+    assert query.semantic_search_waiting(query._state)
+    page = client.get("/search").text
+    assert html.escape(query.SEMANTIC_SEARCH_WAITING, quote=False) in page
+    assert 'id="search-btn" disabled' in page
     page = client.post("/search", data={"query": "lighthouse storm"}).text
-    assert "lighthouse.txt" in page  # found by keyword, not yet embedded
+    assert "lighthouse.txt" not in page
     assert "Still indexing docs" in page
     answer = client.post("/chat", data={"message": "What did the keeper log?"}).text
     assert "partial index: docs 0% embedded" in answer
+    assert "lighthouse.txt" in answer  # cited from the keyword index
+
+
+def test_semantic_search_opens_once_a_folder_has_vectors(client, docs):
+    query.add_folder(query._state, str(docs))
+    assert _wait(_complete)
+    assert query.semantic_search_waiting(query._state) == ""
+    page = client.post("/search", data={"query": "lighthouse storm"}).text
+    assert "Semantic search starts once" not in page
+    assert "lighthouse.txt" in page
 
 
 def test_nested_folders_are_covered_once(client, docs):

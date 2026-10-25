@@ -4,9 +4,12 @@
 
 {% block content %}
 <div class="search-box">
+    {% if semantic_search_waiting %}
+    <p class="search-hint" id="semantic-waiting">{{ semantic_search_waiting }}</p>
+    {% endif %}
     <form method="post" action="/search" id="search-form">
-        <input type="text" name="query" id="search-input" placeholder="Search your vault. Works best with a full question..." value="{{ query }}" autofocus>
-        <button type="submit" id="search-btn">Search</button>
+        <input type="text" name="query" id="search-input" placeholder="Search your vault. Works best with a full question..." value="{{ query }}" autofocus{% if semantic_search_waiting %} disabled{% endif %}>
+        <button type="submit" id="search-btn"{% if semantic_search_waiting %} disabled{% endif %}>Search</button>
     </form>
     {% if agent_search_available %}
     <label class="overwrite-option">
@@ -69,6 +72,21 @@
 
 <script>
     requireValue('search-input', 'search-btn');
+    {% if semantic_search_waiting %}
+    // Turn search on as soon as a folder has its first vectors.
+    document.addEventListener('folder-status', function (event) {
+        const started = (event.detail.folders || []).some(function (folder) {
+            return folder.files_embedded > 0;
+        });
+        const notice = document.getElementById('semantic-waiting');
+        if (started && notice) {
+            notice.remove();
+            const input = document.getElementById('search-input');
+            input.disabled = false;
+            input.dispatchEvent(new Event('input'));
+        }
+    });
+    {% endif %}
 </script>
 
 {% include "_document_modal.html" %}

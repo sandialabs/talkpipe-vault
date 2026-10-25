@@ -115,6 +115,13 @@ def _mkdir_failure(path: Path, exc: OSError) -> str:
     return str(exc)
 
 
+# The web page's notice, in this interface's names.
+SEMANTIC_SEARCH_WAITING = (
+    "Semantic search starts once the first documents are embedded (progress is "
+    "on the Vault tab). Keywords and Ask work now."
+)
+
+
 class VaultService:
     """Everything the TUI can do, expressed as plain-data operations."""
 
@@ -323,6 +330,7 @@ class VaultService:
             "folder_mode": bool(state.folders),
             "folder_names": [Path(root).name or root for root in state.folders],
             "folder_banner": query._folder_banner(state),
+            "semantic_search_waiting": query.semantic_search_waiting(state),
             "chunks": state.shingled_chunks_count,
             "keyword_search_enabled": state.keyword_search_enabled,
             "keyword_index_stale": self.keyword_index_stale(),
@@ -662,6 +670,8 @@ class VaultService:
             return _fail("The search pipeline is not available; check Settings.")
         if gone := self.vault_gone_note():
             return _fail(gone)
+        if query.semantic_search_waiting(state):
+            return _fail(SEMANTIC_SEARCH_WAITING)
         try:
             query._refresh_pipelines()
             query._update_document_counts(state.vault_path)

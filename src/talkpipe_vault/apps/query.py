@@ -234,6 +234,7 @@ def _template_context(
         "folder_mode": bool(state.folders),
         "folder_names": [Path(root).name or root for root in state.folders],
         "folder_banner": _folder_banner(state),
+        "semantic_search_waiting": semantic_search_waiting(state),
     }
     context.update(extra)
     return context
@@ -542,6 +543,26 @@ def _folder_banner(state: AppState) -> str:
         f"Still indexing {names}. Results may miss documents; keyword matches "
         "are included for files not embedded yet."
     )
+
+
+SEMANTIC_SEARCH_WAITING = (
+    "Semantic search starts once the first documents are embedded (progress "
+    "is on Vaults & Documents). Keyword Search and Ask work now."
+)
+
+
+def semantic_search_waiting(state: AppState) -> str:
+    """Why semantic search is not offered yet, or "" when it is.
+
+    In folder mode it waits until some open folder has vectors: before that
+    there is nothing to rank by meaning, and embedding the query could wait
+    on the model's first download. Ask answers from keywords meanwhile.
+    """
+    if state.folders and not any(
+        folder_index.vectors_started(path) for path in _index_paths(state)
+    ):
+        return SEMANTIC_SEARCH_WAITING
+    return ""
 
 
 def _partial_index_note(state: AppState) -> str:
@@ -3203,7 +3224,7 @@ async def search_results(
     filter_note = ""
     agent_trace: list[str] = []
 
-    if query.strip() and state.search_pipeline:
+    if query.strip() and state.search_pipeline and not semantic_search_waiting(state):
         try:
             # Refresh pipelines to ensure fresh database connections
             _refresh_pipelines()

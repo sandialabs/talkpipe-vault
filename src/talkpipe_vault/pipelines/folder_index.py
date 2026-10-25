@@ -1561,6 +1561,16 @@ def vectors_complete(index_path: str | Path) -> bool:
     return total > 0 and int(status.get("files_embedded") or 0) >= total
 
 
+def vectors_started(index_path: str | Path) -> bool:
+    """True once a folder index has vectors for at least one file.
+
+    A named vault (no folder status) always counts as started.
+    """
+    if index_folder_root(index_path) is None:
+        return True
+    return int(read_index_status(index_path).get("files_embedded") or 0) > 0
+
+
 def index_folder_now(folder: FolderIndex, vectors: bool = True) -> dict[str, Any]:
     """Bring *folder* fully up to date in this thread; return its status.
 

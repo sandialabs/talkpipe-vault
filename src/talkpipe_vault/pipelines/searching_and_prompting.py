@@ -640,7 +640,13 @@ class _FanOutVectorSearch:
         for just those rather than for every folder."""
         lists: list[list[SearchResult]] = []
         failed: list[tuple[_IndexView, Exception]] = []
-        for key, template, views in self.groups:
+        for key, template, group_views in self.groups:
+            # An index with no vectors yet has nothing to compare with, and
+            # embedding the query for it could wait on the model's first
+            # download; with keyword_fallback its keywords answer for it.
+            views = [v for v in group_views if folder_index.vectors_started(v.path)]
+            if not views:
+                continue
             try:
                 vector = self._embedder(key).execute_one(
                     template.replace("{query}", str(query))

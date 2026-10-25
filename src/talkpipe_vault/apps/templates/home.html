@@ -13,6 +13,7 @@
             <h3>Semantic Search</h3>
             <p>Use natural language to find chunks that match the meaning of your query.</p>
             <span class="example">Try: "What did I write about deployment?"</span>
+            {% if semantic_search_waiting %}<span class="example">Starts once the first documents are embedded.</span>{% endif %}
         </a>
 
         <a href="/keyword-search" class="mode-card">

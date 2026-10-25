@@ -134,10 +134,16 @@ def test_keyword_search_spans_folders(two_folders):
 
 
 def test_keyword_fallback_finds_files_not_yet_embedded(
-    tmp_path, vault_home, fake_embedder
+    tmp_path, vault_home, fake_embedder, monkeypatch
 ):
+    from talkpipe_vault.pipelines import searching_and_prompting
+
     root = _folder(tmp_path, "docs", {"log.txt": "The lighthouse lamp failed.\n"})
     _index(root, vectors=False)
+    assert not folder_index.vectors_started(folder_index.find_index_path(root))
+    # With no vectors the query is not embedded at all, so a first search
+    # never waits on the embedding model.
+    monkeypatch.setattr(searching_and_prompting, "LLMEmbed", None)
     assert _search(str(root))("lighthouse lamp") == []
     results = _search(str(root), keyword_fallback=True)("lighthouse lamp")
     assert results

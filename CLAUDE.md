@@ -217,6 +217,10 @@ keep it that way so `indexFolder`/`watchFolders` stay usable in other applicatio
   check, `_SearchesVaultPaths` re-resolves `vault_path` and rebuilds the segment in place
   (keeping its pipeline links) when the indexes behind it changed, so a segment built
   before its folder was indexed starts searching it once it is.
+  `_FanOutVectorSearch` makes its embedders on first use and skips indexes with no
+  vectors yet (`folder_index.vectors_started`), so building a search or asking before
+  anything is embedded never waits on the model's first download; the Search page and
+  the TUI Search tab stay off until then (`query.semantic_search_waiting`).
 - App glue in `apps/query.py` ("Folder mode" block): `add_folder`, `remove_folder`,
   `reembed_folder`, `rebuild_folder`, `folders_status`, `_folder_banner`,
   `_partial_index_note`, `_folder_chunk`/`_folder_source_file` for lookups. In folder

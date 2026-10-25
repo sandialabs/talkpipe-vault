@@ -693,3 +693,19 @@ def test_vault_deleted_underneath_is_reported_not_recreated(sample_vault, tmp_pa
     outcome = service.refresh()
     assert not outcome["ok"]
     assert "Ctrl+R" in outcome["error"]
+
+
+def test_semantic_search_waits_for_a_folders_first_vectors(tmp_path, monkeypatch):
+    from talkpipe_vault.pipelines import folder_index
+    from talkpipe_vault.tui.service import SEMANTIC_SEARCH_WAITING
+
+    docs = tmp_path / "notes"
+    docs.mkdir()
+    (docs / "a.md").write_text("# Lighthouse\n\nThe keeper logged a storm.\n")
+    service = VaultService()
+    assert service.startup(str(docs))["ok"]
+    monkeypatch.setattr(folder_index, "vectors_started", lambda path: False)
+    assert service.status()["semantic_search_waiting"]
+    outcome = service.semantic_search("storm")
+    assert not outcome["ok"]
+    assert outcome["error"] == SEMANTIC_SEARCH_WAITING

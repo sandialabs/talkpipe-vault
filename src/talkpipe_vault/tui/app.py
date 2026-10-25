@@ -45,7 +45,7 @@ from textual.widgets import (
 )
 from textual.widgets.option_list import Option
 
-from talkpipe_vault.tui.service import VaultService
+from talkpipe_vault.tui.service import SEMANTIC_SEARCH_WAITING, VaultService
 
 TABS = [
     ("tab-vault", "Vault", "f2"),
@@ -59,6 +59,11 @@ TABS = [
 # one line and secondary panes give up their minimum heights.
 COMPACT_ROWS = 26
 
+# The Search tab's hint before its first search.
+SEARCH_HINT = (
+    "Enter a query above (F3 focuses this tab). Semantic search ranks "
+    "by meaning; for an exact word use Keywords (F4)."
+)
 # The Keywords tab's hint before its first search.
 KEYWORDS_HINT = (
     "Enter keywords above (F4 focuses this tab): exact words, AND, OR, NOT "
@@ -967,13 +972,7 @@ class VaultApp(App[None]):
             classes="hidden",
             collapsed=True,
         )
-        yield ResultsPane(
-            id="search-results",
-            empty_text=(
-                "Enter a query above (F3 focuses this tab). Semantic search ranks "
-                "by meaning; for an exact word use Keywords (F4)."
-            ),
-        )
+        yield ResultsPane(id="search-results", empty_text=SEARCH_HINT)
 
     def _compose_keywords_tab(self) -> ComposeResult:
         with Horizontal(classes="form-row"):
@@ -1271,6 +1270,11 @@ class VaultApp(App[None]):
         )
         self.query_one("#ask-extra", Checkbox).set_class(
             not status["agent_chat_available"], "hidden"
+        )
+        waiting = bool(status["semantic_search_waiting"])
+        self.query_one("#search-go", Button).disabled = waiting
+        self.query_one("#search-results", ResultsPane).set_empty_text(
+            SEMANTIC_SEARCH_WAITING if waiting else SEARCH_HINT
         )
         self.query_one("#ask-keyword-hint", Static).set_class(
             status["keyword_search_enabled"] or not has_vault, "hidden"
