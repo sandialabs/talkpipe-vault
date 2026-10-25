@@ -246,6 +246,7 @@ def save_model_overrides(**overrides: str | int | None) -> None:
 # folders searched before, whether the last session was folders or a named
 # vault (what --resume reopens), and where new folder indexes go.
 OPEN_FOLDERS_KEY = "open_folders"
+CLOSED_FOLDERS_KEY = "closed_folders"
 RECENT_FOLDERS_KEY = "recent_folders"
 LAST_SESSION_KEY = "last_session"
 INDEX_LOCATION_KEY = "index_location"
@@ -266,6 +267,17 @@ def get_open_folders() -> list[str]:
 def get_recent_folders() -> list[str]:
     """Folders searched before, most recently added first."""
     return _string_list(load_settings().get(RECENT_FOLDERS_KEY))
+
+
+def get_closed_folders() -> list[str]:
+    """Folders closed but kept in the folder list: not searched until opened."""
+    return _string_list(load_settings().get(CLOSED_FOLDERS_KEY))
+
+
+def set_closed_folders(folders: list[str]) -> None:
+    settings = load_settings()
+    settings[CLOSED_FOLDERS_KEY] = list(folders)
+    save_settings(settings)
 
 
 def set_open_folders(folders: list[str]) -> None:

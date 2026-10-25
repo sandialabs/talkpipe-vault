@@ -81,9 +81,10 @@ HELP_TEXT = """\
 F2 Vault — folders to search, then named vaults. Folders: type a path (or \
 Browse) and press Add folder; each is indexed in the background and kept \
 up to date, keyword index included. Select an open folder in the list for \
-Remove selected, Remove and delete its index, or Re-embed selected (after \
-changing the embedding model); Enter on a folder searched before opens it \
-again. Named vaults (advanced): open/create a vault, index documents, recent \
+Close selected (it stays listed, index kept, not searched), Remove selected, \
+Remove and delete its index, or Re-embed selected (after changing the \
+embedding model); Open selected, or Enter, on a closed folder or one searched \
+before searches it again. Named vaults (advanced): open/create a vault, index documents, recent \
 vaults, retrieval filter. Index documents adds to the open vault; tick \
 "Overwrite existing index" to replace it (re-indexing the same folder without it duplicates \
 chunks). Enter in either path field runs Index documents. Adding documents \
@@ -921,6 +922,8 @@ class VaultApp(App[None]):
             )
             yield Button("Re-embed selected", id="folder-reembed")
         with Horizontal(classes="button-row"):
+            yield Button("Close selected", id="folder-close")
+            yield Button("Open selected", id="folder-open")
             yield Button("Retrieval filter", id="filter")
         yield Static("", id="folder-note", markup=False)
         yield Label("Named vaults (advanced)", classes="section-heading")
@@ -1306,6 +1309,14 @@ class VaultApp(App[None]):
         highlighted = options.highlighted
         options.clear_options()
         for folder in self.service.folders():
+            if folder["closed"]:
+                options.add_option(
+                    Option(
+                        f"{folder['name']} — {folder['progress']}  ({folder['root']})",
+                        id=f"closed:{folder['root']}",
+                    )
+                )
+                continue
             where = "" if folder["in_folder"] else " · index in app data"
             options.add_option(
                 Option(
@@ -1374,16 +1385,34 @@ class VaultApp(App[None]):
     @on(OptionList.OptionSelected, "#folder-list")
     def _folder_selected(self) -> None:
         selected = self._selected_folder()
-        if selected and selected[0] == "recent":
+        if selected and selected[0] in ("recent", "closed"):
             self._folder_action(lambda: self.service.add_folder(selected[1]))
+
+    @on(Button.Pressed, "#folder-close")
+    def _close_folder_pressed(self) -> None:
+        selected = self._selected_folder()
+        if not selected or selected[0] != "open":
+            self.notify("Select an open folder first.", severity="warning")
+            return
+        root = selected[1]
+        self._folder_action(lambda: self.service.close_folder(root))
+
+    @on(Button.Pressed, "#folder-open")
+    def _open_folder_pressed(self) -> None:
+        selected = self._selected_folder()
+        if not selected or selected[0] not in ("closed", "recent"):
+            self.notify("Select a closed folder first.", severity="warning")
+            return
+        root = selected[1]
+        self._folder_action(lambda: self.service.add_folder(root))
 
     @on(Button.Pressed, "#folder-remove")
     @on(Button.Pressed, "#folder-delete")
     @work(group="modal")
     async def _remove_folder_pressed(self, event: Button.Pressed) -> None:
         selected = self._selected_folder()
-        if not selected or selected[0] != "open":
-            self.notify("Select an open folder first.", severity="warning")
+        if not selected or selected[0] not in ("open", "closed"):
+            self.notify("Select a folder in the list first.", severity="warning")
             return
         root = selected[1]
         delete = event.button.id == "folder-delete"

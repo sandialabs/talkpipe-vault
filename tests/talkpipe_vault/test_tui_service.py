@@ -737,3 +737,27 @@ def test_startup_reopens_the_last_sessions_folders(tmp_path):
     assert outcome["folders"]
     assert "(last session)" in outcome["message"]
     assert service.state.folders == [str(docs.resolve())]
+
+
+def test_close_and_open_a_folder_from_the_service(tmp_path):
+    docs = tmp_path / "notes"
+    docs.mkdir()
+    (docs / "a.md").write_text("# a\n")
+    service = VaultService()
+    assert service.startup(str(docs))["ok"]
+    root = str(docs.resolve())
+
+    outcome = service.close_folder(root)
+    assert outcome["ok"], outcome
+    assert service.state.folders == []
+    [entry] = service.folders()
+    assert entry["closed"]
+    assert entry["progress"] == query.FOLDER_CLOSED_PROGRESS
+    assert root not in service.recent_folders()
+    assert not service.status()["folder_mode"]
+
+    outcome = service.open_folder(root)
+    assert outcome["ok"], outcome
+    assert service.state.folders == [root]
+    assert not service.folders()[0]["closed"]
+    assert not service.open_folder(root)["ok"]

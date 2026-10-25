@@ -595,3 +595,56 @@ def test_several_open_folders_have_no_retrieval_filter(client, docs, tmp_path):
     )
     assert response.status_code == 303
     assert "one+open+folder" in response.headers["location"]
+
+
+def test_closing_a_folder_keeps_it_listed_and_reopens(client, docs):
+    query.add_folder(query._state, str(docs))
+    assert _wait(_searchable_by_keyword)
+    root = str(docs.resolve())
+
+    response = client.post(
+        "/folders/close", data={"root": root}, follow_redirects=False
+    )
+    assert response.status_code == 303
+    assert "error" not in response.headers["location"]
+    assert query._state.folders == []
+    assert query._state.vault_path == ""
+    assert user_settings.get_open_folders() == []
+    assert user_settings.get_closed_folders() == [root]
+    assert (docs / FOLDER_INDEX_DIRNAME).is_dir()
+    [entry] = query.folders_status(query._state)
+    assert entry["closed"]
+    assert entry["root"] == root
+    page = client.get("/documents").text
+    assert 'action="/folders/open"' in page
+    assert "Searched before" not in page
+
+    response = client.post("/folders/open", data={"root": root}, follow_redirects=False)
+    assert "error" not in response.headers["location"]
+    assert query._state.folders == [root]
+    assert user_settings.get_closed_folders() == []
+    assert _wait(_searchable_by_keyword)
+    page = client.get("/documents").text
+    assert 'action="/folders/close"' in page
+
+
+def test_a_closed_folder_can_be_removed_with_its_index(client, docs):
+    query.add_folder(query._state, str(docs))
+    assert _wait(_searchable_by_keyword)
+    root = str(docs.resolve())
+    message, error = query.close_folder(query._state, root)
+    assert message.startswith("Closed")
+    assert not error
+    _, error = query.close_folder(query._state, root)
+    assert "not being searched" in error
+
+    response = client.post(
+        "/folders/remove",
+        data={"root": root, "delete_index": "1"},
+        follow_redirects=False,
+    )
+    assert "error" not in response.headers["location"]
+    assert not (docs / FOLDER_INDEX_DIRNAME).exists()
+    assert (docs / "lighthouse.txt").is_file()
+    assert user_settings.get_closed_folders() == []
+    assert query.folders_status(query._state) == []

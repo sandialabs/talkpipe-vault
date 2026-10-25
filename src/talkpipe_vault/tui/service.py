@@ -422,10 +422,19 @@ class VaultService:
         return query.folders_status(self.state)
 
     def recent_folders(self) -> list[str]:
-        """Folders searched before that are not open now."""
-        return [
-            p for p in user_settings.get_recent_folders() if p not in self.state.folders
-        ]
+        """Folders searched before that are neither open nor closed now."""
+        listed = set(self.state.folders) | set(user_settings.get_closed_folders())
+        return [p for p in user_settings.get_recent_folders() if p not in listed]
+
+    def close_folder(self, root: str) -> dict[str, Any]:
+        """Stop searching a folder but keep it listed (``/folders/close``)."""
+        message, error = query.close_folder(self.state, root)
+        return _fail(error) if error else _ok(message)
+
+    def open_folder(self, root: str) -> dict[str, Any]:
+        """Search a closed folder again (``/folders/open``)."""
+        message, error = query.open_closed_folder(self.state, root)
+        return _fail(error) if error else _ok(message)
 
     def add_folder(self, raw_path: str) -> dict[str, Any]:
         """Start searching a folder (``/folders/add``)."""

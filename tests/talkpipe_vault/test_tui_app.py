@@ -1751,3 +1751,34 @@ async def test_search_tab_notice_clears_once_a_folder_has_vectors(
         )
         assert not app.query_one("#search-go", Button).disabled
         assert pane.results == []
+
+
+async def test_vault_tab_closes_and_reopens_a_folder(tmp_path):
+    docs = tmp_path / "notes"
+    docs.mkdir()
+    (docs / "a.md").write_text("# a\n")
+    app = VaultApp(VaultService(), vault_path=str(docs))
+    async with app.run_test(size=SIZE) as pilot:
+        await _wait_workers(app, pilot)
+        app.query_one("#tabs").active = "tab-vault"
+        await _settle(pilot)
+        app._load_folders()
+        options = app.query_one("#folder-list")
+        options.highlighted = 0
+        await pilot.click("#folder-close")
+        await _wait_workers(app, pilot)
+        assert app.service.state.folders == []
+        app._load_folders()
+        assert options.option_count == 1
+        prompt = str(options.get_option_at_index(0).prompt)
+        assert "Closed" in prompt
+        assert "notes" in prompt
+        assert str(options.get_option_at_index(0).id).startswith("closed:")
+
+        options.highlighted = 0
+        await pilot.click("#folder-open")
+        await _wait_workers(app, pilot)
+        assert app.service.state.folders == [str(docs.resolve())]
+        app._load_folders()
+        assert str(options.get_option_at_index(0).id).startswith("open:")
+    app.service.shutdown()

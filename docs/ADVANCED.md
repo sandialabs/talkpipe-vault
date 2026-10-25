@@ -112,6 +112,10 @@ reference. The module form is `python -m talkpipe_vault.tui`.
 
 ### Terminal interface notes
 
+- **Folders.** Select a folder in the list for **Close selected** (it stays
+  listed, not searched, its index kept), **Open selected** on a closed one,
+  **Remove selected** or **Remove and delete its index**. `Enter` on a
+  closed folder, or one searched before, opens it.
 - **Opening.** A folder of documents opens in folder mode; `--as-vault`
   opens it as a named vault. Opening a named vault loads the embedding model
   (a first run downloads it, about 250 MB); the header reads "opening…"
@@ -537,6 +541,12 @@ An index already in place is always reused, wherever it is.
   `vault_metadata.json` and used for its queries. When Settings names
   another, the folder offers **Re-embed** (keyword search keeps answering
   meanwhile); when the chunk settings differ, **Rebuild**.
+
+**Closing a folder** (the **Close** action in either interface) stops its
+indexer and leaves it out of every search, but keeps it in the folder list
+with its index intact; **Open** brings it back where it left off. A closed
+folder stays closed across restarts, and `--resume` reopens only the open
+ones. **Remove** drops an open or closed folder from the list.
 
 Folder and named-vault modes are exclusive in the interfaces; a named vault
 whose documents all lie in one folder offers to search that folder instead.

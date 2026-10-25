@@ -494,8 +494,42 @@ def folders_status(state: AppState) -> list[dict[str, Any]]:
             models["shingle_overlap"],
         )
         status["progress"] = _folder_progress_line(status)
+        status["closed"] = False
         statuses.append(status)
+    statuses.extend(
+        _closed_folder_status(root) for root in user_settings.get_closed_folders()
+    )
     return statuses
+
+
+FOLDER_CLOSED_PROGRESS = "Closed · not searched; its index is kept"
+
+
+def _closed_folder_status(root: str) -> dict[str, Any]:
+    """A closed folder's entry in the folder list: no indexing, nothing to wait for."""
+    return {
+        "root": root,
+        "name": Path(root).name or root,
+        "closed": True,
+        "phase": "closed",
+        "progress": FOLDER_CLOSED_PROGRESS,
+        "finished": True,
+        "complete": True,
+        "files_total": 0,
+        "files_keyword": 0,
+        "files_embedded": 0,
+        "files_error": 0,
+        "vector_coverage": 0.0,
+        "in_folder": True,
+        "location_reason": "",
+        "role": "closed",
+        "writer": "",
+        "error": "",
+        "vector_error": "",
+        "embedding": "",
+        "embedding_differs": False,
+        "chunking_differs": False,
+    }
 
 
 def _folder_progress_line(status: dict[str, Any]) -> str:
@@ -598,7 +632,9 @@ def ask_waiting(state: AppState) -> str:
     Answering then would only report that the documents say nothing; an
     empty folder whose scan has finished is not waiting.
     """
-    statuses = folders_status(state) if state.folders else []
+    statuses = (
+        [s for s in folders_status(state) if not s["closed"]] if state.folders else []
+    )
     if statuses and all(
         not s["files_keyword"] and s["phase"] != "ready" for s in statuses
     ):
@@ -721,6 +757,7 @@ def _add_folder(state: AppState, raw_path: str) -> tuple[str, str]:
     _scheduler().add(folder)
     state.folders.append(root)
     user_settings.set_open_folders(state.folders)
+    _mark_closed(root, closed=False)
     user_settings.set_last_session(user_settings.SESSION_FOLDERS)
     _activate_folders(state)
     where = (
@@ -745,21 +782,66 @@ def _close_folder(state: AppState, root: str) -> folder_index.FolderIndex | None
     return folder
 
 
+def _mark_closed(root: str, *, closed: bool) -> None:
+    """Add *root* to, or drop it from, the closed-folder list."""
+    others = [p for p in user_settings.get_closed_folders() if p != root]
+    user_settings.set_closed_folders([*others, root] if closed else others)
+
+
+def close_folder(state: AppState, root: str) -> tuple[str, str]:
+    """Stop searching and indexing *root* but keep it in the folder list.
+
+    Returns (message, error). The folder's index is kept where it is, so
+    opening the folder again is instant; until then it is not searched and
+    its indexer does not run.
+    """
+    with _folders_lock:
+        if root not in state.folders:
+            return "", f"{root} is not being searched."
+        _close_folder(state, root)
+        user_settings.set_open_folders(state.folders)
+        _mark_closed(root, closed=True)
+        _activate_folders(state)
+    message = (
+        f"Closed {root}: it is not searched until you open it again. Its index "
+        "is kept, so opening it is instant."
+    )
+    return message, ""
+
+
+def open_closed_folder(state: AppState, root: str) -> tuple[str, str]:
+    """Search a closed folder again (the folder-list Open action)."""
+    if root not in user_settings.get_closed_folders():
+        return "", f"{root} is not a closed folder."
+    return add_folder(state, root)
+
+
 def remove_folder(
     state: AppState, root: str, delete_index: bool = False
 ) -> tuple[str, str]:
-    """Stop searching *root*; with *delete_index*, delete its index too.
+    """Drop *root*, open or closed, from the folder list; with *delete_index*,
+    delete its index too.
 
     Returns (message, error). Only the index directory is ever deleted,
     never the documents, and not while another process is indexing it.
     """
     with _folders_lock:
-        if root not in state.folders:
+        if root in user_settings.get_closed_folders():
+            _mark_closed(root, closed=False)
+            try:
+                folder: folder_index.FolderIndex | None = folder_index.open_folder(
+                    root, index_location=user_settings.get_index_location()
+                )
+            except OSError:
+                folder = None
+            message = f"Removed {root} from the folder list."
+        elif root not in state.folders:
             return "", f"{root} is not being searched."
-        folder = _close_folder(state, root)
-        user_settings.set_open_folders(state.folders)
-        _activate_folders(state)
-    message = f"Stopped searching {root}."
+        else:
+            folder = _close_folder(state, root)
+            user_settings.set_open_folders(state.folders)
+            _activate_folders(state)
+            message = f"Stopped searching {root}."
     if delete_index and folder is not None:
         problem = folder_index.delete_folder_index(folder)
         if problem:
@@ -2726,6 +2808,26 @@ def folders_remove(
         - delete_index: str - If truthy, also delete the folder's index
     """
     message, error = remove_folder(state, root, delete_index=bool(delete_index))
+    return _redirect_with_message("/documents", message=message, error=error)
+
+
+@app.post("/folders/close", response_class=HTMLResponse)
+def folders_close(
+    root: Annotated[str, Form()] = "",
+    state: AppState = Depends(get_state),
+) -> Response:
+    """Stop searching a folder but keep it in the list, its index intact."""
+    message, error = close_folder(state, root)
+    return _redirect_with_message("/documents", message=message, error=error)
+
+
+@app.post("/folders/open", response_class=HTMLResponse)
+def folders_open(
+    root: Annotated[str, Form()] = "",
+    state: AppState = Depends(get_state),
+) -> Response:
+    """Search a closed folder again."""
+    message, error = open_closed_folder(state, root)
     return _redirect_with_message("/documents", message=message, error=error)
 
 

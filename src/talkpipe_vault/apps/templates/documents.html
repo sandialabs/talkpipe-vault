@@ -169,6 +169,27 @@
     {% if folders %}
     <ul class="vault-list folder-list" id="folder-list">
         {% for folder in folders %}
+        {% if folder.closed %}
+        <li class="vault-entry folder-entry folder-closed" data-root="{{ folder.root }}">
+            <span class="vault-entry-path">
+                <strong>{{ folder.name }}</strong> <code>{{ folder.root }}</code>
+                <span class="folder-progress" data-field="progress">{{ folder.progress }}</span>
+            </span>
+            <span class="vault-entry-actions">
+                <form method="post" action="/folders/open">
+                    <input type="hidden" name="root" value="{{ folder.root }}">
+                    <button type="submit">Open</button>
+                </form>
+                <form method="post" action="/folders/remove" class="remove-folder-form">
+                    <input type="hidden" name="root" value="{{ folder.root }}">
+                    <label class="overwrite-option">
+                        <input type="checkbox" name="delete_index" value="1"> also delete its index
+                    </label>
+                    <button type="submit" class="btn-secondary">Remove</button>
+                </form>
+            </span>
+        </li>
+        {% else %}
         <li class="vault-entry folder-entry" data-root="{{ folder.root }}">
             <span class="vault-entry-path">
                 <strong>{{ folder.name }}</strong> <code>{{ folder.root }}</code>
@@ -196,6 +217,11 @@
                             title="Indexed with different chunk settings">Rebuild with current chunking</button>
                 </form>
                 {% endif %}
+                <form method="post" action="/folders/close">
+                    <input type="hidden" name="root" value="{{ folder.root }}">
+                    <button type="submit" class="btn-secondary"
+                            title="Stop searching and indexing this folder; it stays in the list and its index is kept">Close</button>
+                </form>
                 <form method="post" action="/folders/remove" class="remove-folder-form">
                     <input type="hidden" name="root" value="{{ folder.root }}">
                     <label class="overwrite-option">
@@ -205,14 +231,15 @@
                 </form>
             </span>
         </li>
+        {% endif %}
         {% endfor %}
     </ul>
     {% endif %}
-    {% set closed_folders = recent_folders|reject('in', folders|map(attribute='root')|list)|list %}
-    {% if closed_folders %}
+    {% set previous_folders = recent_folders|reject('in', folders|map(attribute='root')|list)|list %}
+    {% if previous_folders %}
     <h3>Searched before</h3>
     <ul class="vault-list">
-        {% for recent in closed_folders %}
+        {% for recent in previous_folders %}
         <li class="vault-entry">
             <span class="vault-entry-path">{{ recent }}</span>
             <span class="vault-entry-actions">

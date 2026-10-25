@@ -253,8 +253,11 @@ first use, skipping indexes with no vectors yet (`vectors_started`).
 `keyword_fallback` adds keyword hits for folders still embedding.
 
 **App glue** (`apps/query.py`, "Folder mode" block): `add_folder`,
-`remove_folder`, `reembed_folder`, `rebuild_folder` (all under
-`_folders_lock`), `folders_status`, `_folder_banner`, `_partial_index_note`,
+`close_folder`, `open_closed_folder`, `remove_folder` (open or closed),
+`reembed_folder`, `rebuild_folder` (all under `_folders_lock`),
+`folders_status` (open folders' progress, then closed folders as
+`closed: True` entries that nothing waits on), `_folder_banner`,
+`_partial_index_note`,
 and the lookups both interfaces use: `chunk_text`, `resolve_source_file`
 (folder mode serves only a stored chunk's own path, never the request value).
 `startup_folders` resolves what a command line opens for both `vault-server`
@@ -264,11 +267,12 @@ interfaces show are worded once (`SEMANTIC_SEARCH_WAITING_TEMPLATE`,
 `FOLDERS_KEEP_EMBEDDER_TEMPLATE`); the TUI fills in its page names. In folder
 mode `_state.folders` lists the roots and `_state.vault_path` is the first
 folder's index; folder and named-vault modes are exclusive. Routes:
-`/folders/add`, `/folders/remove`, `/folders/reembed`, `/folders/rebuild`;
+`/folders/add`, `/folders/close`, `/folders/open`, `/folders/remove`,
+`/folders/reembed`, `/folders/rebuild`;
 `/api/index-status` carries `folders` and `banner`. Named-vault index runs
 hold the vault's `writer.lock` (ignored by `existing_non_vault_entries`) and
 pause the folder indexer (`_index_run_guard`). Settings: `open_folders`,
-`recent_folders`, `last_session`, `index_location`. Tests use the offline
+`closed_folders`, `recent_folders`, `last_session`, `index_location`. Tests use the offline
 `fake_embedder` fixture (`tests/conftest.py`, source `fakehash`);
 `docs/DEVELOPER_GUIDE.md` shows every component in Python and ChatterLang,
 and every block there was run; keep it so. `docs/ADVANCED.md` is for operators
