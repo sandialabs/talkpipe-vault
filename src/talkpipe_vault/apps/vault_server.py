@@ -4,6 +4,8 @@ CLI entry point for running the web interface.
 
 import argparse
 import sys
+import urllib.parse
+import urllib.request
 import webbrowser
 from pathlib import Path
 
@@ -14,6 +16,7 @@ from talkpipe_vault.apps import access_control, user_settings
 from talkpipe_vault.apps.query import (
     _port_in_use,
     _running_instance_url,
+    is_documents_folder,
     run_app,
     startup_folders,
 )
@@ -60,6 +63,29 @@ def _choose_port(host: str, requested: int | None) -> int:
         file=sys.stderr,
     )
     raise SystemExit(1)
+
+
+def _add_folder_to_running(url: str, folder: str) -> str:
+    """Ask the instance at *url* to search *folder*; return what it said.
+
+    Posts the same form the Vaults & Documents page posts and reads the
+    message the page would show from the redirect it answers with.
+    """
+    data = urllib.parse.urlencode({"folder_path": folder}).encode()
+    try:
+        with urllib.request.urlopen(  # nosec B310 - http URL to a local port
+            urllib.request.Request(url + "folders/add", data=data, method="POST"),
+            timeout=60,
+        ) as response:
+            final_url = response.geturl()
+    except (OSError, ValueError) as exc:
+        return (
+            f"Could not add {folder} to the running instance ({exc}); add it on "
+            "its Vaults & Documents page."
+        )
+    query = urllib.parse.parse_qs(urllib.parse.urlparse(final_url).query)
+    said = (query.get("error") or query.get("message") or [""])[0]
+    return said or f"Added {folder}."
 
 
 def _most_recent_usable_vault() -> str:
@@ -165,6 +191,22 @@ def main() -> None:
     )
     if running:
         print(f"TalkPipe Vault is already running at {running}")
+        # Folders given on this command line are handed to that instance;
+        # a named vault is not, since the two modes do not open together.
+        folders = [str(Path(p).expanduser()) for p in args.dir]
+        if (
+            args.vault_path
+            and not args.as_vault
+            and is_documents_folder(args.vault_path)
+        ):
+            folders.insert(0, str(Path(args.vault_path).expanduser()))
+        elif args.vault_path:
+            print(
+                f"{args.vault_path} was not opened: open the vault on its "
+                "Vaults & Documents page."
+            )
+        for folder in folders:
+            print(_add_folder_to_running(running, folder))
         if not args.no_browser:
             print("Opening it in your web browser...")
             webbrowser.open(running)
@@ -223,11 +265,14 @@ def main() -> None:
         print("interface after it starts (or open a named vault there).")
     print(f"Web interface: http://{args.host}:{port}")
     if not args.no_browser:
-        print("Opening in your web browser...")
+        print(
+            "Opening in your web browser (if nothing opens, visit the address above)..."
+        )
     print()
 
-    # Start the web application (this will block)
-    print("Starting web interface...")
+    # Start the web application (this will block). Flush so the banner shows
+    # at once when stdout is a file or a service log, not a terminal.
+    print("Starting web interface...", flush=True)
     try:
         run_app(
             vault_path=vault_path,

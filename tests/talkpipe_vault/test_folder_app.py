@@ -294,6 +294,9 @@ def test_opening_a_named_vault_leaves_folder_mode(client, docs, tmp_path):
     assert query._state.folders == []
     assert query._state.vault_path == str(vault)
     assert user_settings.get_last_session() == user_settings.SESSION_VAULT
+    # The page says the folders were closed, and how to get back to them.
+    location = html.unescape(response.headers["location"])
+    assert "no+longer+searched" in location.replace("%20", "+")
     # The folder is remembered for "Searched before".
     assert str(docs.resolve()) in user_settings.get_recent_folders()
 

@@ -566,9 +566,7 @@ indexes a glob of files with the experimental `listIntoVectorDB` source
 ```python
 import talkpipe
 
-# Registered components are discovered from installed plugins.
-talkpipe.load_plugins()
-
+# talkpipe.compile loads the registered components itself.
 pipeline = talkpipe.compile(
     "INPUT FROM listIntoVectorDB["
     '  source_pattern="/path/to/documents/**/*.txt",'
@@ -614,7 +612,7 @@ layout rather than the `docs` table used by `vault-server`.
 
 ## Vault storage structure
 
-**Stable layout** (what `vault-server` reads) — produced by the **Add
+**Stable layout** (what `vault-server` reads) — produced by the **Vaults &
 Documents** page and by `makevectordatabase`:
 
 - `docs` — LanceDB table of chunk embeddings
@@ -748,7 +746,7 @@ cd talkpipe-vault
 # Development happens on `master`; switch to it before anything else.
 git checkout master
 
-# Virtual environment (see the README note about PEP 668)
+# Virtual environment
 python -m venv .venv
 source .venv/bin/activate      # Windows: .venv\Scripts\activate
 

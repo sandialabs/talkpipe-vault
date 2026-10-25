@@ -873,6 +873,13 @@ def startup_folders(
     return vault_path, folders, resumed, ""
 
 
+FOLDERS_LEFT_NOTE = (
+    " The folders you had open are no longer searched (folders and a named "
+    "vault do not open together); add one again on this page to go back."
+)
+"""Appended to the message when opening a named vault closed the folders."""
+
+
 def _leave_folder_mode(state: AppState) -> None:
     """Close every folder (they stay remembered) before opening a vault."""
     with _folders_lock:
@@ -1965,9 +1972,12 @@ async def open_vault(
     if non_empty_non_vault and confirm_non_vault != "yes":
         return _redirect_with_message("/documents", confirm_path=str(vault_path))
 
+    had_folders = bool(state.folders)
     error = _activate_vault(vault_path)
     if error:
         return _redirect_with_message("/documents", error=error)
+    if had_folders:
+        placement_note += FOLDERS_LEFT_NOTE
 
     if created:
         return _redirect_with_message(
@@ -2957,12 +2967,15 @@ def _open_vault_for_indexing(
             "",
         )
 
+    had_folders = bool(state.folders)
     error = _activate_vault(vault_path)
     if error:
         return (
             _redirect_with_message("/documents", error=error, source_path=source),
             "",
         )
+    if had_folders:
+        placement_note += FOLDERS_LEFT_NOTE
     note = (
         f"Created vault {vault_path}.{placement_note} "
         if created

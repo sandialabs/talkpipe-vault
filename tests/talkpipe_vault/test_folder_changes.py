@@ -126,6 +126,20 @@ def test_max_events_records_the_last_item(docs):
     assert _pass(docs) == [("added", "sub/bravo.md")]
 
 
+def test_ctrl_c_ends_the_stream_cleanly(docs, monkeypatch):
+    """Ctrl+C is the documented way to stop: no traceback, the stream just ends."""
+    real_sleep = time.sleep
+
+    def interrupted_sleep(seconds):
+        if threading.current_thread() is threading.main_thread():
+            raise KeyboardInterrupt
+        real_sleep(seconds)
+
+    monkeypatch.setattr(fc.time, "sleep", interrupted_sleep)
+    events = [c["event"] for c in fc.folder_changes(path=str(docs))()]
+    assert events == ["added", "added"]
+
+
 def _next_within(items, timeout=30.0):
     """The next item, failing instead of hanging when none comes."""
     box: queue.Queue = queue.Queue()

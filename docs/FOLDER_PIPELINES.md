@@ -219,9 +219,11 @@ The two searches emit different shapes:
 | `vaultSearch` | one list of `SearchResult` objects | `hit.score`, `hit.doc_id`, `hit.document` with `content`, `source`, `title`, `folder` | similarity |
 | `vaultTextSearch` | one dict per hit | `{"doc_id", "score", "document": {"content", "path", "filename", "folder"}}` | Whoosh relevance |
 
-Hits from several folders are interleaved by their rank within each folder
-(reciprocal rank fusion), so a score compares only with others from the same
-folder and the scores need not descend down the list.
+Semantic hits from folders indexed with the same embedder are merged by
+distance. Folders with different embedders, and keyword hits, are
+interleaved by their rank within each folder (reciprocal rank fusion), so
+then a score compares only with others from the same folder and the scores
+need not descend down the list.
 
 Python:
 
@@ -244,8 +246,12 @@ chatterlang_script --script '
   | print'
 ```
 
-Asking a question needs a chat model; here, one served by Ollama (set
-`TALKPIPE_OLLAMA_SERVER_URL` if it is not on this machine):
+Asking a question needs a chat model; here, one served by Ollama. Set
+`TALKPIPE_OLLAMA_SERVER_URL` if it is not on this machine: pipelines read
+the environment, not the URL or keys saved on the vault's Settings page.
+`chat_source` takes any chat provider from the README's provider table
+(`openai`, `anthropic`, …) with its key in the environment; leave both
+parameters out to use the configured defaults.
 
 ```python
 import talkpipe

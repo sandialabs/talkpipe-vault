@@ -241,6 +241,10 @@ def folder_changes(
                     emitted += 1
             if not watch:
                 return
-            time.sleep(POLL_SECONDS)
+            try:
+                time.sleep(POLL_SECONDS)
+            except KeyboardInterrupt:
+                # Ctrl+C is the documented way to stop: end the stream.
+                return
     finally:
         reader.close()

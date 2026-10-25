@@ -6,6 +6,7 @@ import json
 import socket
 import threading
 import time
+import urllib.parse
 from pathlib import Path
 
 import pytest
@@ -297,6 +298,80 @@ def test_main_already_running_respects_no_browser(monkeypatch, capsys):
     assert opened == []
     assert calls == {}
     assert "already running" in capsys.readouterr().out
+
+
+class _Redirected:
+    """What urlopen returns after following the add-folder redirect."""
+
+    def __init__(self, url):
+        self._url = url
+
+    def geturl(self):
+        return self._url
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def test_main_already_running_hands_folders_to_the_running_instance(
+    monkeypatch, capsys, tmp_path
+):
+    """A folder given to a second launch is added to the instance already up."""
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "note.txt").write_text("a document\n")
+    posted = []
+
+    def fake_urlopen(request, timeout=0):
+        posted.append((request.full_url, request.data))
+        return _Redirected(
+            "http://127.0.0.1:8002/documents?message=Searching+"
+            + str(docs).replace("/", "%2F")
+            + ".+Its+index+is+kept+in+the+folder."
+        )
+
+    monkeypatch.setattr(vault_server, "run_app", lambda **k: pytest.fail("ran"))
+    monkeypatch.setattr(
+        vault_server, "_running_instance_url", lambda h, p: "http://127.0.0.1:8002/"
+    )
+    monkeypatch.setattr(vault_server.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr("sys.argv", ["vault-server", str(docs), "--no-browser"])
+
+    vault_server.main()
+
+    assert posted == [
+        (
+            "http://127.0.0.1:8002/folders/add",
+            urllib.parse.urlencode({"folder_path": str(docs)}).encode(),
+        )
+    ]
+    out = capsys.readouterr().out
+    assert f"Searching {docs}. Its index is kept in the folder." in out
+
+
+def test_main_already_running_says_a_vault_path_was_not_opened(
+    monkeypatch, capsys, tmp_path
+):
+    monkeypatch.setattr(vault_server, "run_app", lambda **k: pytest.fail("ran"))
+    monkeypatch.setattr(
+        vault_server, "_running_instance_url", lambda h, p: "http://127.0.0.1:8002/"
+    )
+    monkeypatch.setattr(
+        vault_server.urllib.request,
+        "urlopen",
+        lambda *a, **k: pytest.fail("a vault must not be posted as a folder"),
+    )
+    vault = tmp_path / "my-vault"
+    monkeypatch.setattr("sys.argv", ["vault-server", str(vault), "--no-browser"])
+
+    vault_server.main()
+
+    out = capsys.readouterr().out
+    assert f"{vault} was not opened" in out
+    assert "Vaults & Documents page" in out
 
 
 # --- port choice --------------------------------------------------------------

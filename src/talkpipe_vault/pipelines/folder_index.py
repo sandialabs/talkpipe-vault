@@ -648,7 +648,7 @@ class FolderIndex:
                 **counts,
                 "phase": self._phase(counts),
                 "role": "writer",
-                "writer": "this window",
+                "writer": "this process",
                 "stalled": False,
                 "vector_error": self.vector_error,
                 "error": self.error,
@@ -783,7 +783,7 @@ def open_folder(
     if access_control.vault_root() is not None:
         force = "this server keeps indexes under its vault root"
     elif index_location == INDEX_LOCATION_HOME:
-        force = "indexes are kept in app data (your setting)"
+        force = "your setting"
     base = Path(index_home).expanduser() if index_home else default_index_home()
     location = resolve_index_location(path, base, force_external=force)
     embedding_model, embedding_source = resolve_embedding_config(
@@ -1000,6 +1000,14 @@ def watch_folders(
                 index_home=index_home,
             )
         )
+    # Settle each folder's role before the first status, so it does not
+    # describe the folder as nobody's a moment before this process takes it.
+    for folder in scheduler.folders():
+        try:
+            folder.try_become_writer()
+        except Exception as exc:
+            logger.warning("Could not open the index of %s: %s", folder.root, exc)
+            folder.error = str(exc)
     scheduler.start()
     keys = (
         "phase",
@@ -1024,6 +1032,10 @@ def watch_folders(
                     emitted += 1
                     if max_events is not None and emitted >= max_events:
                         return
-            time.sleep(interval)
+            try:
+                time.sleep(interval)
+            except KeyboardInterrupt:
+                # Ctrl+C is the documented way to stop: end the stream.
+                return
     finally:
         scheduler.stop()

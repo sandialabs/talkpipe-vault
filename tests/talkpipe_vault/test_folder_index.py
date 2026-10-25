@@ -4,6 +4,7 @@ import multiprocessing
 import os
 import signal
 import stat
+import threading
 import time
 from pathlib import Path
 
@@ -475,3 +476,29 @@ def test_watch_folders_source_reports_progress(docs, vault_home, fake_embedder):
         assert time.monotonic() < deadline, seen[-1]
     assert seen[-1]["complete"], seen[-1]
     assert seen[-1]["role"] == "writer"
+    # The role is settled before the first status: never "nobody's" first.
+    assert seen[0]["role"] == "writer"
+    assert seen[0]["writer"] == "this process"
+
+
+def test_watch_folders_ends_cleanly_on_ctrl_c(
+    docs, vault_home, fake_embedder, monkeypatch
+):
+    """Ctrl+C is the documented way to stop: the stream ends, no traceback."""
+    real_sleep = time.sleep
+
+    def interrupted_sleep(seconds):
+        if threading.current_thread() is threading.main_thread():
+            raise KeyboardInterrupt
+        real_sleep(seconds)
+
+    monkeypatch.setattr(folder_index.time, "sleep", interrupted_sleep)
+    source = folder_index.watch_folders(
+        paths=str(docs),
+        embedding_source=FAKE_EMBEDDING_SOURCE,
+        embedding_model="fake",
+        interval=0.1,
+    )
+    seen = list(source.generate())
+    assert seen
+    assert seen[0]["root"] == str(docs)

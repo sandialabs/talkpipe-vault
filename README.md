@@ -38,14 +38,9 @@ pipeline framework, and its indexing and search components are reusable in
 your own pipelines; see the [Advanced Guide](docs/ADVANCED.md).
 
 **Status:** alpha. This page describes the `master` branch, which runs
-ahead of the PyPI release. To get the documented behaviour before the next
-release:
-
-```bash
-pip install "git+https://github.com/sandialabs/talkpipe-vault.git@master"
-```
-
-(The `@master` matters: the default branch, `stable`, is the last release.)
+ahead of the PyPI release; the install commands below give the documented
+behaviour. (The `@master` matters: the default branch, `stable`, is the
+last release.)
 
 ## Run the web app
 
@@ -53,7 +48,7 @@ pip install "git+https://github.com/sandialabs/talkpipe-vault.git@master"
 
 ```bash
 python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install talkpipe-vault
+pip install "git+https://github.com/sandialabs/talkpipe-vault.git@master"   # after the next release: pip install talkpipe-vault
 vault-server ~/notes
 ```
 
@@ -115,7 +110,9 @@ it:
 - **Some files are skipped**: hidden files and folders (`.git`, `.obsidian`,
   …), editor temporary files, and formats no extractor reads.
 - **Quitting loses nothing**: indexing resumes where it left off, and a
-  second vault-server or vault-tui on the same folder shares the index.
+  second vault-server (`--port 8003`) or vault-tui on the same folder
+  shares the index. Run `vault-server ~/papers` while one is up and the
+  running instance adds the folder and opens in your browser.
 - **Several folders** can be open together; every result names its folder.
 
 The index lives in a hidden `.tpvault` folder inside each folder (git and
@@ -134,7 +131,9 @@ A named vault is an index kept in a separate folder of its own, for
 documents you would rather not index in place. It lives under **Named
 vaults (advanced)** on the Vaults & Documents page: pick the documents (a
 folder or glob pattern), accept the suggested vault name, and one click
-creates the vault and indexes into it. A named vault's keyword index is
+creates the vault and indexes into it. Opening a named vault closes the
+folders you had open (the two do not mix); add a folder again to go back.
+A named vault's keyword index is
 built once with a button on the Keyword Search page and does not refresh
 when you index more documents; rebuild it there when you do.
 
