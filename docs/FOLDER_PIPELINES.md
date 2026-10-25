@@ -55,9 +55,11 @@ chatterlang_script --script '
 ```
 
 Options: `vectors=False` builds only the keyword index (fast, no embedder
-needed); `embedding_source` / `embedding_model` choose the embedder for a
-folder that has no vectors yet (a folder already embedded keeps the model it
-was embedded with). When another process is already indexing a folder,
+needed) — search such a folder with `vaultTextSearch` or
+`vaultSearch[keyword_fallback=True]`, since a plain `vaultSearch` finds
+nothing in it until its vectors are built; `embedding_source` /
+`embedding_model` choose the embedder for a folder that has no vectors yet
+(a folder already embedded keeps the model it was embedded with). When another process is already indexing a folder,
 `indexFolder` leaves it alone and its status says so (`"role": "reader"`).
 
 ## Keep folders indexed: `watchFolders`
@@ -200,14 +202,19 @@ each hit names its folder in `document["folder"]`. The embedder a folder was
 indexed with is used for it automatically. A folder has to be indexed
 first (`indexFolder`, `watchFolders`, or opening it in `vault-server`):
 searching one with no index yet, or a path that does not exist, raises a
-`ValueError` that says so.
+`ValueError` that says so. The check runs on every query, so a segment
+built before its folder was indexed (while `watchFolders` is still
+starting, say) searches the folder as soon as its index exists.
 
 The two searches emit different shapes. `vaultSearch` emits one list per
 query of `SearchResult` objects (`hit.score`, `hit.doc_id`, and
 `hit.document` with `content`, `source`, `title` and `folder`);
 `vaultTextSearch` emits each hit as its own dict: `{"doc_id", "score",
 "document": {"content", "path", "filename", "folder"}}`, with a Whoosh
-relevance score rather than a similarity.
+relevance score rather than a similarity. Hits from several folders are
+interleaved by their rank within each folder (reciprocal rank fusion), so a
+score compares only with others from the same folder and the scores need
+not descend down the list.
 
 Python:
 

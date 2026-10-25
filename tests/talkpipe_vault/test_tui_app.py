@@ -25,6 +25,7 @@ from textual.widgets import (
 
 from talkpipe_vault.apps import user_settings
 from talkpipe_vault.tui.app import (
+    KEYWORDS_HINT,
     ConfirmScreen,
     DirectoryPickerScreen,
     MessageScreen,
@@ -1267,6 +1268,20 @@ async def test_startup_keeps_an_opening_line_until_the_vault_is_ready(tmp_path):
         await _wait_workers(app, pilot)
         assert _text(app.query_one("#vault-name", Static)).endswith("slow-vault")
         assert app.query_one("#tabs").active == "tab-vault"
+        # The path did not exist: the note says it was created, so a
+        # mistyped folder name shows instead of passing for an empty vault.
+        note = _text(app.query_one("#index-progress", Static))
+        assert "did not exist" in note
+        assert "new, empty named vault" in note
+
+
+async def test_an_existing_empty_vault_points_at_indexing(tmp_path):
+    vault = tmp_path / "empty-vault"
+    vault.mkdir()
+    app = VaultApp(VaultService(), vault_path=str(vault))
+    async with app.run_test(size=SIZE) as pilot:
+        await _wait_workers(app, pilot)
+        assert app.query_one("#tabs").active == "tab-vault"
         assert "This vault is empty" in _text(app.query_one("#index-progress", Static))
 
 
@@ -1286,6 +1301,9 @@ async def test_command_line_documents_folder_is_searched_in_place(tmp_path):
         assert options.option_count == 1
         assert "notes" in str(options.get_option_at_index(0).prompt)
         assert not (docs / "docs.lance").exists()
+        # Folders build their own keyword index: no button to point at.
+        hint = _text(app.query_one("#kw-results-detail-body", Static))
+        assert hint == KEYWORDS_HINT
     app.service.shutdown()
 
 

@@ -489,6 +489,35 @@ def check_searchable(paths: list[str]) -> None:
             )
 
 
+def _arguments(local_vars: dict[str, Any]) -> dict[str, Any]:
+    """A constructor's arguments, from ``locals()`` taken on its first line."""
+    return {k: v for k, v in local_vars.items() if k not in ("self", "__class__")}
+
+
+class _SearchesVaultPaths:
+    """Re-resolves a search segment's vault_path before each query.
+
+    A folder stands for its index once it has one, and a segment's search is
+    built on the indexes found when the segment is made. One made before a
+    folder was indexed (while watchFolders, say, is still starting) would
+    otherwise refuse that folder on every query even after it is indexed;
+    instead, when the indexes behind vault_path change, the segment is built
+    again in place, keeping its links in the pipeline it belongs to.
+    """
+
+    vault_path: str | list[str]
+    _paths: list[str]
+    _init_kwargs: dict[str, Any]
+
+    def _check_searchable(self) -> None:
+        if resolve_vault_paths(self.vault_path) != self._paths:
+            fresh = type(self)(**self._init_kwargs)
+            for name, value in vars(fresh).items():
+                if name not in ("upstream", "downstream"):
+                    setattr(self, name, value)
+        check_searchable(self._paths)
+
+
 def needs_fan_out(paths: list[str]) -> bool:
     """True unless *paths* is one named vault, which keeps its own pipeline.
 
@@ -829,7 +858,7 @@ class SearchResultFilter(AbstractSegment):
 
 
 @register_segment("vaultSearch")
-class VaultSearch(AbstractFieldSegment):
+class VaultSearch(_SearchesVaultPaths, AbstractFieldSegment):
     """
     Segment that performs semantic search on a vault's vector database.
 
@@ -881,6 +910,7 @@ class VaultSearch(AbstractFieldSegment):
             "all embedded yet and fuse those hits in.",
         ] = False,
     ):
+        self._init_kwargs = _arguments(locals())
         super().__init__(field=field, set_as=set_as, multi_emit=multi_emit)
         embedding_model, embedding_source = resolve_embedding_config(
             embedding_model, embedding_source
@@ -959,12 +989,12 @@ class VaultSearch(AbstractFieldSegment):
         return run
 
     def process_value(self, value: str) -> Any:
-        check_searchable(self._paths)
+        self._check_searchable()
         return self.pipeline(value)
 
 
 @register_segment("vaultChat")
-class VaultChat(AbstractFieldSegment):
+class VaultChat(_SearchesVaultPaths, AbstractFieldSegment):
     """
     Segment that provides RAG-based conversational AI using vault contents.
 
@@ -1049,6 +1079,7 @@ class VaultChat(AbstractFieldSegment):
             "question instead of answering from unfiltered results.",
         ] = False,
     ):
+        self._init_kwargs = _arguments(locals())
         super().__init__(field=field, set_as=set_as, multi_emit=multi_emit)
         paths = resolve_vault_paths(vault_path)
         self._paths = paths
@@ -1239,7 +1270,7 @@ class VaultChat(AbstractFieldSegment):
         self._emits_item = keyword_search or bool(result_filter_script) or fan_out
 
     def process_value(self, value: str) -> Any:
-        check_searchable(self._paths)
+        self._check_searchable()
         result = self.pipeline(value)
         if not self._emits_item:
             return result
@@ -1256,7 +1287,7 @@ class VaultChat(AbstractFieldSegment):
 
 
 @register_segment("vaultTextSearch")
-class VaultTextSearch(AbstractFieldSegment):
+class VaultTextSearch(_SearchesVaultPaths, AbstractFieldSegment):
     """
     Segment that performs keyword search on a vault's Whoosh index.
 
@@ -1292,6 +1323,7 @@ class VaultTextSearch(AbstractFieldSegment):
             "Should be set by the subclass constructor call or the field_segment decorator, not by the user.",
         ] = True,
     ):
+        self._init_kwargs = _arguments(locals())
         super().__init__(field=field, set_as=set_as, multi_emit=multi_emit)
         paths = resolve_vault_paths(vault_path)
         for path in paths:
@@ -1314,7 +1346,7 @@ class VaultTextSearch(AbstractFieldSegment):
         ).as_function(single_in=True, single_out=False)
 
     def process_value(self, value: str) -> list[dict[str, Any]]:
-        check_searchable(self._paths)
+        self._check_searchable()
         if self._fan_out is not None:
             return self._fan_out(value)
         results = []

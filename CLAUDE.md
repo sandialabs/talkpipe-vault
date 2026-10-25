@@ -213,7 +213,10 @@ keep it that way so `indexFolder`/`watchFolders` stay usable in other applicatio
   results when the embedder fails). `check_searchable` refuses a missing path or a
   documents folder with no index (`existing_non_vault_entries`, in `pipelines/config.py`)
   when a search *runs*, never at construction: the interfaces build pipelines for vaults
-  not indexed yet and for one that vanished (they report that themselves).
+  not indexed yet and for one that vanished (they report that themselves). Before that
+  check, `_SearchesVaultPaths` re-resolves `vault_path` and rebuilds the segment in place
+  (keeping its pipeline links) when the indexes behind it changed, so a segment built
+  before its folder was indexed starts searching it once it is.
 - App glue in `apps/query.py` ("Folder mode" block): `add_folder`, `remove_folder`,
   `reembed_folder`, `rebuild_folder`, `folders_status`, `_folder_banner`,
   `_partial_index_note`, `_folder_chunk`/`_folder_source_file` for lookups. In folder

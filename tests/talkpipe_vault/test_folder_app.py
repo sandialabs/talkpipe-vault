@@ -149,6 +149,25 @@ def test_results_name_their_folder_when_several_are_open(client, docs, tmp_path)
     assert "lighthouse.txt — other" in page
     keywords = client.post("/keyword-search", data={"query": "lighthouse"}).text
     assert "lighthouse.txt — other" in keywords
+    # Fused by rank, so the scores shown need not descend: the note says so.
+    assert "a score compares only with others from the same folder" in keywords
+
+
+def test_folder_progress_line_counts_and_watching():
+    status = {
+        "files_total": 1,
+        "files_keyword": 1,
+        "files_embedded": 1,
+        "phase": "ready",
+        "watch_mode": "live",
+    }
+    assert (
+        query._folder_progress_line(status) == "Ready · 1 file · watching for changes"
+    )
+    status.update(files_total=3, files_keyword=3, files_embedded=3, watch_mode="rescan")
+    assert query._folder_progress_line(status) == (
+        "Ready · 3 files · checked for changes every 10 minutes"
+    )
 
 
 def test_unfinished_folder_is_flagged_and_still_answers(client, docs, folder_app):

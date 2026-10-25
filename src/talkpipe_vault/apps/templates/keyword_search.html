@@ -59,13 +59,18 @@
     <span>Refreshing vault connections and searching exact matches...</span>
 </div>
 
+{% if folder_names|length > 1 %}
+{% set results_note = "Keyword matches from several folders are interleaved by their rank within each folder, so a score compares only with others from the same folder." %}
+{% set score_help = "Whoosh relevance score for the keyword query, within this result's folder." %}
+{% else %}
 {% set results_note = "Keyword matches are ranked by the Whoosh full-text index." %}
 {% set score_help = "Whoosh relevance score for the keyword query." %}
+{% endif %}
 {% set no_results_hint = "Keyword search matches exact word forms only (no stemming), so \"apple\" will not match \"apples\". Try the exact form that appears in your documents, or use Semantic Search for meaning-based matches." %}
 {% set no_results_suggestions = [
     "Very common words (the, and, of, is) are not indexed — search a distinctive term instead.",
     "Use a broader phrase.",
-    "Rebuild the full-text index above if documents were just indexed.",
+    "Files added moments ago may not be indexed yet; search again shortly." if folder_mode else "Rebuild the full-text index above if documents were just indexed.",
 ] %}
 {% include "_search_results.html" %}
 

@@ -206,6 +206,32 @@ def test_an_unindexed_documents_folder_is_refused_and_left_alone(
     assert sorted(p.name for p in root.iterdir()) == ["log.txt"]
 
 
+@pytest.mark.parametrize("segment", ["semantic", "keyword"])
+def test_a_segment_made_before_its_folder_was_indexed_searches_it_once_indexed(
+    tmp_path, vault_home, fake_embedder, segment
+):
+    import talkpipe
+
+    root = _folder(tmp_path, "docs", {"log.txt": "The lighthouse lamp failed.\n"})
+    # Inside a compiled pipeline, so the rebuilt segment must keep its links.
+    script = (
+        f'| vaultSearch[vault_path="{root}", embedding_model="fake", '
+        f'embedding_source="{FAKE_EMBEDDING_SOURCE}"]'
+        if segment == "semantic"
+        else f'| vaultTextSearch[vault_path="{root}"]'
+    )
+    search = talkpipe.compile(script).as_function(single_in=True, single_out=False)
+    with pytest.raises(ValueError, match="no index yet"):
+        search("lighthouse")
+    _index(root)
+    hits = search("lighthouse")
+    if segment == "semantic":
+        folders = [hit.document["folder"] for hit in hits[0]]
+    else:
+        folders = [hit["document"]["folder"] for hit in hits]
+    assert folders == ["docs"]
+
+
 def test_an_empty_vault_and_a_folder_still_starting_are_searchable(
     tmp_path, vault_home, fake_embedder
 ):

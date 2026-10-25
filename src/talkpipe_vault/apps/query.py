@@ -514,8 +514,13 @@ def _folder_progress_line(status: dict[str, Any]) -> str:
     if embedded < total:
         paused = " (paused)" if phase == "paused" else ""
         return f"Searchable by keyword · meaning {embedded}/{total} files{paused}"
-    watching = " · watching for changes" if status.get("watch_mode") == "live" else ""
-    return f"Ready · {total} files{watching}"
+    watching = {
+        "live": " · watching for changes",
+        # No change events (read-only or network folder): rescans only.
+        "rescan": " · checked for changes every "
+        f"{folder_index.UNWATCHED_RESCAN_SECONDS // 60} minutes",
+    }.get(status.get("watch_mode") or "", "")
+    return f"Ready · {total} file{'' if total == 1 else 's'}{watching}"
 
 
 def _folder_progress_text(status: dict[str, Any]) -> str:

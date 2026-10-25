@@ -59,14 +59,28 @@ TABS = [
 # one line and secondary panes give up their minimum heights.
 COMPACT_ROWS = 26
 
+# The Keywords tab's hint before its first search.
+KEYWORDS_HINT = (
+    "Enter keywords above (F4 focuses this tab): exact words, AND, OR, NOT "
+    'and "quoted phrases". For meaning rather than words use Search (F3).'
+)
+KEYWORDS_BUILD_HINT = (
+    "Keyword search needs a full-text index; build one with the button above."
+)
+
 HELP_TEXT = """\
 [b]TalkPipe Vault — keyboard reference[/b]
 (This text scrolls: PageDown / arrow keys, or Tab into it.)
 
 [b]Tabs[/b]
-F2 Vault — open/create a vault, index documents, recent vaults, retrieval \
-filter. Index documents adds to the open vault; tick "Overwrite existing \
-index" to replace it (re-indexing the same folder without it duplicates \
+F2 Vault — folders to search, then named vaults. Folders: type a path (or \
+Browse) and press Add folder; each is indexed in the background and kept \
+up to date, keyword index included. Select an open folder in the list for \
+Remove selected, Remove and delete its index, or Re-embed selected (after \
+changing the embedding model); Enter on a folder searched before opens it \
+again. Named vaults (advanced): open/create a vault, index documents, recent \
+vaults, retrieval filter. Index documents adds to the open vault; tick \
+"Overwrite existing index" to replace it (re-indexing the same folder without it duplicates \
 chunks). Enter in either path field runs Index documents. Adding documents \
 does not update the full-text index — rebuild it on the Keywords tab. \
 Recent vaults: a click or Up/Down selects; Enter or a double click opens; \
@@ -549,6 +563,7 @@ class ResultsPane(Horizontal):
         super().__init__(id=id, classes="results-pane")
         self.results: list[dict[str, Any]] = []
         self._empty_text = empty_text
+        self._searched = False
         self._chunks: dict[int, str] = {}
 
     def compose(self) -> ComposeResult:
@@ -563,7 +578,14 @@ class ResultsPane(Horizontal):
     def option_list(self) -> OptionList:
         return self.query_one(f"#{self.id}-list", OptionList)
 
+    def set_empty_text(self, text: str) -> None:
+        """Change the hint shown until the first search."""
+        if text != self._empty_text and not self._searched:
+            self._empty_text = text
+            self._set_detail("", text)
+
     def show_results(self, results: list[dict[str, Any]], *, empty_text: str) -> None:
+        self._searched = True
         self.results = results
         self._chunks = {}
         options = self.option_list
@@ -821,6 +843,10 @@ class VaultApp(App[None]):
         super().__init__()
         self.service = service or VaultService()
         self._initial_vault = vault_path
+        # A mistyped path is created as a new, empty vault; say so once open.
+        self._initial_vault_missing = bool(vault_path) and not (
+            Path(vault_path).expanduser().exists()
+        )
         self._resume = resume
         self._initial_folders = list(folders or [])
         self._as_vault = as_vault
@@ -965,7 +991,7 @@ class VaultApp(App[None]):
             yield Static("", id="kw-note", classes="status-line")
         yield ResultsPane(
             id="kw-results",
-            empty_text="Keyword search needs a full-text index; build one with the button above.",
+            empty_text=KEYWORDS_BUILD_HINT,
         )
 
     def _compose_ask_tab(self) -> ComposeResult:
@@ -1167,9 +1193,18 @@ class VaultApp(App[None]):
             # A freshly opened or created vault with nothing in it: point at
             # indexing rather than a Search tab that can only say "no results".
             self.query_one("#tabs", TabbedContent).active = "tab-vault"
+            created = (
+                self._initial_vault_missing
+                and Path(self.service.vault_path)
+                == Path(self._initial_vault).expanduser().resolve()
+            )
             self.query_one("#index-progress", Static).update(
-                "This vault is empty — index a documents folder above (or open a "
-                "different vault below) to search it."
+                f"{self.service.vault_path} did not exist, so it was created as "
+                "a new, empty named vault. To search a folder of documents "
+                "instead, check the path and add the folder under Folders above."
+                if created
+                else "This vault is empty — index a documents folder above (or "
+                "open a different vault below) to search it."
             )
             self.query_one("#source-path", Input).focus()
         elif self.service.vault_path:
@@ -1248,6 +1283,11 @@ class VaultApp(App[None]):
             "Rebuild full-text index"
             if status["keyword_search_enabled"]
             else "Build full-text index"
+        )
+        self.query_one("#kw-results", ResultsPane).set_empty_text(
+            KEYWORDS_HINT
+            if status["folder_mode"] or status["keyword_search_enabled"]
+            else KEYWORDS_BUILD_HINT
         )
         self.query_one("#vault-path", Input).value = (
             "" if status["folder_mode"] else status["vault_path"]

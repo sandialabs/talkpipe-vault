@@ -314,6 +314,10 @@ class VaultService:
     def status(self) -> dict[str, Any]:
         """Header/status-bar facts (cheap; no pipeline work)."""
         state = self.state
+        if state.folders:
+            # Read from the folders' status files, so the header follows
+            # background indexing rather than the last search.
+            query._update_document_counts(state.vault_path)
         return {
             "vault_path": state.vault_path,
             "folder_mode": bool(state.folders),
@@ -702,6 +706,12 @@ class VaultService:
         if not text.strip():
             return _ok(results=[], note="")
         if not state.keyword_search_enabled or not state.keyword_search_pipeline:
+            if state.folders:
+                # As the web page says: folders build their own keyword index.
+                return _fail(
+                    "Keyword search starts shortly: the open folders are being "
+                    "scanned, and their keyword index is built first."
+                )
             return _fail(
                 "Keyword search needs a full-text index for this vault. Build "
                 "one with the Build full-text index button above."
@@ -716,6 +726,9 @@ class VaultService:
                 results = query._process_keyword_results(
                     list(state.keyword_search_pipeline(text))
                 )
+                if len(state.folders) > 1 and results:
+                    # Fused by rank: the scores need not descend down the list.
+                    note = "scores compare within a folder"
         except Exception as exc:
             return _fail(str(exc))
         if not results and self.keyword_index_stale():

@@ -222,13 +222,14 @@ status names which one is in effect.
 The OpenAI base URL field points the OpenAI provider at any
 OpenAI-compatible endpoint — see
 [Provider notes](docs/ADVANCED.md#provider-notes). While an
-answer is being generated, `Esc` stops waiting for it. "Index
-documents" adds to the open vault — tick **Overwrite existing index** to
+answer is being generated, `Esc` stops waiting for it. For a named
+vault, "Index documents" adds to the open vault — tick **Overwrite existing index** to
 replace it; re-indexing the same folder without it duplicates every chunk
 (the summary line says so when it happens, and the box unticks itself after
-a replace run). Indexing never updates the full-text index: the header
-shows "keywords out of date" until you rebuild it on the Keywords tab, and
-a keyword search that finds nothing says so. Long chunk text scrolls once
+a replace run). Indexing a named vault never updates its full-text index:
+the header shows "keywords out of date" until you rebuild it on the
+Keywords tab, and a keyword search that finds nothing says so. (Folders
+keep both their indexes current on their own.) Long chunk text scrolls once
 you `Tab` into its pane; the question box grows as a long question wraps,
 and `PageUp`/`PageDown` in it scroll a long answer (the answer pane is also
 four `Tab` stops from the question box). After a search the result list has

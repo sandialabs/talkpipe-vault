@@ -23,9 +23,17 @@ def _isolated_home(tmp_path, monkeypatch):
     monkeypatch.setenv(user_settings.VAULT_HOME_ENV, str(tmp_path / "home"))
     monkeypatch.delenv("TALKPIPE_VAULT_ROOT", raising=False)
     monkeypatch.delenv("TALKPIPE_DOCUMENT_ROOTS", raising=False)
+    _drop_folder_scheduler()  # one left stopped by another test indexes nothing
     yield
     # The service works on the module-level singleton; leave it empty.
     VaultService()._clear_vault()
+    _drop_folder_scheduler()
+
+
+def _drop_folder_scheduler():
+    if query._folder_scheduler is not None:
+        query._folder_scheduler.stop()
+        query._folder_scheduler = None
 
 
 @pytest.fixture(scope="module")
@@ -483,6 +491,60 @@ def test_startup_searches_a_documents_folder_in_place(tmp_path):
     assert outcome["folders"]
     assert service.state.folders == [str(docs.resolve())]
     assert not (docs / "docs.lance").exists()
+
+
+def test_status_counts_a_folders_chunks_once_background_indexing_ends(tmp_path):
+    docs = tmp_path / "notes"
+    docs.mkdir()
+    (docs / "a.md").write_text("# Lighthouse\n\nThe keeper logged a storm.\n")
+    service = VaultService()
+    assert service.startup(str(docs))["ok"]
+    deadline = time.monotonic() + 60
+    while not all(folder["complete"] for folder in service.folders()):
+        assert time.monotonic() < deadline, service.folders()
+        time.sleep(0.1)
+    # As a startup that finished before the indexer did leaves it; with no
+    # search or refresh since, the header must still follow the indexer.
+    service.state.shingled_chunks_count = 0
+    assert service.status()["chunks"] >= 1
+
+
+def test_keyword_results_over_several_folders_say_how_scores_compare(tmp_path):
+    folders = []
+    for name in ("notes", "papers"):
+        root = tmp_path / name
+        root.mkdir()
+        (root / "a.md").write_text(f"# {name}\n\nThe lighthouse keeper's {name}.\n")
+        folders.append(str(root))
+    service = VaultService()
+    assert service.startup("", folders=folders)["ok"]
+    deadline = time.monotonic() + 60
+    while not all(folder["complete"] for folder in service.folders()):
+        assert time.monotonic() < deadline, service.folders()
+        time.sleep(0.1)
+    service.state.last_refresh_time = 0.0  # pipelines built before the index
+    outcome = service.keyword_search("lighthouse")
+    assert outcome["ok"], outcome
+    assert len(outcome["results"]) == 2
+    assert outcome["note"] == "scores compare within a folder"
+
+
+def test_keyword_search_before_a_folders_index_exists_says_it_is_coming(
+    tmp_path, monkeypatch
+):
+    docs = tmp_path / "notes"
+    docs.mkdir()
+    (docs / "a.md").write_text("# a\n\nThe lighthouse.\n")
+    service = VaultService()
+    assert service.startup(str(docs))["ok"]
+    # Pipelines last built before the keyword index existed (the refresh is
+    # throttled): no full-text index button to point at in folder mode.
+    monkeypatch.setattr(service.state, "last_refresh_time", float("inf"))
+    monkeypatch.setattr(service.state, "keyword_search_enabled", False)
+    outcome = service.keyword_search("lighthouse")
+    assert not outcome["ok"]
+    assert "starts shortly" in outcome["error"]
+    assert "button" not in outcome["error"]
 
 
 def test_startup_asks_before_making_a_documents_folder_a_vault(tmp_path):
