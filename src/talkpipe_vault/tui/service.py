@@ -823,6 +823,8 @@ class VaultService:
             return _fail("The Ask pipeline is not available; check Settings.")
         if gone := self.vault_gone_note():
             return _fail(gone)
+        if waiting := query.ask_waiting(state):
+            return _ok(answer=waiting, citations=[], answered_by="", trace=[])
         citations: list[dict[str, Any]] = []
         retrieval_note = ""
         filter_error: str | None = None

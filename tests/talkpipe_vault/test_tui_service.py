@@ -709,3 +709,16 @@ def test_semantic_search_waits_for_a_folders_first_vectors(tmp_path, monkeypatch
     outcome = service.semantic_search("storm")
     assert not outcome["ok"]
     assert outcome["error"] == SEMANTIC_SEARCH_WAITING
+
+
+def test_ask_says_indexing_just_started(tmp_path, monkeypatch):
+    docs = tmp_path / "notes"
+    docs.mkdir()
+    (docs / "a.md").write_text("# Lighthouse\n\nThe keeper logged a storm.\n")
+    service = VaultService()
+    assert service.startup(str(docs))["ok"]
+    monkeypatch.setattr(query, "ask_waiting", lambda state: query.ASK_WAITING)
+    outcome = service.ask("What did the keeper log?")
+    assert outcome["ok"]
+    assert outcome["answer"] == query.ASK_WAITING
+    assert outcome["answered_by"] == ""

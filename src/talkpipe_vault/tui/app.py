@@ -2022,7 +2022,10 @@ class VaultApp(App[None]):
             citations.show_results([], empty_text="No answer — see the message above.")
             self.notify(outcome["error"], severity="error", timeout=12)
             return
-        meta.update(f"Answered by {outcome['answered_by']}")
+        # No answered_by: nothing was asked of the model (indexing just began).
+        meta.update(
+            f"Answered by {outcome['answered_by']}" if outcome["answered_by"] else ""
+        )
         self._answer_text = str(outcome["answer"])
         answer.update(self._answer_text)
         citations.show_results(

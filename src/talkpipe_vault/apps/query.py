@@ -565,6 +565,27 @@ def semantic_search_waiting(state: AppState) -> str:
     return ""
 
 
+ASK_WAITING = (
+    "Indexing has only just started, so nothing is searchable yet. Ask again "
+    "in a few seconds: answers draw on keyword matches as soon as the first "
+    "files are indexed (progress is on Vaults & Documents)."
+)
+
+
+def ask_waiting(state: AppState) -> str:
+    """Ask's reply while no open folder has indexed a file yet, else "".
+
+    Answering then would only report that the documents say nothing; an
+    empty folder whose scan has finished is not waiting.
+    """
+    statuses = folders_status(state) if state.folders else []
+    if statuses and all(
+        not s["files_keyword"] and s["phase"] != "ready" for s in statuses
+    ):
+        return ASK_WAITING
+    return ""
+
+
 def _partial_index_note(state: AppState) -> str:
     """The Ask "Answered by" addition while folders are still embedding."""
     unfinished = [s for s in folders_status(state) if not s["complete"]]
@@ -3591,7 +3612,12 @@ async def chat_response(
     # the filter ran, fell back, or could not be applied at all.
     filter_error: str | None = None
 
-    if message.strip() and state.chat_pipeline:
+    waiting = ask_waiting(state) if message.strip() else ""
+    if waiting and state.chat_pipeline:
+        # Nothing indexed yet: say so instead of a model answer from nothing.
+        messages.append({"role": "user", "content": message})
+        messages.append({"role": "assistant", "content": waiting})
+    elif message.strip() and state.chat_pipeline:
         messages.append({"role": "user", "content": message})
 
         try:
@@ -3683,10 +3709,10 @@ async def chat_response(
             for citation in citations
         ]
 
-    answered_by = _answered_by(state)
+    answered_by = "" if waiting else _answered_by(state)
     if retrieval_note:
         answered_by = f"{answered_by} · {retrieval_note}"
-    partial = _partial_index_note(state) if messages else ""
+    partial = _partial_index_note(state) if messages and not waiting else ""
     if partial:
         answered_by = f"{answered_by} · {partial}"
     filter_note = ""
@@ -3705,7 +3731,7 @@ async def chat_response(
         )
     elif len(state.folders) > 1 and retrieval_filter.load_script(state.vault_path):
         filter_note = "retrieval filters do not apply while several folders are open"
-    if filter_note and messages:
+    if filter_note and messages and not waiting:
         answered_by = f"{answered_by} · {filter_note}"
 
     return templates.TemplateResponse(

@@ -205,6 +205,28 @@ def test_unfinished_folder_is_flagged_and_still_answers(client, docs, folder_app
     assert "lighthouse.txt" in answer  # cited from the keyword index
 
 
+def test_ask_says_indexing_just_started_until_a_file_is_indexed(
+    client, docs, monkeypatch
+):
+    query.add_folder(query._state, str(docs))
+    real_status = query.folders_status
+    scanning = {"phase": "scanning", "files_total": 0, "files_keyword": 0}
+    monkeypatch.setattr(
+        query,
+        "folders_status",
+        lambda state: [{**s, **scanning} for s in real_status(state)],
+    )
+    answer = client.post("/chat", data={"message": "What did the keeper log?"}).text
+    assert html.escape(query.ASK_WAITING, quote=False) in answer
+    assert 'id="server-answered-by"' not in answer
+    # An empty folder whose scan finished is not "just started".
+    scanning["phase"] = "ready"
+    assert query.ask_waiting(query._state) == ""
+    monkeypatch.setattr(query, "folders_status", real_status)
+    assert _wait(_searchable_by_keyword)
+    assert query.ask_waiting(query._state) == ""
+
+
 def test_semantic_search_opens_once_a_folder_has_vectors(client, docs):
     query.add_folder(query._state, str(docs))
     assert _wait(_complete)
