@@ -214,10 +214,15 @@ choice persists and the **Configuration status** panel tests it. Enter keys
 and URLs under **Connections & credentials** there, or set
 `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `ANTHROPIC_API_KEY` or
 `TALKPIPE_OLLAMA_SERVER_URL` in the environment (a value saved in Settings
-wins). Embeddings are only comparable to queries from the same model, so
-each index keeps the embedder it was built with; chat models can change at
-any time. The full reference is in the
-[Advanced Guide](docs/ADVANCED.md#model-configuration).
+wins). Chat models can change at any time. Embeddings cannot: a folder
+records the embedder it was indexed with and keeps using it for new files
+and for searches, even after you pick a different one in Settings. Folders
+indexed later get the new embedder, and a search across folders with
+different embedders still works (each is queried with its own model and the
+hits are fused). To move a folder to the new embedder, use its **Re-embed**
+action. An index built before the embedder was recorded falls back to the
+Settings embedder, so re-embed it if its results look wrong. The full
+reference is in the [Advanced Guide](docs/ADVANCED.md#model-configuration).
 
 ## More documentation
 
