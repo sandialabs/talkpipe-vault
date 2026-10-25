@@ -257,8 +257,6 @@ class AgentVaultSearch(AbstractFieldSegment):
     ) -> None:
         super().__init__(field=field, set_as=set_as, multi_emit=multi_emit)
         self.vault_path = vault_path
-        # The indexes searched: a folder stands for its folder-mode index.
-        self._paths = resolve_vault_paths(vault_path)
         self.embedding_model = embedding_model
         self.embedding_source = embedding_source
         self.chat_model = chat_model if chat_model is not None else get_chat_model()
@@ -293,7 +291,9 @@ class AgentVaultSearch(AbstractFieldSegment):
         would create an empty folder and send the agent through a whole run
         of empty searches before anyone saw the typo.
         """
-        for path in self._paths:
+        # A folder stands for its folder-mode index; resolved again at each
+        # search, so a folder indexed after this segment was built is found.
+        for path in resolve_vault_paths(self.vault_path):
             if not os.path.isdir(get_vector_db_path(path)):
                 raise ValueError(
                     f"No vault at {path!r}: the folder does not exist. "
@@ -302,7 +302,7 @@ class AgentVaultSearch(AbstractFieldSegment):
                 )
         build_agent_model(self.chat_source, self.chat_model)
         self._vector_search = VaultSearch(
-            vault_path=self._paths,
+            vault_path=self.vault_path,
             embedding_model=self.embedding_model,
             embedding_source=self.embedding_source,
             limit=self.search_limit,
@@ -334,12 +334,15 @@ class AgentVaultSearch(AbstractFieldSegment):
         return list(raw or [])
 
     def keyword_index_exists(self) -> bool:
-        return any(os.path.isdir(get_whoosh_index_path(path)) for path in self._paths)
+        return any(
+            os.path.isdir(get_whoosh_index_path(path))
+            for path in resolve_vault_paths(self.vault_path)
+        )
 
     def keyword_search(self, query: str) -> list[Any]:
         # Built per call: the index may not have existed when the segment was
         # constructed (it can be built between two questions).
-        search = VaultTextSearch(vault_path=self._paths, limit=self.search_limit)
+        search = VaultTextSearch(vault_path=self.vault_path, limit=self.search_limit)
         return list(search.process_value(query))
 
     def extract_keywords(self, question: str) -> str:

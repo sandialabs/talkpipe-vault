@@ -314,3 +314,21 @@ def test_the_embedder_is_made_on_the_first_query(two_folders, monkeypatch):
     assert search("lighthouse keeper")
     search("basil pesto")
     assert made == ["fake"]
+
+
+def test_the_agent_segment_searches_a_folder_indexed_after_it_was_built(
+    tmp_path, vault_home, fake_embedder
+):
+    from talkpipe_vault.pipelines.agent_search import AgentVaultSearch
+
+    class _Unbound(AgentVaultSearch):
+        def _bind_vault(self) -> None:  # the model and embedder are not needed
+            pass
+
+    root = _folder(tmp_path, "docs", {"log.txt": "The lighthouse lamp failed.\n"})
+    agent = _Unbound(vault_path=str(root), chat_model="m", chat_source="ollama")
+    assert not agent.keyword_index_exists()
+    _index(root, vectors=False)
+    assert agent.keyword_index_exists()
+    hits = agent.keyword_search("lighthouse")
+    assert [hit["document"]["folder"] for hit in hits] == ["docs"]

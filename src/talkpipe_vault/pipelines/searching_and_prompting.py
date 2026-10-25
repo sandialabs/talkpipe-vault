@@ -13,7 +13,6 @@ from talkpipe.llm.chat import LLMPrompt
 from talkpipe.llm.embedding import LLMEmbed
 from talkpipe.pipe.basic import (
     AbstractFieldSegment,
-    EvalExpression,
     ToDict,
     fillTemplate,
 )
@@ -22,7 +21,6 @@ from talkpipe.pipe.metadata import Flush
 from talkpipe.pipelines.basic_rag import (
     AppendRAGSources,
     ConstructRAGPrompt,
-    RAGToText,
 )
 from talkpipe.pipelines.vector_databases import SearchVectorDatabaseSegment
 from talkpipe.search.abstract import SearchResult
@@ -489,32 +487,35 @@ def check_searchable(paths: list[str]) -> None:
             )
 
 
-def _arguments(local_vars: dict[str, Any]) -> dict[str, Any]:
-    """A constructor's arguments, from ``locals()`` taken on its first line."""
-    return {k: v for k, v in local_vars.items() if k not in ("self", "__class__")}
-
-
 class _SearchesVaultPaths:
-    """Re-resolves a search segment's vault_path before each query.
+    """Shared by the segments that search one or more vaults or folders.
 
-    A folder stands for its index once it has one, and a segment's search is
-    built on the indexes found when the segment is made. One made before a
-    folder was indexed (while watchFolders, say, is still starting) would
-    otherwise refuse that folder on every query even after it is indexed;
-    instead, when the indexes behind vault_path change, the segment is built
-    again in place, keeping its links in the pipeline it belongs to.
+    A folder stands for its index once it has one, and a segment's search
+    is built on the indexes found when the segment is made. One made before
+    a folder was indexed (while watchFolders, say, is still starting) would
+    otherwise refuse that folder on every query even after it is indexed, so
+    before each query the paths are resolved again and, when the indexes
+    behind ``vault_path`` changed, ``_build`` is run again for the new ones.
     """
 
     vault_path: str | list[str]
     _paths: list[str]
-    _init_kwargs: dict[str, Any]
 
-    def _check_searchable(self) -> None:
+    def _build(self, paths: list[str]) -> None:
+        """Build the search for *paths*; set only what depends on them."""
+        raise NotImplementedError
+
+    def _resolve_and_build(self) -> None:
+        paths = resolve_vault_paths(self.vault_path)
+        for path in paths:
+            ensure_supported_vault_layout(path)
+        self._paths = paths
+        self._build(paths)
+
+    def _ensure_searchable(self) -> None:
+        """Rebuild for indexes that appeared or moved, then refuse bad paths."""
         if resolve_vault_paths(self.vault_path) != self._paths:
-            fresh = type(self)(**self._init_kwargs)
-            for name, value in vars(fresh).items():
-                if name not in ("upstream", "downstream"):
-                    setattr(self, name, value)
+            self._resolve_and_build()
         check_searchable(self._paths)
 
 
@@ -927,49 +928,41 @@ class VaultSearch(_SearchesVaultPaths, AbstractFieldSegment):
             "all embedded yet and fuse those hits in.",
         ] = False,
     ):
-        self._init_kwargs = _arguments(locals())
         super().__init__(field=field, set_as=set_as, multi_emit=multi_emit)
-        embedding_model, embedding_source = resolve_embedding_config(
+        self.embedding_model, self.embedding_source = resolve_embedding_config(
             embedding_model, embedding_source
         )
-
-        paths = resolve_vault_paths(vault_path)
-        for path in paths:
-            ensure_supported_vault_layout(path)
+        self.limit = limit
+        self.keyword_fallback = keyword_fallback
         self.vault_path = vault_path
-        self._paths = paths
+        self._resolve_and_build()
+
+    def _build(self, paths: list[str]) -> None:
         if needs_fan_out(paths):
-            self.pipeline = self._fan_out(
-                paths, embedding_model, embedding_source, limit, keyword_fallback
-            )
+            self.pipeline = self._fan_out(paths)
             return
-        retrieval_template = get_retrieval_template(embedding_model)
-        vectordb_path = get_vector_db_path(paths[0])
-        limit_kwargs: dict[str, Any] = {} if limit is None else {"limit": limit}
+        retrieval_template = get_retrieval_template(self.embedding_model)
+        limit_kwargs: dict[str, Any] = (
+            {} if self.limit is None else {"limit": self.limit}
+        )
         self.pipeline = (
             ToDict(field_list="_:query")
             | fillTemplate(template=retrieval_template, set_as="templated_query")
             | SearchVectorDatabaseSegment(
-                path=vectordb_path,
+                path=get_vector_db_path(paths[0]),
                 table_name=DEFAULT_VECTOR_TABLE_NAME,
                 query_field="templated_query",
-                embedding_model=embedding_model,
-                embedding_source=embedding_source,
+                embedding_model=self.embedding_model,
+                embedding_source=self.embedding_source,
                 **limit_kwargs,
             )
         ).as_function(single_in=True, single_out=True)
 
-    @staticmethod
-    def _fan_out(
-        paths: list[str],
-        embedding_model: str,
-        embedding_source: str,
-        limit: int | None,
-        keyword_fallback: bool,
-    ) -> Any:
-        result_limit = limit if limit is not None else 10
+    def _fan_out(self, paths: list[str]) -> Any:
+        result_limit = self.limit if self.limit is not None else 10
+        keyword_fallback = self.keyword_fallback
         search = _FanOutVectorSearch(
-            paths, embedding_model, embedding_source, result_limit
+            paths, self.embedding_model, self.embedding_source, result_limit
         )
 
         def run(value: Any) -> list[SearchResult]:
@@ -1006,7 +999,7 @@ class VaultSearch(_SearchesVaultPaths, AbstractFieldSegment):
         return run
 
     def process_value(self, value: str) -> Any:
-        self._check_searchable()
+        self._ensure_searchable()
         return self.pipeline(value)
 
 
@@ -1096,201 +1089,139 @@ class VaultChat(_SearchesVaultPaths, AbstractFieldSegment):
             "question instead of answering from unfiltered results.",
         ] = False,
     ):
-        self._init_kwargs = _arguments(locals())
         super().__init__(field=field, set_as=set_as, multi_emit=multi_emit)
-        paths = resolve_vault_paths(vault_path)
-        self._paths = paths
-        fan_out = needs_fan_out(paths)
         if include_background and not (
-            keyword_search or result_filter_script or fan_out
+            keyword_search
+            or result_filter_script
+            or needs_fan_out(resolve_vault_paths(vault_path))
         ):
             raise ValueError(
                 "include_background requires keyword_search=True, a "
                 "result_filter_script, or several vaults"
             )
         self.include_background = include_background
-        embedding_model, embedding_source = resolve_embedding_config(
+        self.embedding_model, self.embedding_source = resolve_embedding_config(
             embedding_model, embedding_source
         )
-        chat_model = chat_model if chat_model is not None else get_chat_model()
-        chat_source = chat_source if chat_source is not None else get_chat_source()
-
-        retrieval_template = get_retrieval_template(embedding_model)
-        for path in paths:
-            ensure_supported_vault_layout(path)
-
-        self.vault_path = vault_path
-        vectordb_path = get_vector_db_path(paths[0])
-        result_limit = limit if limit is not None else 10
-        keyword_result_limit = (
-            keyword_limit if keyword_limit is not None else result_limit
+        self.chat_model = chat_model if chat_model is not None else get_chat_model()
+        self.chat_source = chat_source if chat_source is not None else get_chat_source()
+        self.result_limit = limit if limit is not None else 10
+        self.keyword_result_limit = (
+            keyword_limit if keyword_limit is not None else self.result_limit
         )
+        self.keyword_search = keyword_search
+        self.result_filter_script = result_filter_script
+        self.result_filter_strict = result_filter_strict
+        self.vault_path = vault_path
+        self._resolve_and_build()
+
+    def _build(self, paths: list[str]) -> None:
+        """Retrieval (keyword, semantic, filtered) -> RAG prompt -> completion.
+
+        One pipeline shape for every option: the retrieval stages are added
+        as the options ask, and the answer stages are always the same, so an
+        answer is worded and cited the same way however it was retrieved.
+        The Whoosh index stores LanceDB row ids as doc_ids, so the merge
+        deduplicates chunks found by both searches; path/filename are
+        renamed to source/title so keyword-only hits are citable.
+        """
         # With a filter, each stream over-fetches so it can still fill its
         # result limit after the filter drops hits; the filter truncates its
         # stream back to the limit before the merge (issue #22).
         overfetch = (
-            retrieval_filter.FILTER_OVERFETCH_FACTOR if result_filter_script else 1
+            retrieval_filter.FILTER_OVERFETCH_FACTOR if self.result_filter_script else 1
         )
-
-        def vector_stage(limit: int) -> AbstractSegment:
-            """Semantic retrieval of *limit* hits into _background."""
-            if fan_out:
-                # Folders still embedding are keyword-searched too, so a
-                # question can be answered from files not yet embedded.
-                return VaultSearch(
-                    vault_path=paths,
-                    field="query",
-                    set_as="_background",
-                    embedding_model=embedding_model,
-                    embedding_source=embedding_source,
-                    limit=limit,
-                    keyword_fallback=True,
-                )
-            return SearchVectorDatabaseSegment(
-                path=vectordb_path,
-                table_name=DEFAULT_VECTOR_TABLE_NAME,
-                query_field="templated_query",
-                set_as="_background",
-                limit=limit,
-                embedding_model=embedding_model,
-                embedding_source=embedding_source,
-            )
-
-        if keyword_search:
-            # prompt -> keyword-query creation -> keyword search -> add in
-            # vector search -> RAG prompt -> completion, per issue #11. The
-            # Whoosh index stores LanceDB row ids as doc_ids, so the merge
-            # deduplicates chunks found by both searches; path/filename are
-            # renamed to source/title so keyword-only hits are citable by the
-            # RAG prompt and the appended sources list.
+        pipeline: Any = ToDict(field_list="_:query") | fillTemplate(
+            template=get_retrieval_template(self.embedding_model),
+            set_as="templated_query",
+        )
+        if self.keyword_search:
             pipeline = (
-                ToDict(field_list="_:query")
-                | fillTemplate(template=retrieval_template, set_as="templated_query")
+                pipeline
                 | ExtractSearchKeywords(
                     field="query",
                     set_as="_keyword_query",
-                    chat_model=chat_model,
-                    chat_source=chat_source,
+                    chat_model=self.chat_model,
+                    chat_source=self.chat_source,
                 )
                 | VaultTextSearch(
                     vault_path=paths,
-                    limit=keyword_result_limit * overfetch,
+                    limit=self.keyword_result_limit * overfetch,
                     field="_keyword_query",
                     set_as="_keyword_background",
                     multi_emit=False,
                 )
             )
-            if result_filter_script:
-                pipeline = pipeline | SearchResultFilter(
-                    script=result_filter_script,
-                    field="_keyword_background",
-                    limit=keyword_result_limit,
-                    strict=result_filter_strict,
-                    rename_fields=SEARCH_RESULT_RENAMES,
+            if self.result_filter_script:
+                pipeline = pipeline | self._filter(
+                    "_keyword_background", self.keyword_result_limit
                 )
-            pipeline = pipeline | vector_stage(result_limit * overfetch)
-            if result_filter_script:
-                pipeline = pipeline | SearchResultFilter(
-                    script=result_filter_script,
-                    field="_background",
-                    limit=result_limit,
-                    strict=result_filter_strict,
-                    rename_fields=SEARCH_RESULT_RENAMES,
-                )
-            self.pipeline = (
-                pipeline
-                | MergeSearchResults(
-                    field_list="_background,_keyword_background",
-                    set_as="_background",
-                    rename_fields=SEARCH_RESULT_RENAMES,
-                )
-                | ConstructRAGPrompt(
-                    prompt_directive=RAG_PROMPT_DIRECTIVE,
-                    background_field="_background",
-                    content_field="query",
-                    set_as="_ragprompt",
-                )
-                | LLMPrompt(
-                    model=chat_model,
-                    source=chat_source,
-                    system_prompt=RAG_SYSTEM_PROMPT,
-                    field="_ragprompt",
-                    set_as="_partial_rag_response",
-                )
-                | AppendRAGSources(
-                    partial_answer_field="_partial_rag_response",
-                    set_as="chat_response",
-                )
-            ).as_function(single_in=True, single_out=True)
-        elif result_filter_script or fan_out:
-            # The RAGToText composite hides retrieval internally (and reads
-            # one vault), so the filtered and the several-vault plain
-            # pipelines use the decomposed equivalent: vector search into
-            # _background, the filter, then the same RAG prompt -> completion
-            # -> sources stages the keyword branch uses.
-            pipeline = (
-                ToDict(field_list="_:query")
-                | fillTemplate(template=retrieval_template, set_as="templated_query")
-                | vector_stage(result_limit * overfetch)
+        pipeline = pipeline | self._vector_stage(paths, self.result_limit * overfetch)
+        if self.result_filter_script:
+            pipeline = pipeline | self._filter("_background", self.result_limit)
+        if self.keyword_search:
+            pipeline = pipeline | MergeSearchResults(
+                field_list="_background,_keyword_background",
+                set_as="_background",
+                rename_fields=SEARCH_RESULT_RENAMES,
             )
-            if result_filter_script:
-                pipeline = pipeline | SearchResultFilter(
-                    script=result_filter_script,
-                    field="_background",
-                    limit=result_limit,
-                    strict=result_filter_strict,
-                    rename_fields=SEARCH_RESULT_RENAMES,
-                )
-            self.pipeline = (
-                pipeline
-                | ConstructRAGPrompt(
-                    prompt_directive=RAG_PROMPT_DIRECTIVE,
-                    background_field="_background",
-                    content_field="query",
-                    set_as="_ragprompt",
-                )
-                | LLMPrompt(
-                    model=chat_model,
-                    source=chat_source,
-                    system_prompt=RAG_SYSTEM_PROMPT,
-                    field="_ragprompt",
-                    set_as="_partial_rag_response",
-                )
-                | AppendRAGSources(
-                    partial_answer_field="_partial_rag_response",
-                    set_as="chat_response",
-                )
-            ).as_function(single_in=True, single_out=True)
-        else:
-            self.pipeline = (
-                ToDict(field_list="_:query")
-                | fillTemplate(template=retrieval_template, set_as="templated_query")
-                | RAGToText(
-                    path=vectordb_path,
-                    content_field="query",
-                    embedding_prompt="templated_query",
-                    table_name=DEFAULT_VECTOR_TABLE_NAME,
-                    set_as="chat_response",
-                    embedding_model=embedding_model,
-                    embedding_source=embedding_source,
-                    completion_model=chat_model,
-                    completion_source=chat_source,
-                    limit=result_limit,
-                    system_prompt=RAG_SYSTEM_PROMPT,
-                    prompt_directive=RAG_PROMPT_DIRECTIVE,
-                )
-                | EvalExpression(field="chat_response", expression="item")
-            ).as_function(single_in=True, single_out=True)
-        self.keyword_search = keyword_search
-        # These branches keep the full working item so callers can see the
-        # retrieval and filter outcome, not just the answer.
-        self._emits_item = keyword_search or bool(result_filter_script) or fan_out
+        self.pipeline = (
+            pipeline
+            | ConstructRAGPrompt(
+                prompt_directive=RAG_PROMPT_DIRECTIVE,
+                background_field="_background",
+                content_field="query",
+                set_as="_ragprompt",
+            )
+            | LLMPrompt(
+                model=self.chat_model,
+                source=self.chat_source,
+                system_prompt=RAG_SYSTEM_PROMPT,
+                field="_ragprompt",
+                set_as="_partial_rag_response",
+            )
+            | AppendRAGSources(
+                partial_answer_field="_partial_rag_response",
+                set_as="chat_response",
+            )
+        ).as_function(single_in=True, single_out=True)
+
+    def _filter(self, field: str, limit: int) -> AbstractSegment:
+        return SearchResultFilter(
+            script=self.result_filter_script or "",
+            field=field,
+            limit=limit,
+            strict=self.result_filter_strict,
+            rename_fields=SEARCH_RESULT_RENAMES,
+        )
+
+    def _vector_stage(self, paths: list[str], limit: int) -> AbstractSegment:
+        """Semantic retrieval of *limit* hits into _background."""
+        if needs_fan_out(paths):
+            # Folders still embedding are keyword-searched too, so a
+            # question can be answered from files not yet embedded.
+            return VaultSearch(
+                vault_path=paths,
+                field="query",
+                set_as="_background",
+                embedding_model=self.embedding_model,
+                embedding_source=self.embedding_source,
+                limit=limit,
+                keyword_fallback=True,
+            )
+        return SearchVectorDatabaseSegment(
+            path=get_vector_db_path(paths[0]),
+            table_name=DEFAULT_VECTOR_TABLE_NAME,
+            query_field="templated_query",
+            set_as="_background",
+            limit=limit,
+            embedding_model=self.embedding_model,
+            embedding_source=self.embedding_source,
+        )
 
     def process_value(self, value: str) -> Any:
-        self._check_searchable()
+        self._ensure_searchable()
         result = self.pipeline(value)
-        if not self._emits_item:
-            return result
         if self.include_background:
             out = {
                 "response": result.get("chat_response", ""),
@@ -1340,30 +1271,28 @@ class VaultTextSearch(_SearchesVaultPaths, AbstractFieldSegment):
             "Should be set by the subclass constructor call or the field_segment decorator, not by the user.",
         ] = True,
     ):
-        self._init_kwargs = _arguments(locals())
         super().__init__(field=field, set_as=set_as, multi_emit=multi_emit)
-        paths = resolve_vault_paths(vault_path)
-        for path in paths:
-            ensure_supported_vault_layout(path)
+        self.limit = limit
         self.vault_path = vault_path
-        self._paths = paths
+        self._resolve_and_build()
+
+    def _build(self, paths: list[str]) -> None:
         self._fan_out = (
-            _FanOutTextSearch(_index_views(paths), limit)
+            _FanOutTextSearch(_index_views(paths), self.limit)
             if needs_fan_out(paths)
             else None
         )
-        whoosh_index_path = get_whoosh_index_path(paths[0])
         self.pipeline = searchWhoosh(
-            index_path=whoosh_index_path,
+            index_path=get_whoosh_index_path(paths[0]),
             # searchWhoosh declares limit as int, but it is passed straight to
             # whoosh's searcher.search(), where None means "all results" -- the
             # behavior this segment relies on to avoid a UI-facing result cap.
-            limit=limit,  # type: ignore[arg-type]  # None = uncapped at runtime
+            limit=self.limit,  # type: ignore[arg-type]  # None = uncapped at runtime
             all_results_at_once=False,
         ).as_function(single_in=True, single_out=False)
 
     def process_value(self, value: str) -> list[dict[str, Any]]:
-        self._check_searchable()
+        self._ensure_searchable()
         if self._fan_out is not None:
             return self._fan_out(value)
         results = []
