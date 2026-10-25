@@ -1716,3 +1716,38 @@ def test_run_app_reports_a_crash_before_the_fast_exit(monkeypatch, capsys):
         app_module.run_app(CrashingApp())  # type: ignore[arg-type]  # stand-in
     assert calls == [1]
     assert "boom" in capsys.readouterr().err
+
+
+async def test_search_tab_notice_clears_once_a_folder_has_vectors(
+    tmp_path, monkeypatch
+):
+    # The Search tab's "starts once the first documents are embedded" notice
+    # was set at startup and only replaced by a full refresh, so it outlived
+    # the embedding it waited for; the folder poll now keeps it current.
+    from talkpipe_vault.pipelines import folder_index
+    from talkpipe_vault.tui.app import SEARCH_HINT
+    from talkpipe_vault.tui.service import SEMANTIC_SEARCH_WAITING
+
+    docs = tmp_path / "notes"
+    docs.mkdir()
+    (docs / "a.md").write_text("# Lighthouse\n\nThe keeper logged a storm.\n")
+    started = {"vectors": False}
+    monkeypatch.setattr(
+        folder_index, "vectors_started", lambda path: started["vectors"]
+    )
+    app = VaultApp(VaultService(), vault_path=str(docs))
+    async with app.run_test(size=SIZE) as pilot:
+        await _wait_workers(app, pilot)
+        pane = app.query_one("#search-results", ResultsPane)
+        assert _text(app.query_one("#search-results-detail-body", Static)) == (
+            SEMANTIC_SEARCH_WAITING
+        )
+        assert app.query_one("#search-go", Button).disabled
+        started["vectors"] = True
+        app._poll_folders()
+        await _settle(pilot)
+        assert _text(app.query_one("#search-results-detail-body", Static)) == (
+            SEARCH_HINT
+        )
+        assert not app.query_one("#search-go", Button).disabled
+        assert pane.results == []

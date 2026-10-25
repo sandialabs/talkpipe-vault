@@ -2282,7 +2282,7 @@ class TestRetrievalFilter:
         response = self._save(client, enabled="1")
 
         assert response.status_code in (302, 303)
-        assert "Open+a+vault" in response.headers["location"]
+        assert "Open+a+folder+or+a+vault" in response.headers["location"]
 
 
 class TestRetrievalFilterSection:

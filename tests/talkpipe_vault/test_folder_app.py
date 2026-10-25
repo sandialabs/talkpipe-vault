@@ -9,6 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from talkpipe_vault.apps import query, user_settings, vault_server
+from talkpipe_vault.pipelines import retrieval_filter
 from talkpipe_vault.pipelines.config import FOLDER_INDEX_DIRNAME
 from tests.conftest import FAKE_EMBEDDING_SOURCE
 
@@ -556,3 +557,41 @@ def test_keyword_page_picks_up_the_folder_index_on_its_own(client, docs, monkeyp
     page = client.post("/keyword-search", data={"query": "lighthouse"}).text
     assert html.escape(query.KEYWORD_SEARCH_STARTING, quote=False) in page
     assert "no Whoosh index" not in page
+
+
+def test_one_open_folder_offers_its_retrieval_filter(client, docs):
+    # The filter belongs to one index, so the one open folder gets the panel
+    # in the Folders box (named vaults keep theirs in the vault panel), it
+    # names the folder, and a save lands in the folder's index.
+    query.add_folder(query._state, str(docs))
+    page = client.get("/documents").text
+    assert page.index('id="folders-section"') < page.index('id="retrieval-filter"')
+    assert page.index('id="retrieval-filter"') < page.index('id="named-vaults"')
+    assert "Retrieval filter for this folder" in page
+    assert str(docs.resolve()) in page
+    script = '| isNotIn[field="document.content", value="draft"]'
+    response = client.post(
+        "/vaults/retrieval-filter",
+        data={"action": "save", "script": script, "enabled": "1"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert "error" not in response.headers["location"]
+    index = docs / FOLDER_INDEX_DIRNAME
+    assert retrieval_filter.load_script(str(index)) == script
+
+
+def test_several_open_folders_have_no_retrieval_filter(client, docs, tmp_path):
+    other = tmp_path / "other"
+    other.mkdir()
+    (other / "b.txt").write_text("other notes\n")
+    query.add_folder(query._state, str(docs))
+    query.add_folder(query._state, str(other))
+    assert 'id="retrieval-filter"' not in client.get("/documents").text
+    response = client.post(
+        "/vaults/retrieval-filter",
+        data={"action": "save", "script": "| print", "enabled": "1"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert "one+open+folder" in response.headers["location"]

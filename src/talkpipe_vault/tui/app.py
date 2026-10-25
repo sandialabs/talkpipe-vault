@@ -417,10 +417,13 @@ class RetrievalFilterScreen(_Dialog[dict[str, Any] | None]):
     def compose(self) -> ComposeResult:
         v = self._view
         with Vertical(classes="dialog dialog-wide dialog-tall"):
-            yield Label("Retrieval filter for this vault", classes="dialog-title")
+            yield Label(
+                f"Retrieval filter for this {v.get('kind', 'vault')}",
+                classes="dialog-title",
+            )
             yield Static(
                 "A ChatterLang script applied to retrieved chunks before they "
-                "reach Ask and the search pages. Stored inside the vault; the "
+                "reach Ask and the search pages. Stored with the index; the "
                 "enable/strict flags are stored on this machine.",
                 classes="muted dialog-help",
             )
@@ -917,6 +920,8 @@ class VaultApp(App[None]):
                 "Remove and delete its index", variant="error", id="folder-delete"
             )
             yield Button("Re-embed selected", id="folder-reembed")
+        with Horizontal(classes="button-row"):
+            yield Button("Retrieval filter", id="filter")
         yield Static("", id="folder-note", markup=False)
         yield Label("Named vaults (advanced)", classes="section-heading")
         yield Label(
@@ -942,7 +947,6 @@ class VaultApp(App[None]):
         with Horizontal(classes="button-row"):
             yield Button("Open selected", id="open-recent")
             yield Button("Delete selected", variant="error", id="delete-recent")
-            yield Button("Retrieval filter", id="filter")
 
     def _compose_search_tab(self) -> ComposeResult:
         with Horizontal(classes="form-row"):
@@ -1271,15 +1275,11 @@ class VaultApp(App[None]):
         self.query_one("#ask-extra", Checkbox).set_class(
             not status["agent_chat_available"], "hidden"
         )
-        waiting = bool(status["semantic_search_waiting"])
-        self.query_one("#search-go", Button).disabled = waiting
-        self.query_one("#search-results", ResultsPane).set_empty_text(
-            SEMANTIC_SEARCH_WAITING if waiting else SEARCH_HINT
-        )
+        self._apply_search_waiting(status)
         self.query_one("#ask-keyword-hint", Static).set_class(
             status["keyword_search_enabled"] or not has_vault, "hidden"
         )
-        self.query_one("#filter", Button).disabled = not has_vault
+        self.query_one("#filter", Button).disabled = bool(self.service.filter_blocker())
         # Folders build their keyword index themselves.
         self.query_one("#kw-build", Button).set_class(status["folder_mode"], "hidden")
         self.query_one("#kw-build", Button).disabled = not has_vault
@@ -1333,6 +1333,16 @@ class VaultApp(App[None]):
         if status["folder_banner"]:
             facts.append("indexing")
         self.query_one("#vault-facts", Static).update(" · ".join(facts))
+        # The Search tab's "starts once the first documents are embedded"
+        # notice must go when they are, not at the next full refresh.
+        self._apply_search_waiting(status)
+
+    def _apply_search_waiting(self, status: dict[str, Any]) -> None:
+        waiting = bool(status["semantic_search_waiting"])
+        self.query_one("#search-go", Button).disabled = waiting
+        self.query_one("#search-results", ResultsPane).set_empty_text(
+            SEMANTIC_SEARCH_WAITING if waiting else SEARCH_HINT
+        )
 
     def _selected_folder(self) -> tuple[str, str] | None:
         options = self.query_one("#folder-list", OptionList)
@@ -1760,8 +1770,8 @@ class VaultApp(App[None]):
     @on(Button.Pressed, "#filter")
     @work(group="modal")
     async def _edit_filter(self) -> None:
-        if not self.service.vault_path:
-            self.notify("Open a vault first.", severity="warning")
+        if blocker := self.service.filter_blocker():
+            self.notify(blocker, severity="warning")
             return
         values = await self.push_screen_wait(
             RetrievalFilterScreen(self.service.filter_view())

@@ -53,7 +53,8 @@ vault-server ~/notes
 ```
 
 Or install it as a standalone command with [uv](https://docs.astral.sh/uv/):
-`uv tool install talkpipe-vault`.
+`uv tool install "talkpipe-vault @ git+https://github.com/sandialabs/talkpipe-vault.git@master"`
+(after the next release: `uv tool install talkpipe-vault`).
 
 Your browser opens at http://127.0.0.1:8002 with `~/notes` being indexed in
 the background. Search and ask right away; the pages say how far indexing
@@ -78,6 +79,7 @@ podman run --rm -p 8002:8002 \
 
 Then open http://127.0.0.1:8002 (`127.0.0.1`, not `localhost`: rootless
 podman publishes ports IPv4-only). `docker run` takes the same arguments.
+The image is the last release, so until the next one it has no folder mode.
 
 - `-v vault_data:/app/data` keeps settings, indexes kept in app data and the
   embedding-model cache across container recreation.

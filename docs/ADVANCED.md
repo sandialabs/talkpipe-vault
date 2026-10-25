@@ -187,10 +187,11 @@ pip install podman-compose   # podman needs a compose provider
 podman compose up -d
 ```
 
-The vault itself is not configured here: the service starts
-`vault-server --resume`, so it reopens whatever vault you last used in the
-web interface and otherwise opens on the Vaults & Documents page. Vaults live
-under `/app/data`, which is the persistent volume.
+Nothing to search is configured here: the service starts
+`vault-server --resume`, so it reopens the folders (or vault) you last had
+open and otherwise opens on the Vaults & Documents page. Folder indexes and
+vaults live under `/app/data`, the persistent volume, since `/documents` is
+mounted read-only.
 
 Any provider works under compose. Choose the source and enter its API key on
 the Settings page — both persist in the data volume, so they survive
@@ -365,8 +366,9 @@ relevant chunks and discards the rest, and rewrites its queries from what it
 learns. **It stops when it judges that what it has kept would answer the
 question well**, after one chunk or after eight; the Settings page's chunk
 limit and iteration cap only bound a run that never gets there. The results
-note says which happened, and every tool call is printed to the server
-console and listed under the results.
+note says which happened, counts the chunks it saw but never kept or ignored
+as "undecided", and every tool call is printed to the server console and
+listed under the results.
 
 - It runs on the chat model chosen under Settings and needs one that can
   call tools. Whether a model can only shows when a run starts: a server
@@ -448,10 +450,10 @@ ChatterLang examples of every folder component.
 
 ### Writing a retrieval filter
 
-The per-vault retrieval filter (**Vaults & Documents → Retrieval filter for
-this vault**) is a segment-only ChatterLang pipeline — no `INPUT FROM`
-source, loops, or forks — that sees one retrieved result at a time as a
-dict:
+The retrieval filter (**Vaults & Documents → Retrieval filter**, shown for
+the open named vault or the one open folder) is a segment-only ChatterLang
+pipeline — no `INPUT FROM` source, loops, or forks — that sees one retrieved
+result at a time as a dict:
 
 ```
 {"doc_id": "…", "score": 0.87,
@@ -776,16 +778,26 @@ talkpipe-vault/
 ├── src/
 │   └── talkpipe_vault/
 │       ├── pipelines/
-│       │   ├── building_and_watching.py    # Experimental watcher pipelines
+│       │   ├── folder_files.py             # Folder mode's shared rules: index location, document files, change tracking
+│       │   ├── folder_index.py             # FolderIndex, indexFolder, watchFolders
+│       │   ├── folder_scheduler.py         # The background indexing thread
+│       │   ├── folder_manifest.py          # Per-file index state (sqlite)
+│       │   ├── folder_changes.py           # folderChanges: a folder as a stream of changes
 │       │   ├── searching_and_prompting.py  # Search and RAG segments
+│       │   ├── retrieval_filter.py         # Per-index filter scripts
 │       │   ├── agent_tools.py              # Agent tool pack (what the tools do) — see AGENT_RETRIEVAL.md
 │       │   ├── agent_search.py             # Agent retrieval segments (llmAgent) — see AGENT_RETRIEVAL.md
+│       │   ├── diagnostics.py              # Configuration status checks
+│       │   ├── vault_metadata.py           # The embedder an index was built with
 │       │   ├── config.py                   # Config resolution + vault layout
+│       │   ├── building_and_watching.py    # Experimental watcher pipelines
 │       │   └── cli.py                      # Experimental watcher CLI helpers
 │       ├── apps/
 │       │   ├── query.py                    # Web application
 │       │   ├── vault_server.py             # vault-server CLI entry point
 │       │   ├── user_settings.py            # Persisted UI settings
+│       │   ├── credentials.py              # Keys and URLs saved on the Settings page
+│       │   ├── access_control.py           # TALKPIPE_VAULT_ROOT / TALKPIPE_DOCUMENT_ROOTS fences
 │       │   ├── templates/                  # HTML templates
 │       │   └── static/                     # Static assets
 │       ├── tui/

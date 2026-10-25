@@ -6,6 +6,145 @@
 {# In folder mode the open "vault" is a folder's own index; the named-vault
    form below must not offer it as the vault to index into. #}
 {% set vault_path = "" if folder_mode else vault_path %}
+{# The retrieval filter belongs to one index, so the panel sits with what
+   it applies to: the Folders box for the one open folder, the vault panel
+   for a named vault. #}
+{% macro filter_panel(retrieval_filter) %}
+    <details id="retrieval-filter" class="filter-panel"
+             {% if retrieval_filter.open %}open{% endif %}>
+        <summary class="filter-summary">
+            Retrieval filter for this {{ retrieval_filter.kind }} (advanced)
+            {% if retrieval_filter.error %}
+            <span class="filter-badge filter-badge-warn">not compiling</span>
+            {% elif retrieval_filter.active %}
+            <span class="filter-badge filter-badge-ok">active</span>
+            {% elif retrieval_filter.script %}
+            <span class="filter-badge">saved, not enabled</span>
+            {% endif %}
+        </summary>
+        <p class="panel-hint">
+            A ChatterLang script that filters or transforms the results
+            retrieved from the open {{ retrieval_filter.kind }} &mdash;
+            <code>{{ retrieval_filter.target }}</code> &mdash; before they reach
+            the Ask answer. It applies to this {{ retrieval_filter.kind }} only.
+            The script is stored with its index and travels with it; whether it
+            runs is decided here, on this machine.
+        </p>
+        {% if retrieval_filter.message %}
+        <div class="filter-flash">{{ retrieval_filter.message }}</div>
+        {% endif %}
+        {% if retrieval_filter.error %}
+        <div class="filter-error">{{ retrieval_filter.error }}</div>
+        {% endif %}
+        <form method="post" action="/vaults/retrieval-filter" class="filter-form">
+            <textarea name="script" id="filter-script" rows="6" spellcheck="false"
+                      placeholder='| lambdaFilter[expression="&#39;some term&#39; not in item[&#39;document&#39;].get(&#39;content&#39;, &#39;&#39;).lower()"]'>{{ retrieval_filter.script }}</textarea>
+            <label class="overwrite-option">
+                <input type="checkbox" name="enabled" value="1"
+                       {% if retrieval_filter.enabled %}checked{% endif %}>
+                Enable this filter on this machine for this vault (a filter
+                never runs until enabled here &mdash; review scripts that
+                arrived with a copied vault)
+            </label>
+            <label class="overwrite-option">
+                <input type="checkbox" name="strict" value="1"
+                       {% if retrieval_filter.strict %}checked{% endif %}>
+                Strict: if the filter fails while answering, fail the question
+                instead of answering from unfiltered results (check this if your
+                filter removes sensitive content)
+            </label>
+            <div class="filter-actions">
+                <button type="submit" name="action" value="save">Save</button>
+                <button type="submit" name="action" value="validate"
+                        class="btn-secondary">Validate</button>
+                <button type="submit" name="action" value="remove"
+                        class="btn-danger" id="filter-remove-btn">Remove</button>
+            </div>
+        </form>
+        <details class="filter-help">
+            <summary>How to write a filter</summary>
+            <p>
+                Each retrieved result flows through your script one at a time;
+                emit it to keep it, drop it to filter it, modify it to transform
+                it. Every result is a dictionary shaped like:
+            </p>
+            <pre>{"doc_id": "…", "score": 0.87,
+ "document": {"content": "…", "source": "…", "title": "…"}}</pre>
+            <p>
+                In <code>lambdaFilter</code>/<code>lambda</code> expressions the
+                result is <code>item</code>, as everywhere in TalkPipe &mdash;
+                <code>item['document']</code>, <code>item['score']</code>,
+                <code>item['doc_id']</code>. (Because the result is a
+                dictionary, TalkPipe also exposes its top-level keys as bare
+                names, so <code>document</code> and <code>score</code> work
+                too.) Starter recipes:
+            </p>
+            <ul class="filter-recipes">
+                <li>
+                    <code>| lambdaFilter[expression="'some term' not in item['document'].get('content', '').lower()"]</code>
+                    <button type="button" class="btn-secondary filter-insert"
+                            data-script="| lambdaFilter[expression=&quot;'some term' not in item['document'].get('content', '').lower()&quot;]">Insert</button>
+                    <span class="filter-recipe-hint">drop results whose content mentions a term</span>
+                </li>
+                <li>
+                    <code>| lambdaFilter[expression="'/archive/' not in item['document'].get('source', '')"]</code>
+                    <button type="button" class="btn-secondary filter-insert"
+                            data-script="| lambdaFilter[expression=&quot;'/archive/' not in item['document'].get('source', '')&quot;]">Insert</button>
+                    <span class="filter-recipe-hint">drop results from a folder, by source path</span>
+                </li>
+                <li>
+                    <code>| lambdaFilter[expression="item['score'] &gt; 0.2"]</code>
+                    <button type="button" class="btn-secondary filter-insert"
+                            data-script="| lambdaFilter[expression=&quot;item['score'] > 0.2&quot;]">Insert</button>
+                    <span class="filter-recipe-hint">drop low-scoring results (only useful when your
+                        embedding backend reports similarity scores)</span>
+                </li>
+            </ul>
+            <p>
+                For the common case &mdash; <em>is this text inside that
+                field?</em> &mdash; <code>isIn</code> and <code>isNotIn</code>
+                say the same thing without an expression. Name the field with a
+                dotted path (<code>document.content</code>,
+                <code>document.source</code>) and the text to look for:
+            </p>
+            <ul class="filter-recipes">
+                <li>
+                    <code>| isNotIn[field="document.content", value="some term"]</code>
+                    <button type="button" class="btn-secondary filter-insert"
+                            data-script="| isNotIn[field=&quot;document.content&quot;, value=&quot;some term&quot;]">Insert</button>
+                    <span class="filter-recipe-hint">drop results whose content mentions a term
+                        (the first recipe above, without the expression)</span>
+                </li>
+                <li>
+                    <code>| isIn[field="document.source", value="/notes/"]</code>
+                    <button type="button" class="btn-secondary filter-insert"
+                            data-script="| isIn[field=&quot;document.source&quot;, value=&quot;/notes/&quot;]">Insert</button>
+                    <span class="filter-recipe-hint">keep only results whose source path
+                        contains a folder</span>
+                </li>
+            </ul>
+            <p>
+                <code>isIn</code>/<code>isNotIn</code> match exactly, so they are
+                case-sensitive, and the named field has to exist on every result
+                &mdash; a result missing it makes the script fail, which means
+                unfiltered results (or, with <strong>Strict</strong> checked, a failed
+                question). Reach for <code>lambdaFilter</code> when the field may
+                be absent (<code>.get('source', '')</code>), when the match
+                should ignore case (<code>.lower()</code>), or when the test is
+                anything more than containment.
+            </p>
+            <p>
+                Any registered ChatterLang segment works — including LLM
+                transforms — but the script must be a single pipeline of
+                segments: no <code>INPUT FROM</code> source, loops, or forks.
+                When active, the filter runs on Ask retrieval for this vault
+                (keyword and semantic streams are filtered independently, then
+                merged) and can be applied on the search pages with their
+                &ldquo;Apply custom transform&rdquo; checkbox.
+            </p>
+        </details>
+    </details>
+{% endmacro %}
 <div class="search-box" id="folders-section">
     <h2>Folders</h2>
     <p class="panel-hint">
@@ -85,6 +224,9 @@
         </li>
         {% endfor %}
     </ul>
+    {% endif %}
+    {% if folder_mode and retrieval_filter and retrieval_filter.available %}
+    {{ filter_panel(retrieval_filter) }}
     {% endif %}
 </div>
 
@@ -216,142 +358,8 @@
         <span>Opening vault&hellip; first use may download the embedding model,
               which can take a few minutes.</span>
     </div>
-
-    {% if retrieval_filter and retrieval_filter.available and vault_path %}
-    <details id="retrieval-filter" class="filter-panel"
-             {% if retrieval_filter.open %}open{% endif %}>
-        <summary class="filter-summary">
-            Retrieval filter for this vault (advanced)
-            {% if retrieval_filter.error %}
-            <span class="filter-badge filter-badge-warn">not compiling</span>
-            {% elif retrieval_filter.active %}
-            <span class="filter-badge filter-badge-ok">active</span>
-            {% elif retrieval_filter.script %}
-            <span class="filter-badge">saved, not enabled</span>
-            {% endif %}
-        </summary>
-        <p class="panel-hint">
-            A ChatterLang script that filters or transforms the results
-            retrieved from the open vault &mdash; <code>{{ vault_path }}</code>
-            &mdash; before they reach the Ask answer. It applies to this vault
-            only; your other vaults are unaffected. The script is stored in this
-            vault's folder and travels with it; whether it runs is decided here,
-            on this machine.
-        </p>
-        {% if retrieval_filter.message %}
-        <div class="filter-flash">{{ retrieval_filter.message }}</div>
-        {% endif %}
-        {% if retrieval_filter.error %}
-        <div class="filter-error">{{ retrieval_filter.error }}</div>
-        {% endif %}
-        <form method="post" action="/vaults/retrieval-filter" class="filter-form">
-            <textarea name="script" id="filter-script" rows="6" spellcheck="false"
-                      placeholder='| lambdaFilter[expression="&#39;some term&#39; not in item[&#39;document&#39;].get(&#39;content&#39;, &#39;&#39;).lower()"]'>{{ retrieval_filter.script }}</textarea>
-            <label class="overwrite-option">
-                <input type="checkbox" name="enabled" value="1"
-                       {% if retrieval_filter.enabled %}checked{% endif %}>
-                Enable this filter on this machine for this vault (a filter
-                never runs until enabled here &mdash; review scripts that
-                arrived with a copied vault)
-            </label>
-            <label class="overwrite-option">
-                <input type="checkbox" name="strict" value="1"
-                       {% if retrieval_filter.strict %}checked{% endif %}>
-                Strict: if the filter fails while answering, fail the question
-                instead of answering from unfiltered results (check this if your
-                filter removes sensitive content)
-            </label>
-            <div class="filter-actions">
-                <button type="submit" name="action" value="save">Save</button>
-                <button type="submit" name="action" value="validate"
-                        class="btn-secondary">Validate</button>
-                <button type="submit" name="action" value="remove"
-                        class="btn-danger" id="filter-remove-btn">Remove</button>
-            </div>
-        </form>
-        <details class="filter-help">
-            <summary>How to write a filter</summary>
-            <p>
-                Each retrieved result flows through your script one at a time;
-                emit it to keep it, drop it to filter it, modify it to transform
-                it. Every result is a dictionary shaped like:
-            </p>
-            <pre>{"doc_id": "…", "score": 0.87,
- "document": {"content": "…", "source": "…", "title": "…"}}</pre>
-            <p>
-                In <code>lambdaFilter</code>/<code>lambda</code> expressions the
-                result is <code>item</code>, as everywhere in TalkPipe &mdash;
-                <code>item['document']</code>, <code>item['score']</code>,
-                <code>item['doc_id']</code>. (Because the result is a
-                dictionary, TalkPipe also exposes its top-level keys as bare
-                names, so <code>document</code> and <code>score</code> work
-                too.) Starter recipes:
-            </p>
-            <ul class="filter-recipes">
-                <li>
-                    <code>| lambdaFilter[expression="'some term' not in item['document'].get('content', '').lower()"]</code>
-                    <button type="button" class="btn-secondary filter-insert"
-                            data-script="| lambdaFilter[expression=&quot;'some term' not in item['document'].get('content', '').lower()&quot;]">Insert</button>
-                    <span class="filter-recipe-hint">drop results whose content mentions a term</span>
-                </li>
-                <li>
-                    <code>| lambdaFilter[expression="'/archive/' not in item['document'].get('source', '')"]</code>
-                    <button type="button" class="btn-secondary filter-insert"
-                            data-script="| lambdaFilter[expression=&quot;'/archive/' not in item['document'].get('source', '')&quot;]">Insert</button>
-                    <span class="filter-recipe-hint">drop results from a folder, by source path</span>
-                </li>
-                <li>
-                    <code>| lambdaFilter[expression="item['score'] &gt; 0.2"]</code>
-                    <button type="button" class="btn-secondary filter-insert"
-                            data-script="| lambdaFilter[expression=&quot;item['score'] > 0.2&quot;]">Insert</button>
-                    <span class="filter-recipe-hint">drop low-scoring results (only useful when your
-                        embedding backend reports similarity scores)</span>
-                </li>
-            </ul>
-            <p>
-                For the common case &mdash; <em>is this text inside that
-                field?</em> &mdash; <code>isIn</code> and <code>isNotIn</code>
-                say the same thing without an expression. Name the field with a
-                dotted path (<code>document.content</code>,
-                <code>document.source</code>) and the text to look for:
-            </p>
-            <ul class="filter-recipes">
-                <li>
-                    <code>| isNotIn[field="document.content", value="some term"]</code>
-                    <button type="button" class="btn-secondary filter-insert"
-                            data-script="| isNotIn[field=&quot;document.content&quot;, value=&quot;some term&quot;]">Insert</button>
-                    <span class="filter-recipe-hint">drop results whose content mentions a term
-                        (the first recipe above, without the expression)</span>
-                </li>
-                <li>
-                    <code>| isIn[field="document.source", value="/notes/"]</code>
-                    <button type="button" class="btn-secondary filter-insert"
-                            data-script="| isIn[field=&quot;document.source&quot;, value=&quot;/notes/&quot;]">Insert</button>
-                    <span class="filter-recipe-hint">keep only results whose source path
-                        contains a folder</span>
-                </li>
-            </ul>
-            <p>
-                <code>isIn</code>/<code>isNotIn</code> match exactly, so they are
-                case-sensitive, and the named field has to exist on every result
-                &mdash; a result missing it makes the script fail, which means
-                unfiltered results (or, with <strong>Strict</strong> checked, a failed
-                question). Reach for <code>lambdaFilter</code> when the field may
-                be absent (<code>.get('source', '')</code>), when the match
-                should ignore case (<code>.lower()</code>), or when the test is
-                anything more than containment.
-            </p>
-            <p>
-                Any registered ChatterLang segment works — including LLM
-                transforms — but the script must be a single pipeline of
-                segments: no <code>INPUT FROM</code> source, loops, or forks.
-                When active, the filter runs on Ask retrieval for this vault
-                (keyword and semantic streams are filtered independently, then
-                merged) and can be applied on the search pages with their
-                &ldquo;Apply custom transform&rdquo; checkbox.
-            </p>
-        </details>
-    </details>
+    {% if not folder_mode and retrieval_filter and retrieval_filter.available %}
+    {{ filter_panel(retrieval_filter) }}
     {% endif %}
 </div>
 

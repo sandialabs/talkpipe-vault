@@ -241,10 +241,13 @@ ChatterLang:
 
 ```sh
 chatterlang_script --script '
-  INPUT FROM echo[data="lighthouse storm"]
+  INPUT FROM echo[data="deployment"]
   | vaultTextSearch[vault_path=["/path/to/notes", "/path/to/papers"]]
   | print'
 ```
+
+A keyword query with no hits prints nothing (and exits 0), so use a word
+your documents contain.
 
 Asking a question needs a chat model; here, one served by Ollama. Set
 `TALKPIPE_OLLAMA_SERVER_URL` if it is not on this machine: pipelines read
@@ -284,3 +287,6 @@ chatterlang_script --script '
               system_prompt="Summarize this document in one sentence."]
   | print'
 ```
+
+`llmPrompt`'s `source` and `model` take any chat provider, as `vaultChat`'s
+`chat_source` and `chat_model` do above.

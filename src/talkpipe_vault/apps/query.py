@@ -2183,6 +2183,22 @@ def _vault_source_folder(state: AppState) -> str:
     return state.vault_source_folder
 
 
+def retrieval_filter_blocker(state: AppState) -> str:
+    """Why the retrieval filter cannot be edited now, or "" when it can.
+
+    A filter belongs to one index: the open named vault or the one open
+    folder. Both interfaces show the editor, and accept a save, only then.
+    """
+    if not state.vault_path:
+        return "Open a folder or a vault before configuring its retrieval filter."
+    if len(state.folders) > 1:
+        return (
+            "A retrieval filter applies to one open folder; close the others "
+            "to edit it."
+        )
+    return ""
+
+
 def _retrieval_filter_context(state: AppState, **pending: Any) -> dict[str, Any]:
     """Build the retrieval-filter section context for the documents page.
 
@@ -2190,13 +2206,17 @@ def _retrieval_filter_context(state: AppState, **pending: Any) -> dict[str, Any]
     the submitted (possibly unsaved) values and outcome instead of what is on
     disk, keeping the user's text in the editor.
     """
-    if not state.vault_path:
+    if retrieval_filter_blocker(state):
         return {"available": False}
     script = retrieval_filter.load_script(state.vault_path) or ""
     flags = user_settings.get_retrieval_filter_flags(state.vault_path)
     error = retrieval_filter.validate_script(script) if script else None
     context: dict[str, Any] = {
         "available": True,
+        # What the filter belongs to, as the page should name it: the open
+        # folder (its index holds the script) or the named vault.
+        "kind": "folder" if state.folders else "vault",
+        "target": state.folders[0] if state.folders else state.vault_path,
         "script": script,
         "enabled": flags["enabled"],
         "strict": flags["strict"],
@@ -2255,10 +2275,8 @@ async def save_retrieval_filter(
     the enabled/strict flags are stored in this machine's user settings, so a
     copied vault never executes a bundled script without local consent.
     """
-    if not state.vault_path:
-        return _redirect_with_message(
-            "/documents", error="Open a vault before configuring its retrieval filter."
-        )
+    if blocker := retrieval_filter_blocker(state):
+        return _redirect_with_message("/documents", error=blocker)
 
     if action == "remove":
         retrieval_filter.remove_script(state.vault_path)

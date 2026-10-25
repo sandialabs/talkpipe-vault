@@ -1066,12 +1066,16 @@ class VaultService:
     def filter_view(self) -> dict[str, Any]:
         return query._retrieval_filter_context(self.state)
 
+    def filter_blocker(self) -> str:
+        """Why the filter cannot be edited now, or "" when it can."""
+        return query.retrieval_filter_blocker(self.state)
+
     def save_filter(
         self, *, action: str, script: str, enabled: bool, strict: bool
     ) -> dict[str, Any]:
         state = self.state
-        if not state.vault_path:
-            return _fail("Open a vault before configuring its retrieval filter.")
+        if blocker := query.retrieval_filter_blocker(state):
+            return _fail(blocker)
         if action == "remove":
             retrieval_filter.remove_script(state.vault_path)
             user_settings.clear_retrieval_filter_flags(state.vault_path)

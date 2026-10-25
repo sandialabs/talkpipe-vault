@@ -23,7 +23,7 @@ In Python:
 from talkpipe_vault.pipelines.agent_search import AgentVaultChat
 
 ask = AgentVaultChat(
-    vault_path="~/notes-vault",
+    vault_path="~/notes",  # a folder opened in vault-server, or a named vault
     chat_source="ollama",
     chat_model="qwen3:8b",  # a model that handles tool calls well — see below
 ).as_function(single_in=True, single_out=True)
