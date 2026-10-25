@@ -8,10 +8,38 @@ the [Developer Guide](DEVELOPER_GUIDE.md).
 
 ## Command-line tools
 
-The package installs two console scripts, `vault-server` (the web
-application) and `vault-tui` (the terminal interface). Indexing from the
-command line uses TalkPipe's `makevectordatabase`, installed with the
-TalkPipe dependency.
+The package installs three console scripts: `vault-index` (index folders
+from the command line), `vault-server` (the web application) and
+`vault-tui` (the terminal interface). Named vaults are built with TalkPipe's
+`makevectordatabase`, installed with the TalkPipe dependency.
+
+### `vault-index`
+
+```bash
+vault-index FOLDER [FOLDER ...] [--embedding-source S --embedding-model M] [--keywords-only] [--index-location auto|home] [--json] [-v]
+```
+
+Indexes each folder the way `vault-server` does in the background, and
+exits: new and changed files are indexed, deleted ones removed, keywords
+first and then vectors. The index is the folder's `.tpvault` (or its place
+in app data), so `vault-server FOLDER` and `vault-tui FOLDER` open it as-is,
+and running the command again processes only what changed. It prints one
+line per folder with the file counts and the embedder, and exits non-zero
+when a file failed, the embedder was unreachable, or another vault process
+was already indexing the folder (which it then leaves alone).
+
+- The embedder, chunk settings and index location saved on the Settings
+  page are the defaults; `--embedding-source` / `--embedding-model` override
+  them for a folder with no vectors yet. A folder already indexed keeps the
+  embedder its vectors were made with.
+- `--keywords-only` builds just the keyword index, with no embedder.
+- `--json` prints each folder's full status dict as a JSON line.
+- `-v` shows the indexing log and talkpipe's per-file progress, which are
+  otherwise hidden.
+
+It runs the `indexFolder` segment as a ChatterLang script; the
+[Developer Guide](DEVELOPER_GUIDE.md#index-a-folder-once-indexfolder) shows
+the same thing inside a pipeline.
 
 ### `makevectordatabase`
 

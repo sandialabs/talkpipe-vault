@@ -93,6 +93,7 @@ Documentation = "https://github.com/sandialabs/talkpipe-vault#readme"
 [project.scripts]
 vault-server = "talkpipe_vault.apps.vault_server:main"
 vault-tui = "talkpipe_vault.tui.app:main"
+vault-index = "talkpipe_vault.apps.vault_index:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

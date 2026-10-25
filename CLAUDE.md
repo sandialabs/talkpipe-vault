@@ -34,6 +34,7 @@ src/talkpipe_vault/
 ├── apps/
 │   ├── query.py                # FastAPI web application (all routes + run_app)
 │   ├── vault_server.py         # vault-server CLI entry point (port choice)
+│   ├── vault_index.py          # vault-index CLI: runs indexFolder as a ChatterLang script
 │   ├── user_settings.py        # Persisted UI settings (recent vaults, model overrides)
 │   ├── templates/              # Jinja2 templates (base, home, documents,
 │   │                           #   settings, search, keyword_search, chat, partials)

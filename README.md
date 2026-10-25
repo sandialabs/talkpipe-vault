@@ -126,9 +126,11 @@ is read-only, on a network share or synced by a cloud client; see
 [Folder mode](docs/ADVANCED.md#folder-mode). Removing a folder keeps its
 index unless you ask for it to be deleted. Your documents are never touched.
 
-To index, watch or search folders from Python or ChatterLang, or to follow
-a folder's changes as a stream of documents, see the
-[Developer Guide](docs/DEVELOPER_GUIDE.md).
+To index a folder without starting an interface (a cron job, a build step),
+run `vault-index ~/notes`; it processes what changed and exits
+([Advanced Usage](docs/ADVANCED.md#vault-index)). To index, watch or search
+folders from Python or ChatterLang, or to follow a folder's changes as a
+stream of documents, see the [Developer Guide](docs/DEVELOPER_GUIDE.md).
 
 ### Named vaults
 

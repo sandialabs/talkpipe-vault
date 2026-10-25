@@ -120,6 +120,9 @@ chatterlang_script --script '
   it alone and the status says `"role": "reader"`.
 - The index is kept in `<folder>/.tpvault`, or in app data for a read-only,
   network or synced folder ([Advanced Usage: Folder mode](ADVANCED.md#folder-mode)).
+- The `vault-index` command is this segment as a console script: it indexes
+  the folders given and prints a line per folder
+  ([Advanced Usage](ADVANCED.md#vault-index)).
 
 ### Keep folders indexed: `watchFolders`
 
@@ -533,14 +536,21 @@ chatterlang_script --script '
 
 ### Re-index nightly from cron
 
-`indexFolder` processes only what changed, so a scheduled run is cheap:
+`indexFolder` processes only what changed, so a scheduled run is cheap. The
+`vault-index` command runs it for you:
+
+```cron
+15 2 * * * TALKPIPE_OLLAMA_SERVER_URL=http://ollama-host:11434 vault-index /path/to/notes >> ~/vault-index.log 2>&1
+```
+
+The same as a script, for a pipeline that does more than index:
 
 ```cron
 15 2 * * * TALKPIPE_OLLAMA_SERVER_URL=http://ollama-host:11434 chatterlang_script --script 'INPUT FROM echo[data="/path/to/notes"] | indexFolder | print' >> ~/vault-index.log 2>&1
 ```
 
-With the default in-process embedder no server variable is needed; the line
-above shows where one goes when the embedder is remote.
+With the default in-process embedder no server variable is needed; the lines
+above show where one goes when the embedder is remote.
 
 ### Answer a list of questions
 
@@ -705,7 +715,8 @@ src/talkpipe_vault/
 │   ├── building_and_watching.py    # Experimental watcher pipelines
 │   └── cli.py                      # Experimental watcher CLI helpers
 ├── apps/                           # vault-server: query.py (routes), vault_server.py (CLI),
-│                                   #   user_settings.py, credentials.py, access_control.py, templates/
+│                                   #   vault_index.py (vault-index CLI), user_settings.py,
+│                                   #   credentials.py, access_control.py, templates/
 ├── tui/                            # vault-tui: app.py, service.py, app.tcss
 └── watchdog.py                     # fileWatcher
 ```
