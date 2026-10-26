@@ -246,7 +246,7 @@ are all inherited:
 
 ```dockerfile
 # Containerfile.custom
-FROM ghcr.io/sandialabs/talkpipe-vault:latest
+FROM ghcr.io/sandialabs/talkpipe-vault:experimental   # latest, once a full release has folder mode
 
 # Extra Python packages (e.g. a TalkPipe plugin or provider SDK). The base
 # image runs as user "vault", so switch to root to install system-wide.

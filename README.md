@@ -40,10 +40,14 @@ It is built on the [TalkPipe](https://github.com/sandialabs/talkpipe)
 pipeline framework, and its indexing and search components are reusable in
 your own pipelines; see the [Developer Guide](docs/DEVELOPER_GUIDE.md).
 
-**Status:** alpha. This page describes the `master` branch, which runs
-ahead of the PyPI release; the install commands below give the documented
-behaviour. (The `@master` matters: the default branch, `stable`, is the
-last release.)
+**Status:** alpha. The current release is a pre-release, so the install
+commands below ask for one (`--pre`, `--prerelease allow`, the
+`experimental` image); without that you get the last full release, which
+has no folder mode. This page describes the `master` branch; if something
+here is missing from the release, install the development branch with
+`pip install "git+https://github.com/sandialabs/talkpipe-vault.git@master"`
+(the `@master` matters: the default branch, `stable`, is the last full
+release).
 
 ## Run the web app
 
@@ -51,13 +55,13 @@ last release.)
 
 ```bash
 python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install "git+https://github.com/sandialabs/talkpipe-vault.git@master"   # after the next release: pip install talkpipe-vault
+pip install --pre talkpipe-vault
 vault-server ~/notes
 ```
 
 Or install it as a standalone command with [uv](https://docs.astral.sh/uv/):
-`uv tool install "talkpipe-vault @ git+https://github.com/sandialabs/talkpipe-vault.git@master"`
-(after the next release: `uv tool install talkpipe-vault`).
+`uv tool install --prerelease allow talkpipe-vault` (later,
+`uv tool upgrade talkpipe-vault` upgrades it).
 
 Your browser opens at http://127.0.0.1:8002 with `~/notes` being indexed in
 the background. Search and ask right away; the pages say how far indexing
@@ -77,12 +81,13 @@ podman run --rm -p 8002:8002 \
   -v vault_data:/app/data \
   -v ~/Documents:/documents:ro,Z \
   -e TALKPIPE_OLLAMA_SERVER_URL=http://host.containers.internal:11434 \
-  ghcr.io/sandialabs/talkpipe-vault:latest
+  ghcr.io/sandialabs/talkpipe-vault:experimental
 ```
 
 Then open http://127.0.0.1:8002 (`127.0.0.1`, not `localhost`: rootless
 podman publishes ports IPv4-only). `docker run` takes the same arguments.
-The image is the last release, so until the next one it has no folder mode.
+The `experimental` tag is the current pre-release; `latest` is the last full
+release, which has no folder mode.
 
 - `-v vault_data:/app/data` keeps settings, indexes kept in app data and the
   embedding-model cache across container recreation.

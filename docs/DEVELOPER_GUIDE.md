@@ -13,7 +13,7 @@ the [agent retrieval developer's guide](AGENT_RETRIEVAL.md).
 ## Setup
 
 ```bash
-pip install talkpipe-vault        # or: pip install "git+https://github.com/sandialabs/talkpipe-vault.git@master"
+pip install --pre talkpipe-vault  # or the development branch: pip install "git+https://github.com/sandialabs/talkpipe-vault.git@master"
 ```
 
 That installs TalkPipe and `chatterlang_script`. Every component below is
