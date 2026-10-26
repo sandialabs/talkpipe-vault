@@ -518,15 +518,23 @@ def _closed_folder_status(root: str) -> dict[str, Any]:
         "files_total": 0,
         "files_keyword": 0,
         "files_embedded": 0,
+        "files_pending": 0,
         "files_error": 0,
+        "files_empty": 0,
+        "chunks": 0,
+        "keyword_coverage": 0.0,
         "vector_coverage": 0.0,
         "in_folder": True,
+        "index_path": "",
         "location_reason": "",
         "role": "closed",
         "writer": "",
+        "stalled": False,
         "error": "",
         "vector_error": "",
+        "watch_mode": "",
         "embedding": "",
+        "current_embedding": "",
         "embedding_differs": False,
         "chunking_differs": False,
     }
@@ -550,6 +558,9 @@ def _folder_progress_line(status: dict[str, Any]) -> str:
     if embedded < total:
         paused = " (paused)" if phase == "paused" else ""
         return f"Searchable by keyword · meaning {embedded}/{total} files{paused}"
+    if status.get("role") == "read-only":
+        # Nobody can write this index, so changes to the files are not picked up.
+        return f"Ready · {total} file{'' if total == 1 else 's'} · read-only index"
     watching = {
         "live": " · watching for changes",
         # No change events (read-only or network folder): rescans only.

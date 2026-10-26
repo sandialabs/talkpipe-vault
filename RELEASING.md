@@ -149,9 +149,16 @@ Command line and container:
   the home page on http://127.0.0.1:8002 (see the README for the full
   invocation) and `/api/health` reports the version; indexing `/documents`
   from inside the container works and the result survives a container
-  restart. Adding `/documents` as a folder puts its index under `/app/data`
-  (the image sets `TALKPIPE_VAULT_ROOT`), and the folder reopens after the
-  container is recreated with the same `vault_data` volume.
+  restart. `setuptools_scm` is a build dependency, not part of the
+  development environment: run it from one that has it (for example
+  `uvx --from setuptools-scm python -m setuptools_scm`), and check that the
+  build argument is not empty, or the build fails at `pip install` with
+  "unable to detect version". Adding `/documents` as a folder puts its
+  index under `/app/data` (the image sets `TALKPIPE_VAULT_ROOT`), and the
+  folder reopens after the container is recreated with the same
+  `vault_data` volume. Mount documents that carry no `.tpvault` from an
+  earlier test: a folder that already holds an index is used as it is, and
+  read-only, so nothing is written under `/app/data`.
 - Upgrade check: install the previous release, create a vault, then upgrade
   to the wheel under test — the existing vault still opens and searches.
   Anything that requires re-indexing must be called out in the changelog.

@@ -182,6 +182,8 @@ def test_folder_progress_line_counts_and_watching():
     assert query._folder_progress_line(status) == (
         "Ready · 3 files · checked for changes every 10 minutes"
     )
+    status.update(role="read-only", watch_mode="live")
+    assert query._folder_progress_line(status) == "Ready · 3 files · read-only index"
 
 
 def test_unfinished_folder_is_flagged_and_still_answers(client, docs, folder_app):
@@ -601,6 +603,8 @@ def test_closing_a_folder_keeps_it_listed_and_reopens(client, docs):
     query.add_folder(query._state, str(docs))
     assert _wait(_searchable_by_keyword)
     root = str(docs.resolve())
+    [open_entry] = query.folders_status(query._state)
+    open_keys = set(open_entry)
 
     response = client.post(
         "/folders/close", data={"root": root}, follow_redirects=False
@@ -615,6 +619,7 @@ def test_closing_a_folder_keeps_it_listed_and_reopens(client, docs):
     [entry] = query.folders_status(query._state)
     assert entry["closed"]
     assert entry["root"] == root
+    assert set(entry) == open_keys
     page = client.get("/documents").text
     assert 'action="/folders/open"' in page
     assert "Searched before" not in page
