@@ -65,6 +65,120 @@ All folder components cover a folder's whole tree and skip hidden files and
 folders (`.git`, `.tpvault`, …), editor temporary files, and files no
 TalkPipe extractor reads.
 
+### How the modules fit together
+
+Every component above is a class or factory in one module under
+`talkpipe_vault.pipelines`. The diagram shows those modules and the
+hierarchy of calls between them: an arrow points from the module that calls
+to the module it calls (its imports), so the layers read top-down from the
+code that asks a question to the stores that hold the answer. Nothing calls
+upward: a search module never imports an answering module, and the indexing
+modules know nothing about search.
+
+```mermaid
+flowchart TB
+    classDef app fill:#e8eefc,stroke:#4a5a8a
+    classDef lib fill:#f4f4f4,stroke:#8a8a8a,stroke-dasharray: 4 3
+    classDef util fill:#fbf7e6,stroke:#a08c40
+
+    CALLER["Your pipeline, vault-server, vault-tui<br/>Python pipe API or ChatterLang"]:::app
+
+    subgraph answering["Answering"]
+        direction LR
+        CHAT["vault_chat.py<br/>vaultChat"]
+        AGENT["agent_search.py<br/>vaultAgentSearch · vaultAgentChat"]
+        TOOLS["agent_tools.py<br/>the agent's tool pack"]
+    end
+
+    subgraph searching["Searching"]
+        direction LR
+        VS["vault_search.py<br/>vaultSearch · vaultTextSearch"]
+        KW["keyword_search.py<br/>extractSearchKeywords · searchLance · words_query"]
+        SR["search_results.py<br/>mergeSearchResults · filterSearchResults<br/>reciprocal_rank_fusion"]
+        RF["retrieval_filter.py<br/>compiles a filter script"]
+    end
+
+    VP["vault_paths.py<br/>resolve_vault_paths · check_searchable<br/>(the seam: a folder stands for its index)"]
+
+    subgraph indexing["Indexing"]
+        direction LR
+        FI["folder_index.py<br/>indexFolder · watchFolders · FolderIndex"]
+        FC["folder_changes.py<br/>folderChanges"]
+        FS["folder_scheduler.py<br/>background indexing thread"]
+        FM["folder_manifest.py<br/>per-file state, sqlite"]
+        FF["folder_files.py<br/>index location · document files<br/>change tracking"]
+    end
+
+    subgraph shared["Used by every layer (no arrows drawn)"]
+        direction LR
+        CFG["config.py<br/>models · templates · vault layout"]:::util
+        VM["vault_metadata.py<br/>the embedder an index was built with"]:::util
+    end
+
+    subgraph talkpipe["TalkPipe and talkpipe-agents"]
+        direction LR
+        MODELS["Models<br/>LLMPrompt · LLMEmbed · llmAgent<br/>ConstructRAGPrompt · AppendRAGSources"]:::lib
+        STORES["Stores<br/>LanceDBDocumentStore (docs table)<br/>WhooshFullTextIndex (fulltext_vault)"]:::lib
+        INGEST["Ingest<br/>build_rag_database · ProcessDocumentsSegment"]:::lib
+    end
+
+    CALLER --> CHAT & AGENT & VS & SR & FI & FC
+
+    CHAT --> VS & KW & SR
+    AGENT --> TOOLS & VS & KW
+    TOOLS --> SR
+    CHAT & AGENT --> VP
+    CHAT & AGENT --> MODELS
+
+    VS --> SR
+    VS -- words_query --> KW
+    VS --> VP
+    KW --> SR
+    SR --> RF
+    VS -- vectors_started --> FI
+    VS & KW --> MODELS
+    VS & KW --> STORES
+
+    VP -- find_index_path --> FI
+
+    FI --> FS & FM & FF
+    FC --> FF
+    FI --> STORES & INGEST
+
+    MODELS ~~~ CFG
+    STORES ~~~ VM
+```
+
+How to read it when building something of your own:
+
+- **Import from the layer that does what you want.** An answer:
+  `vault_chat` or `agent_search`. Hits: `vault_search`; keyword queries from
+  a question: `keyword_search`; combining, fusing or filtering result lists
+  from any source, even another search engine: `search_results`, which
+  depends on nothing above the TalkPipe `SearchResult`. Building or
+  following indexes: `folder_index` and `folder_changes`.
+- **`vault_paths` is the seam between searching and indexing.** It maps a
+  documents folder to its index and refuses what cannot be searched; every
+  search component calls it before each query. The only other call from
+  searching into indexing is `vault_search` asking `folder_index` whether an
+  index has vectors yet. A component that takes `vault_path` therefore
+  accepts a folder, a named vault, or a list of either, and keeps working
+  when an index appears later.
+- **`config.py` and `vault_metadata.py` are used by every layer** (model and
+  template resolution, the vault layout, the embedder an index was built
+  with); their arrows are left out to keep the picture readable.
+- **The stores are TalkPipe's.** The LanceDB docs table and the Whoosh
+  index are read and written only through `LanceDBDocumentStore` and
+  `WhooshFullTextIndex`, and chat and embedding models only through
+  `LLMPrompt` and `LLMEmbed`, so a provider or store you configure for
+  TalkPipe is the one these components use.
+- **The interfaces are callers like any other.** `vault-server` and
+  `vault-tui` build their pipelines from the same modules your code would;
+  nothing in `apps/` or `tui/` is needed to use a component.
+- **`searching_and_prompting.py`** is the search modules' original import
+  path and re-exports them; new code imports the module that holds what it
+  needs.
+
 ### Shapes you will see
 
 - **A semantic hit** is a talkpipe `SearchResult`: `hit.score` (similarity),
@@ -691,6 +805,9 @@ purpose and ignores the lock ([README: Development environment](../README.md#dev
 environment: it caps filelock below talkpipe's floor).
 
 ### Project structure
+
+The call hierarchy among the `pipelines/` modules is drawn in
+[How the modules fit together](#how-the-modules-fit-together).
 
 ```
 src/talkpipe_vault/
