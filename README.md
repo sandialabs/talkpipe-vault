@@ -40,13 +40,11 @@ It is built on the [TalkPipe](https://github.com/sandialabs/talkpipe)
 pipeline framework, and its indexing and search components are reusable in
 your own pipelines; see the [Developer Guide](docs/DEVELOPER_GUIDE.md).
 
-**Status:** alpha. The current release is a pre-release, so the install
-commands below ask for one (`--pre`, `--prerelease allow`, the
-`experimental` image); without that you get the last full release, which
-has no folder mode. This page describes the `master` branch; if something
-here is missing from the release, install the development branch with
+**Status:** alpha, under active development. This page describes the
+`master` branch; if something here is missing from the latest release,
+install the development branch with
 `pip install "git+https://github.com/sandialabs/talkpipe-vault.git@master"`
-(the `@master` matters: the default branch, `stable`, is the last full
+(the `@master` matters: the default branch, `stable`, is the latest
 release).
 
 ## Run the web app
@@ -55,12 +53,12 @@ release).
 
 ```bash
 python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install --pre talkpipe-vault
+pip install talkpipe-vault
 vault-server ~/notes        # any folder of documents
 ```
 
 Or install it as a standalone command with [uv](https://docs.astral.sh/uv/):
-`uv tool install --prerelease allow talkpipe-vault` (later,
+`uv tool install talkpipe-vault` (later,
 `uv tool upgrade talkpipe-vault` upgrades it).
 
 Your browser opens at http://127.0.0.1:8002 with `~/notes` being indexed in
@@ -85,13 +83,13 @@ podman run --rm -p 8002:8002 \
   -v vault_data:/app/data \
   -v ~/Documents:/documents:ro,Z \
   -e TALKPIPE_OLLAMA_SERVER_URL=http://host.containers.internal:11434 \
-  ghcr.io/sandialabs/talkpipe-vault:experimental
+  ghcr.io/sandialabs/talkpipe-vault:latest
 ```
 
 Then open http://127.0.0.1:8002 (`127.0.0.1`, not `localhost`: rootless
 podman publishes ports IPv4-only). `docker run` takes the same arguments.
-The `experimental` tag is the current pre-release; `latest` is the last full
-release, which has no folder mode.
+`latest` is the current release; when a pre-release is out it is published
+under the `experimental` tag.
 
 - `-v vault_data:/app/data` keeps settings, indexes kept in app data and the
   embedding-model cache across container recreation.

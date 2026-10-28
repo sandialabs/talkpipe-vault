@@ -227,7 +227,7 @@ repository first and expect the first `up` to take several minutes. Pass the
 package version as the compose file's comment shows
 (`APP_VERSION="$(python3 -m setuptools_scm)" podman compose build`), or the
 image reports version 0.1.0. To run the published image instead, pull it and
-set `IMAGE_NAME=ghcr.io/sandialabs/talkpipe-vault:experimental` in `.env`;
+set `IMAGE_NAME=ghcr.io/sandialabs/talkpipe-vault:latest` in `.env`;
 compose builds only when the named image is absent.
 
 Nothing to search is configured here: the service starts
@@ -255,9 +255,8 @@ are all inherited:
 
 ```dockerfile
 # Containerfile.custom
-# `experimental` is the current pre-release; use `latest` once a full
-# release has folder mode.
-FROM ghcr.io/sandialabs/talkpipe-vault:experimental
+# `latest` is the current release; a pre-release is published as `experimental`.
+FROM ghcr.io/sandialabs/talkpipe-vault:latest
 
 # Extra Python packages (e.g. a TalkPipe plugin or provider SDK). The base
 # image runs as user "vault" and ships without pip (it is removed once the
