@@ -381,6 +381,14 @@ class AgentSearchSession:
         if left == 1:
             # The reply the model is reading is the last one it can act on:
             # a search now would end the run before it saw the results.
+            if not self.kept:
+                # ...but enough_information is refused with nothing kept, so
+                # the last turn is for one more search, or for giving up.
+                return (
+                    "1 turn left: the next one is your last, and nothing is "
+                    "kept yet, so search once more with different terms, or "
+                    "reply done if the notes do not cover the question."
+                )
             return (
                 "1 turn left: the next one is your last, so call "
                 "enough_information now rather than searching again."

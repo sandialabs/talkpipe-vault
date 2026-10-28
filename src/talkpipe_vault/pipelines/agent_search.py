@@ -98,7 +98,7 @@ Every search returns its results already judged against the question: the releva
 1. Search with vector_search (natural-language, conceptual queries) and keyword_search (exact terms, names, identifiers; Whoosh syntax: terms are ANDed, use OR for alternatives and double quotes for phrases). Read the question's terms in their ordinary sense: a word in it names what it usually names, not some other thing that happens to share the name, unless the kept chunks show otherwise.
 2. Each search takes looking_for: say in one phrase what this search should find that the answer still lacks - a fact, a date, a name, the other side of a comparison, a second document to corroborate the first - so a result that supplies just that is kept even if it is not the whole answer. For the first search, leave it empty: the question itself is what is looked for.
 3. After each search, ask yourself what the question still needs. Could it be answered completely and accurately from what is already known? If some part is still missing, search for that specific piece, using terms, names and phrasings from the kept chunks. Do not repeat a query you already ran. If a search kept nothing, search with different terms rather than the same ones again.
-4. Stop by calling enough_information as soon as the kept chunks would let you answer the question well, saying in one short phrase what they cover. That judgement is the reason to stop - not the number of chunks collected. More chunks that add nothing are not better than stopping. If repeated searches keep nothing new and the question still cannot be fully answered, call enough_information anyway and say what is missing. You have a limited number of turns, and every tool reply says how many are left; when it says the next turn is your last, call enough_information at once instead of searching again, so the answer is built from what has been kept.
+4. Stop by calling enough_information as soon as the kept chunks would let you answer the question well, saying in one short phrase what they cover. That judgement is the reason to stop - not the number of chunks collected. More chunks that add nothing are not better than stopping. If repeated searches keep nothing new and the question still cannot be fully answered, call enough_information anyway and say what is missing. If nothing at all has been kept after searching with different terms, the notes do not cover the question: enough_information is refused with nothing kept, so reply with the single word done instead. You have a limited number of turns, and every tool reply says how many are left; when it says the next turn is your last, call enough_information at once instead of searching again, so the answer is built from what has been kept.
 Use extract_keywords when you want a keyword query built for you: give it the question or a topic in plain language and it returns a keyword query to pass to keyword_search. You may also write keyword queries yourself.
 Use read_document when a kept chunk suggests its document holds more of the answer - the chunk is cut off, it is one step of a procedure or one item of a list, or its document is plainly where the question's topic is covered. The part read is judged like a search result; say in looking_for what you hope it holds.
 After calling enough_information, or once you are told to stop, reply with the single word: done."""
@@ -464,7 +464,7 @@ class AgentVaultSearch(AbstractFieldSegment):
         kept = len(session.kept)
         undecided = len(session.undecided)
         searches = len(session.queries_run)
-        # The four ways a run can end, most to least satisfying. The first is
+        # The five ways a run can end, most to least satisfying. The first is
         # the intended one; the rest are worth telling apart, because each
         # means the selection may be incomplete for a different reason.
         hint = ""
@@ -476,6 +476,12 @@ class AgentVaultSearch(AbstractFieldSegment):
             how = f"filled its {session.max_chunks}-chunk maximum"
         elif stop_reason.startswith("limit"):
             how = f"hit the {self.max_iterations}-iteration cap"
+        elif searches and not kept and not undecided:
+            # It searched, every hit was judged, none was worth keeping, and
+            # it stopped: the right ending for a question the notes do not
+            # cover (enough_information is refused with nothing kept), so
+            # the model is not to blame for it.
+            how = "found nothing relevant to keep"
         else:
             how = "stopped without saying it had enough"
             hint = f" {WEAK_TOOL_CALLING_HINT}"

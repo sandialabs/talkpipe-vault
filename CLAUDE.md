@@ -408,10 +408,14 @@ enforced by the tools, not by an agent hook**: every
 tool starts with `_guard`, which refuses once `session.should_stop` (`enough or
 at_capacity`) and says which — so the rule holds behind any agent, and there is no
 `BeforeToolCallEvent` callback of ours to keep in step with the library's. The note
-distinguishes all four endings — judged
-it had enough (with the reason), filled the chunk maximum, hit the iteration cap, or
-stopped without saying it had enough — because each means something different about how
-complete the selection is; the last is what weaker tool-calling models do. The outcome is an
+distinguishes all five endings — judged
+it had enough (with the reason), filled the chunk maximum, hit the iteration cap, found
+nothing relevant to keep (searches ran, every hit was judged, none kept: the right ending
+for a question the notes do not cover, with no hint), or stopped without saying it had
+enough — because each means something different about how complete the selection is; the
+last is what weaker tool-calling models do. The last-turn line of the countdown changes
+while nothing is kept (search once more or reply done), since `enough_information` would
+be refused, and the prompt says the same. The outcome is an
 `AgentSearchOutcome(results, note, trace)`: kept chunks as `SearchResult` in keep order, a
 note on how it ended, and the tool-call trace, which is also printed (`progress`, stdout
 by default) so the agent's behavior is visible on the server console; a keyword-only

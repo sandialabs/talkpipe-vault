@@ -785,6 +785,7 @@ class TestAgentIsAnLLMAgent:
         assert "ignore_chunk" not in prompt
         assert "ordinary sense" in prompt
         assert "how many are left" in prompt
+        assert "nothing at all has been kept" in prompt
 
     def test_progress_reaches_the_session_trace(self):
         """llmAgent's own progress lines land in the trace the pages show."""
@@ -842,6 +843,18 @@ class TestTurnsLeft:
         assert "No turns left." in out
         # The status line carries it, so the trace shows it too.
         assert told[-1].endswith("Kept 3 chunk(s), at most 9. No turns left.")
+
+    def test_the_last_turn_with_nothing_kept_says_to_search_once_more(self):
+        """enough_information is refused with nothing kept, so the last-turn
+        line must not send the model to it."""
+        session, _, _ = _make_judged_session(
+            vector={"q": THREE}, verdicts={"a": False, "b": False, "c": False}
+        )
+        session.max_turns = 2
+        out = _tools(session)["vector_search"](query="q", tool_context=_tool_context(1))
+        assert "1 turn left: the next one is your last, and nothing is kept yet" in out
+        assert "search once more with different terms, or reply done" in out
+        assert "call enough_information now" not in out
 
     def test_the_count_never_goes_backwards(self):
         session, _, _ = _make_judged_session(vector={"q": THREE[:1]})
@@ -949,6 +962,29 @@ class TestAgentVaultSearch:
         assert outcome.note.startswith("Agent stopped without saying it had enough")
         # ...and says that the model is the likely cause.
         assert agent_search.WEAK_TOOL_CALLING_HINT in outcome.note
+        # A model that never searched at all ends the same way.
+        outcome = _ScriptedSearch(lambda _tools: None).process_value("q")
+        assert outcome.note.startswith("Agent stopped without saying it had enough")
+        assert agent_search.WEAK_TOOL_CALLING_HINT in outcome.note
+
+    def test_nothing_relevant_is_not_blamed_on_the_model(self):
+        """Searching, having every hit judged irrelevant, and stopping is the
+        right ending for a question the notes do not cover -- not a sign of
+        weak tool calling."""
+
+        def script(tools: dict[str, Any]) -> None:
+            tools["vector_search"](query="q")
+            tools["vector_search"](query="r")
+
+        segment = _ScriptedSearch(script, verdicts={"a": False, "b": False, "c": False})
+        outcome = segment.process_value("q")
+        assert outcome.results == []
+        assert outcome.note == (
+            "Agent found nothing relevant to keep: kept 0 chunks after 2 "
+            "searches, ignored 3."
+        )
+        assert agent_search.WEAK_TOOL_CALLING_HINT not in outcome.note
+        assert outcome.undecided == 0
 
     def test_a_second_search_builds_on_the_first(self):
         """What the first search kept is `known` and `seen` to the second."""

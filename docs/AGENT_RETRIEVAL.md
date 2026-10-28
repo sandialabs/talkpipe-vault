@@ -150,7 +150,10 @@ holds behind any agent, not just the one the vault builds.
 The agent is told its turn budget. The opening prompt says how many turns
 it has, and every tool reply ends with how many are left (`5 of 8 turns
 left.`), the last one spelled out (`1 turn left: the next one is your last,
-so call enough_information now rather than searching again.`). The tools
+so call enough_information now rather than searching again.` — or, while
+nothing is kept, `… so search once more with different terms, or reply done
+if the notes do not cover the question.`, since `enough_information` would
+be refused). The tools
 learn the count from the agent executing them: each is declared with
 Strands' `context=True`, and `note_turn` reads the cycles of the current
 invocation from the `ToolContext` — the same number the turn cap compares
@@ -163,7 +166,7 @@ context, and a run that "succeeds" with none produces no answer at all.
 
 ## Reading the outcome
 
-`outcome.note` is one sentence and always names one of five endings. They
+`outcome.note` is one sentence and always names one of six endings. They
 mean different things about how complete the selection is, so an
 application should show it rather than swallow it:
 
@@ -172,7 +175,8 @@ application should show it rather than swallow it:
 | `Agent judged it had enough to answer (…)` | The intended ending. The parenthetical is the agent's own reason |
 | `Agent filled its N-chunk maximum` | Stopped by `max_chunks`. The selection may be cut off; raise the limit if answers look truncated |
 | `Agent hit the N-iteration cap` | Stopped by `max_iterations` before saying it had enough. What its searches kept is still the selection |
-| `Agent stopped without saying it had enough` | The model ended its turn without calling `enough_information`. **This is what a model with weak tool-calling does** — it looks like a finished run but is not one, so the note goes on to say the model is the likely cause |
+| `Agent found nothing relevant to keep` | It searched, the judge ignored every hit, and it stopped — the right ending for a question the notes do not cover (`enough_information` is refused with nothing kept). Ask answers with `NO_CONTEXT_ANSWER` |
+| `Agent stopped without saying it had enough` | The model ended its turn without calling `enough_information` while it had kept something, or without searching at all. **This is what a model with weak tool-calling does** — it looks like a finished run but is not one, so the note goes on to say the model is the likely cause |
 | `The agent stopped with an error (…)` | An exception mid-run — often the model server refusing the request (model not pulled, or no tool calling for that model). What it had kept so far is returned, and `outcome.error` holds the exception text (it is `""` for every other ending) |
 
 The note ends with how many chunks the judge ignored. With the default pack
