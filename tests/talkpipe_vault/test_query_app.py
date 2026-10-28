@@ -8,8 +8,21 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
-from talkpipe_vault.apps import query, user_settings
-from talkpipe_vault.pipelines import agent_search, retrieval_filter, vault_search
+from talkpipe_vault.apps import (
+    folders,
+    pipelines,
+    query,
+    user_settings,
+    vault_store,
+    vaults,
+)
+from talkpipe_vault.pipelines import (
+    agent_search,
+    retrieval_filter,
+    vault_metadata,
+    vault_search,
+)
+from talkpipe_vault.pipelines.config import get_whoosh_index_path
 from talkpipe_vault.pipelines.vault_search import VaultTextSearch
 from talkpipe_vault.tui.service import VaultService
 
@@ -409,10 +422,10 @@ def test_refresh_pipelines_applies_result_limit_to_keyword_search(monkeypatch):
 
         return _Fake
 
-    monkeypatch.setattr(query, "VaultSearch", _fake_segment("search"))
-    monkeypatch.setattr(query, "VaultChat", _fake_segment("chat"))
-    monkeypatch.setattr(query, "VaultTextSearch", _fake_segment("text_search"))
-    monkeypatch.setattr(query, "_keyword_search_enabled", lambda _vault_path: True)
+    monkeypatch.setattr(pipelines, "VaultSearch", _fake_segment("search"))
+    monkeypatch.setattr(pipelines, "VaultChat", _fake_segment("chat"))
+    monkeypatch.setattr(pipelines, "VaultTextSearch", _fake_segment("text_search"))
+    monkeypatch.setattr(pipelines, "_keyword_search_enabled", lambda _vault_path: True)
     query._state.rag_result_limit = 3
 
     query._refresh_pipelines(force=True)
@@ -442,10 +455,10 @@ def test_refresh_pipelines_keyword_search_defaults_result_limit(monkeypatch):
 
         return _Fake
 
-    monkeypatch.setattr(query, "VaultSearch", _fake_segment("search"))
-    monkeypatch.setattr(query, "VaultChat", _fake_segment("chat"))
-    monkeypatch.setattr(query, "VaultTextSearch", _fake_segment("text_search"))
-    monkeypatch.setattr(query, "_keyword_search_enabled", lambda _vault_path: True)
+    monkeypatch.setattr(pipelines, "VaultSearch", _fake_segment("search"))
+    monkeypatch.setattr(pipelines, "VaultChat", _fake_segment("chat"))
+    monkeypatch.setattr(pipelines, "VaultTextSearch", _fake_segment("text_search"))
+    monkeypatch.setattr(pipelines, "_keyword_search_enabled", lambda _vault_path: True)
     query._state.rag_result_limit = None
 
     query._refresh_pipelines(force=True)
@@ -479,7 +492,7 @@ def test_keyword_search_probe_detects_built_index(tmp_path):
 def test_keyword_search_page_can_rebuild_existing_whoosh_index(monkeypatch):
     """Keyword search UI should expose index rebuild when Whoosh is available."""
     # The page refreshes the pipelines itself, so the index check decides.
-    monkeypatch.setattr(query, "_keyword_search_enabled", lambda _vault_path: True)
+    monkeypatch.setattr(pipelines, "_keyword_search_enabled", lambda _vault_path: True)
     query._state.keyword_search_enabled = True
     client = TestClient(query.app)
 
@@ -748,11 +761,11 @@ def test_header_shows_chunk_count_without_full_text_index(monkeypatch):
         {"id": "chunk-2", "document": {"content": "two"}},
     ]
     monkeypatch.setattr(
-        query,
+        pipelines,
         "LanceDBDocumentStore",
         lambda **_: _FakeDocStore(rows),
     )
-    monkeypatch.setattr(query, "_keyword_search_enabled", lambda _vault_path: True)
+    monkeypatch.setattr(pipelines, "_keyword_search_enabled", lambda _vault_path: True)
     client = TestClient(query.app)
 
     response = client.get("/")
@@ -833,7 +846,7 @@ def test_chunk_content_error_does_not_echo_exception(monkeypatch):
     def boom(vault_path, path, snippet):
         raise RuntimeError("secret detail /home/user/.credentials")
 
-    monkeypatch.setattr(query, "_get_chunk_text_for_path_and_snippet", boom)
+    monkeypatch.setattr(folders, "_get_chunk_text_for_path_and_snippet", boom)
     client = TestClient(query.app)
 
     response = client.get("/chunk-content", params={"path": "x"})
@@ -851,7 +864,7 @@ def test_open_file_error_does_not_echo_exception(monkeypatch):
     def boom(vault_path, key):
         raise RuntimeError("secret detail /home/user/.credentials")
 
-    monkeypatch.setattr(query, "_resolve_indexed_source_file", boom)
+    monkeypatch.setattr(folders, "_resolve_indexed_source_file", boom)
     client = TestClient(query.app)
 
     response = client.get("/open-file", params={"path": "x"})
@@ -907,7 +920,7 @@ def test_create_whoosh_index_route_builds_searchable_index(
     """
     query._state.vault_path = str(tmp_path)
     monkeypatch.setattr(
-        query,
+        vaults,
         "_iter_lancedb_docs_for_whoosh",
         lambda _vault_path: [
             {
@@ -918,8 +931,8 @@ def test_create_whoosh_index_route_builds_searchable_index(
             }
         ],
     )
-    monkeypatch.setattr(query, "_refresh_pipelines", lambda force=False: None)
-    monkeypatch.setattr(query, "_update_document_counts", lambda vault_path: None)
+    monkeypatch.setattr(vaults, "_refresh_pipelines", lambda force=False: None)
+    monkeypatch.setattr(vaults, "_update_document_counts", lambda vault_path: None)
 
     client = TestClient(query.app)
     response = client.post("/keyword-search/create-index", follow_redirects=False)
@@ -936,7 +949,7 @@ def test_create_whoosh_index_route_builds_searchable_index(
     # The index exists, keeps the stable doc_id, and is searchable.
     from talkpipe.search.whoosh import WhooshFullTextIndex
 
-    with WhooshFullTextIndex(query.get_whoosh_index_path(str(tmp_path))) as ix:
+    with WhooshFullTextIndex(get_whoosh_index_path(str(tmp_path))) as ix:
         hits = ix.text_search("abc")
         assert [hit.doc_id for hit in hits] == ["row-1"]
         assert hits[0].document["path"] == "a.txt"
@@ -953,10 +966,10 @@ def test_create_whoosh_index_route_replaces_existing_index(monkeypatch, tmp_path
         {"doc_id": "old", "content": "stale text", "path": "old.txt", "filename": ""}
     ]
     monkeypatch.setattr(
-        query, "_iter_lancedb_docs_for_whoosh", lambda _vault_path: documents
+        vaults, "_iter_lancedb_docs_for_whoosh", lambda _vault_path: documents
     )
-    monkeypatch.setattr(query, "_refresh_pipelines", lambda force=False: None)
-    monkeypatch.setattr(query, "_update_document_counts", lambda vault_path: None)
+    monkeypatch.setattr(vaults, "_refresh_pipelines", lambda force=False: None)
+    monkeypatch.setattr(vaults, "_update_document_counts", lambda vault_path: None)
     client = TestClient(query.app)
     client.post("/keyword-search/create-index", follow_redirects=False)
     _wait_for_fulltext_job()
@@ -969,7 +982,7 @@ def test_create_whoosh_index_route_replaces_existing_index(monkeypatch, tmp_path
 
     from talkpipe.search.whoosh import WhooshFullTextIndex
 
-    with WhooshFullTextIndex(query.get_whoosh_index_path(str(tmp_path))) as ix:
+    with WhooshFullTextIndex(get_whoosh_index_path(str(tmp_path))) as ix:
         assert ix.text_search("stale") == []
         assert [hit.doc_id for hit in ix.text_search("fresh")] == ["new"]
 
@@ -988,12 +1001,12 @@ def test_iter_lancedb_docs_for_whoosh_preserves_source_path(monkeypatch):
         }
     ]
     monkeypatch.setattr(
-        query,
+        vault_store,
         "LanceDBDocumentStore",
         lambda **_: _FakeDocStore(rows),
     )
     monkeypatch.setattr(
-        query, "ensure_supported_vault_layout", lambda _vault_path: None
+        vault_store, "ensure_supported_vault_layout", lambda _vault_path: None
     )
 
     documents = query._iter_lancedb_docs_for_whoosh("/tmp/test-vault")
@@ -1654,7 +1667,7 @@ def test_chunk_content_route_finds_lancedb_row_by_id_and_middle_snippet(monkeypa
     query._state.vault_path = "/tmp/test-vault"
     full_text = "Introductory text. The matching passage appears in the middle."
     monkeypatch.setattr(
-        query,
+        vault_store,
         "_load_docs_rows",
         lambda _vault_path: [
             {
@@ -1682,7 +1695,7 @@ def test_chunk_content_route_finds_lancedb_row_by_source_path(monkeypatch):
     query._state.vault_path = "/tmp/test-vault"
     full_text = "Introductory text. The matching passage appears in the middle."
     monkeypatch.setattr(
-        query,
+        vault_store,
         "_load_docs_rows",
         lambda _vault_path: [
             {
@@ -1710,7 +1723,7 @@ def test_chunk_content_route_falls_back_to_snippet_for_stale_whoosh_id(monkeypat
     query._state.vault_path = "/tmp/test-vault"
     full_text = "Introductory text. The matching passage appears in the middle."
     monkeypatch.setattr(
-        query,
+        vault_store,
         "_load_docs_rows",
         lambda _vault_path: [
             {
@@ -1874,7 +1887,7 @@ def test_open_file_route_serves_file_by_row_id(tmp_path, monkeypatch):
     source_file = tmp_path / "source.txt"
     source_file.write_text("source text")
     monkeypatch.setattr(
-        query,
+        vault_store,
         "_load_docs_rows",
         lambda _vault_path: [
             {
@@ -1897,7 +1910,7 @@ def test_open_file_route_serves_file_by_indexed_path(tmp_path, monkeypatch):
     source_file = tmp_path / "source.txt"
     source_file.write_text("source text")
     monkeypatch.setattr(
-        query,
+        vault_store,
         "_load_docs_rows",
         lambda _vault_path: [
             {
@@ -1921,7 +1934,7 @@ def test_open_file_route_downloads_types_browsers_should_not_render(
     source_file = tmp_path / "source.html"
     source_file.write_text("<script>alert(1)</script>")
     monkeypatch.setattr(
-        query,
+        vault_store,
         "_load_docs_rows",
         lambda _vault_path: [
             {
@@ -1940,7 +1953,7 @@ def test_open_file_route_downloads_types_browsers_should_not_render(
 
 def test_open_file_route_rejects_unindexed_key(monkeypatch):
     """Open-file must not serve anything the vault index does not reference."""
-    monkeypatch.setattr(query, "_load_docs_rows", lambda _vault_path: [])
+    monkeypatch.setattr(vault_store, "_load_docs_rows", lambda _vault_path: [])
     client = TestClient(query.app)
 
     response = client.get("/open-file", params={"path": "/etc/passwd"})
@@ -1953,7 +1966,7 @@ def test_open_file_route_reports_missing_file(tmp_path, monkeypatch):
     """A referenced file absent from this filesystem should explain itself."""
     missing = tmp_path / "gone.txt"
     monkeypatch.setattr(
-        query,
+        vault_store,
         "_load_docs_rows",
         lambda _vault_path: [
             {
@@ -2002,7 +2015,7 @@ def test_first_run_redirect_is_not_an_error():
 def test_indexed_source_paths_reads_references_from_docs_rows(monkeypatch):
     """Allowed source-file paths should come from indexed docs-row metadata."""
     monkeypatch.setattr(
-        query,
+        vault_store,
         "_load_docs_rows",
         lambda _vault_path: [
             {
@@ -2114,7 +2127,7 @@ def test_apply_vault_embedding_config_ignores_unavailable_recorded_source(
 ):
     """A vault recorded with a now-missing embedder falls back instead of raising."""
     monkeypatch.setattr(
-        query.vault_metadata,
+        vault_metadata,
         "load_embedding_config",
         lambda path: {"source": "uninstalled-plugin-source", "model": "some-model"},
     )
@@ -2132,7 +2145,7 @@ def test_record_vault_embedding_config_writes_sidecar(tmp_path, monkeypatch):
     from talkpipe_vault.pipelines import vault_metadata
 
     monkeypatch.setattr(
-        query.vault_metadata, "probe_embedding_dimension", lambda source, model: 256
+        vault_metadata, "probe_embedding_dimension", lambda source, model: 256
     )
     query._record_vault_embedding_config(
         str(tmp_path), "model2vec", "minishlab/potion-retrieval-32M"

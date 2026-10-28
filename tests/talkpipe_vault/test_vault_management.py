@@ -3,32 +3,33 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from talkpipe_vault.apps import query, user_settings
+from talkpipe_vault.apps import pipelines, query, user_settings, vaults
+from talkpipe_vault.pipelines.config import WHOOSH_INDEX_FIELDS
 
 
 @pytest.fixture(autouse=True)
 def isolated_app(tmp_path, monkeypatch):
     """Isolate app state and persisted settings for each test."""
     monkeypatch.setenv(user_settings.VAULT_HOME_ENV, str(tmp_path / "vault-home"))
-    with query._index_job_lock:
-        query._index_job.running = False
-        query._index_job.phase = ""
-        query._index_job.source = ""
-        query._index_job.vault_path = ""
-        query._index_job.embedding = ""
-        query._index_job.total_files = 0
-        query._index_job.files_done = 0
-        query._index_job.current_file = ""
-        query._index_job.chunks = 0
-        query._index_job.message = ""
-        query._index_job.error = None
-    with query._fulltext_index_job_lock:
-        query._fulltext_index_job.running = False
-        query._fulltext_index_job.vault_path = ""
-        query._fulltext_index_job.total_docs = 0
-        query._fulltext_index_job.docs_done = 0
-        query._fulltext_index_job.message = ""
-        query._fulltext_index_job.error = None
+    with vaults._index_job_lock:
+        vaults._index_job.running = False
+        vaults._index_job.phase = ""
+        vaults._index_job.source = ""
+        vaults._index_job.vault_path = ""
+        vaults._index_job.embedding = ""
+        vaults._index_job.total_files = 0
+        vaults._index_job.files_done = 0
+        vaults._index_job.current_file = ""
+        vaults._index_job.chunks = 0
+        vaults._index_job.message = ""
+        vaults._index_job.error = None
+    with vaults._fulltext_index_job_lock:
+        vaults._fulltext_index_job.running = False
+        vaults._fulltext_index_job.vault_path = ""
+        vaults._fulltext_index_job.total_docs = 0
+        vaults._fulltext_index_job.docs_done = 0
+        vaults._fulltext_index_job.message = ""
+        vaults._fulltext_index_job.error = None
     query._state.vault_path = ""
     query._state.search_pipeline = None
     query._state.chat_pipeline = None
@@ -161,7 +162,7 @@ class TestVaultSelection:
         vault_a = tmp_path / "vault-with-whoosh"
         vault_a.mkdir()
         with WhooshFullTextIndex(
-            get_whoosh_index_path(str(vault_a)), fields=query.WHOOSH_INDEX_FIELDS
+            get_whoosh_index_path(str(vault_a)), fields=WHOOSH_INDEX_FIELDS
         ) as ix:
             ix.add_document({"content": "hello", "path": "/x", "filename": "x"})
 
@@ -584,9 +585,11 @@ class TestModelSettings:
             def as_function(self, single_in, single_out):
                 return lambda _value: "ok"
 
-        monkeypatch.setattr(query, "VaultSearch", _FakeVaultSearch)
-        monkeypatch.setattr(query, "VaultChat", _FakeVaultChat)
-        monkeypatch.setattr(query, "_keyword_search_enabled", lambda _vault_path: False)
+        monkeypatch.setattr(pipelines, "VaultSearch", _FakeVaultSearch)
+        monkeypatch.setattr(pipelines, "VaultChat", _FakeVaultChat)
+        monkeypatch.setattr(
+            pipelines, "_keyword_search_enabled", lambda _vault_path: False
+        )
         query._state.vault_path = str(tmp_path)
         query._state.rag_result_limit = 7
 
@@ -866,7 +869,7 @@ class TestDocumentIndexing:
                 dimension=3,
             )
 
-        monkeypatch.setattr(query, "build_rag_database", fake_build)
+        monkeypatch.setattr(vaults, "build_rag_database", fake_build)
 
         indexed, skipped = query.index_documents_into_vault(
             vault_path=str(tmp_path),
@@ -989,9 +992,9 @@ class TestDocumentIndexing:
             release.wait(timeout=30)
             return 3, 0
 
-        monkeypatch.setattr(query, "index_documents_into_vault", fake_index)
-        monkeypatch.setattr(query, "_refresh_pipelines", lambda force=False: None)
-        monkeypatch.setattr(query, "_update_document_counts", lambda vault_path: None)
+        monkeypatch.setattr(vaults, "index_documents_into_vault", fake_index)
+        monkeypatch.setattr(vaults, "_refresh_pipelines", lambda force=False: None)
+        monkeypatch.setattr(vaults, "_update_document_counts", lambda vault_path: None)
 
         docs = tmp_path / "docs"
         docs.mkdir()

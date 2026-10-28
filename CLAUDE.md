@@ -32,7 +32,13 @@ src/talkpipe_vault/
 ├── initialize_plugin.py        # talkpipe.plugins entry point (no-op; entry points do the work)
 ├── watchdog.py                 # File system monitoring (fileWatcher source)
 ├── apps/
-│   ├── query.py                # FastAPI web application (all routes + run_app)
+│   ├── query.py                # FastAPI web application: routes, page rendering, run_app; re-exports the modules below
+│   ├── state.py                # AppState + _state singleton, effective settings, the folder scheduler and index paths, config status
+│   ├── pipelines.py            # init_pipelines / _refresh_pipelines: builds every pipeline on the state
+│   ├── folders.py              # Folder mode glue both interfaces share (add/close/remove, status, notices, lookups)
+│   ├── vaults.py               # Named vaults: open/suggest/delete, retrieval-filter context, background index jobs
+│   ├── results.py              # Hits → display rows, the shared agent branch, source-file responses
+│   ├── vault_store.py          # Reading a vault's docs table and Whoosh index (rows, chunk/source lookup, rebuild)
 │   ├── vault_server.py         # vault-server CLI entry point (port choice)
 │   ├── vault_index.py          # vault-index CLI: runs indexFolder as a ChatterLang script
 │   ├── user_settings.py        # Persisted UI settings (recent vaults, model overrides)
@@ -94,8 +100,14 @@ Routes in `apps/query.py`:
   resolved by lookup key — works without `--show-source-paths`), `/refresh`.
 - Pages that need a vault redirect to `/documents` when none is selected.
 
-State lives in the module-level `_state: AppState` singleton; pipelines are rebuilt by
-`_refresh_pipelines()` (throttled to every 5s unless forced).
+State lives in the module-level `_state: AppState` singleton (`apps/state.py`); pipelines
+are rebuilt by `apps/pipelines.py`'s `_refresh_pipelines()` (throttled to every 5s unless
+forced). `query.py` holds only the routes, page rendering and `run_app`; the helpers
+live in `state.py`, `pipelines.py`, `folders.py`, `vaults.py`, `results.py` and
+`vault_store.py`, and `query.py` re-exports them (its `__all__`) for existing imports.
+The process globals rebound at run time — `state._folder_scheduler`, `vaults._index_job`,
+`vaults._fulltext_index_job` — are deliberately not re-exported: read them from their
+module, and monkeypatch a helper in the module that *calls* it.
 
 ## The Terminal Interface
 
@@ -106,7 +118,9 @@ same module-level helpers the routes in `apps/query.py` call (`init_pipelines`,
 `_refresh_pipelines`, `start_index_job`, `_process_semantic_results`, `_collect_config_status`,
 `_resolve_vault_request`, …) on the same `_state` singleton, so both interfaces share one
 implementation and the web application is not modified. Keep it that way: a TUI feature
-that needs new logic gets a helper in `query.py` (or a pipelines module) that both
+that needs new logic gets a helper in the apps module it belongs to (`state.py`,
+`pipelines.py`, `folders.py`, `vaults.py`, `results.py`, `vault_store.py` — never in
+`query.py`'s routes, or a pipelines module) that both
 interfaces call — never TUI-only copies of route logic. Every service method is
 synchronous and blocking; the app runs them in `@work(thread=True)` workers and updates
 widgets via `call_from_thread`. Tests (`tests/talkpipe_vault/test_tui_*.py`) exercise the
@@ -260,7 +274,8 @@ merge inside a group, `reciprocal_rank_fusion` across), tags hits with
 first use, skipping indexes with no vectors yet (`vectors_started`).
 `keyword_fallback` adds keyword hits for folders still embedding.
 
-**App glue** (`apps/query.py`, "Folder mode" block): `add_folder`,
+**App glue** (`apps/folders.py`; the process's `FolderScheduler` and `_index_paths`
+are in `apps/state.py`): `add_folder`,
 `close_folder`, `open_closed_folder`, `remove_folder` (open or closed),
 `reembed_folder`, `rebuild_folder` (all under `_folders_lock`),
 `folders_status` (open folders' progress, then closed folders as

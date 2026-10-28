@@ -284,7 +284,10 @@ class TestSessionTools:
     def test_default_sized_chunk_is_shown_whole(self):
         """The agent decides on what it sees, so a chunk indexed with the
         default settings (a shingle of several pieces) must not be clipped."""
-        from talkpipe_vault.apps.query import DEFAULT_CHUNK_SIZE, DEFAULT_SHINGLE_SIZE
+        from talkpipe_vault.pipelines.config import (
+            DEFAULT_CHUNK_SIZE,
+            DEFAULT_SHINGLE_SIZE,
+        )
 
         pieces = ["y" * DEFAULT_CHUNK_SIZE] * DEFAULT_SHINGLE_SIZE
         text = " ".join(pieces)

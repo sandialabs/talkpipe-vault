@@ -8,7 +8,8 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from talkpipe_vault.apps import query, user_settings, vault_server
+from talkpipe_vault.apps import folders, query, user_settings, vault_server
+from talkpipe_vault.apps import state as app_state
 from talkpipe_vault.pipelines import retrieval_filter
 from talkpipe_vault.pipelines.config import FOLDER_INDEX_DIRNAME
 from tests.conftest import FAKE_EMBEDDING_SOURCE
@@ -33,9 +34,9 @@ def folder_app(tmp_path, monkeypatch, fake_embedder):
     query._state.last_refresh_time = 0.0
     query._clear_pipelines(query._state)
     yield fake_embedder
-    if query._folder_scheduler is not None:
-        query._folder_scheduler.stop()
-        query._folder_scheduler = None
+    if app_state._folder_scheduler is not None:
+        app_state._folder_scheduler.stop()
+        app_state._folder_scheduler = None
     query._state.folders = []
     query._state.vault_path = ""
     query._clear_pipelines(query._state)
@@ -215,7 +216,7 @@ def test_ask_says_indexing_just_started_until_a_file_is_indexed(
     real_status = query.folders_status
     scanning = {"phase": "scanning", "files_total": 0, "files_keyword": 0}
     monkeypatch.setattr(
-        query,
+        folders,
         "folders_status",
         lambda state: [{**s, **scanning} for s in real_status(state)],
     )
@@ -225,7 +226,7 @@ def test_ask_says_indexing_just_started_until_a_file_is_indexed(
     # An empty folder whose scan finished is not "just started".
     scanning["phase"] = "ready"
     assert query.ask_waiting(query._state) == ""
-    monkeypatch.setattr(query, "folders_status", real_status)
+    monkeypatch.setattr(folders, "folders_status", real_status)
     assert _wait(_searchable_by_keyword)
     assert query.ask_waiting(query._state) == ""
 
@@ -531,9 +532,9 @@ def test_open_file_serves_a_document_from_an_index_built_on_windows(
     monkeypatch.setattr(
         query, "_folder_chunk", lambda state, key: (document, index_path)
     )
-    status = dict(query.folder_index.read_index_status(index_path))
+    status = dict(folders.folder_index.read_index_status(index_path))
     status["recorded_root"] = "C:\\Users\\x\\Docs"
-    monkeypatch.setattr(query.folder_index, "read_index_status", lambda path: status)
+    monkeypatch.setattr(folders.folder_index, "read_index_status", lambda path: status)
     served = client.get("/open-file", params={"path": hit["lookup_path"]})
     assert served.status_code == 200
     assert b"lighthouse keeper" in served.content

@@ -11,15 +11,10 @@ Provides the following via web interface:
 """
 
 import argparse
-import atexit
-import contextlib
 import errno
-import glob as globlib
 import json
 import logging
-import mimetypes
 import os
-import re
 import shutil
 import socket
 import sys
@@ -27,14 +22,10 @@ import threading
 import time
 import urllib.parse
 import urllib.request
-import uuid
 import webbrowser
-from collections.abc import Callable, Iterator
-from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Annotated, Any
 
-import filelock
 import uvicorn
 from fastapi import Depends, FastAPI, Form, Request
 from fastapi.responses import (
@@ -47,50 +38,218 @@ from fastapi.responses import (
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from talkpipe.llm.config import getEmbeddingSources, getPromptSources
-from talkpipe.pipelines.vector_databases import (
-    EmbedderPreflightError,
-    EmbeddingDimensionMismatchError,
-    RagIngestError,
-    build_rag_database,
-)
-from talkpipe.search.lancedb import LanceDBDocumentStore
-from talkpipe.search.whoosh import WhooshFullTextIndex
 from talkpipe.util.config import configure_logger
 
 from talkpipe_vault import DIST_NAME, __version__, memtune
 from talkpipe_vault.apps import access_control, credentials, user_settings
+from talkpipe_vault.apps.folders import (
+    ASK_WAITING,
+    FOLDER_CLOSED_PROGRESS,
+    FOLDERS_INDEX_THEMSELVES_TEMPLATE,
+    FOLDERS_KEEP_EMBEDDER_TEMPLATE,
+    FOLDERS_LEFT_NOTE,
+    KEYWORD_SEARCH_STARTING,
+    SEMANTIC_SEARCH_WAITING,
+    SEMANTIC_SEARCH_WAITING_TEMPLATE,
+    _folder_banner,
+    _folder_chunk,
+    _folder_progress_line,
+    _folder_source_file,
+    _leave_folder_mode,
+    _partial_index_note,
+    add_folder,
+    ask_waiting,
+    chunk_text,
+    close_folder,
+    folders_status,
+    is_documents_folder,
+    open_closed_folder,
+    open_saved_folders,
+    rebuild_folder,
+    reembed_folder,
+    remove_folder,
+    resolve_source_file,
+    semantic_search_waiting,
+    startup_folders,
+)
+from talkpipe_vault.apps.pipelines import (
+    _load_active_filter,
+    _refresh_agent_pipelines,
+    _refresh_pipelines,
+    _update_document_counts,
+    init_pipelines,
+)
+from talkpipe_vault.apps.results import (
+    AGENT_FILTER_NOTE,
+    AGENT_SEARCH_FILTER_NOTE,
+    AGENT_UNAVAILABLE_NOTE,
+    _answer_with_agent,
+    _answered_by,
+    _chat_citations,
+    _document_file_response,
+    _filter_outcome_note,
+    _prefix_note,
+    _process_keyword_results,
+    _process_semantic_results,
+    _select_with_agent,
+    _strip_answer_source_paths,
+)
+from talkpipe_vault.apps.state import (
+    DEFAULT_AGENT_SEARCH_ITERATIONS,
+    DEFAULT_AGENT_SEARCH_RESULT_COUNT,
+    DEFAULT_RAG_RESULT_LIMIT,
+    DEFAULT_SEARCH_RESULT_LIMIT,
+    EXTRA_EFFORT_ITERATION_FACTOR,
+    AppState,
+    _apply_vault_embedding_config,
+    _clear_pipelines,
+    _collect_config_status,
+    _effective_models,
+    _existing_non_vault_entries,
+    _open_folder_indexes,
+    _parse_int_setting,
+    _state,
+    _vault_selected,
+    get_state,
+    load_saved_model_overrides,
+)
+from talkpipe_vault.apps.vault_store import (
+    _build_whoosh_index,
+    _get_chunk_text_for_path_and_snippet,
+    _indexed_source_paths,
+    _iter_lancedb_docs_for_whoosh,
+    _keyword_search_enabled,
+    _load_docs_rows,
+    _resolve_indexed_source_file,
+)
+from talkpipe_vault.apps.vaults import (
+    _activate_vault,
+    _fulltext_index_job_snapshot,
+    _index_job_snapshot,
+    _is_dangerous_delete_target,
+    _nonglob_prefix,
+    _record_vault_embedding_config,
+    _resolve_source_pattern,
+    _resolve_vault_request,
+    _retrieval_filter_context,
+    _run_index_job,
+    _vault_source_folder,
+    index_documents_into_vault,
+    retrieval_filter_blocker,
+    start_fulltext_index_job,
+    start_index_job,
+    suggest_vault_path,
+)
 from talkpipe_vault.pipelines import (
-    agent_search,
-    diagnostics,
-    folder_files,
-    folder_index,
     retrieval_filter,
-    vault_metadata,
 )
 from talkpipe_vault.pipelines.config import (
-    DEFAULT_CHUNK_SIZE,
-    DEFAULT_SHINGLE_OVERLAP,
-    DEFAULT_SHINGLE_SIZE,
-    DEFAULT_VECTOR_TABLE_NAME,
     FOLDER_INDEX_DIRNAME,
-    WHOOSH_INDEX_FIELDS,
-    ensure_supported_vault_layout,
-    existing_non_vault_entries,
-    get_chat_model,
-    get_chat_source,
-    get_embedding_model,
-    get_embedding_source,
-    get_retrieval_template,
-    get_vector_db_path,
-    get_whoosh_index_path,
 )
-from talkpipe_vault.pipelines.search_results import (
-    SEARCH_RESULT_RENAMES,
-    SearchResultFilter,
-    normalize_document_cell,
-)
-from talkpipe_vault.pipelines.vault_chat import VaultChat
-from talkpipe_vault.pipelines.vault_search import VaultSearch, VaultTextSearch
+
+# Everything the terminal interface, vault-server and the tests reach through
+# this module. The implementation lives in the apps modules imported above;
+# this module keeps the web routes, page rendering and server startup. The
+# process globals rebound at run time (state._folder_scheduler,
+# vaults._index_job, vaults._fulltext_index_job) are deliberately not
+# re-exported: a copy of a rebound name goes stale.
+__all__ = [
+    "AGENT_FILTER_NOTE",
+    "AGENT_SEARCH_FILTER_NOTE",
+    "AGENT_UNAVAILABLE_NOTE",
+    "ASK_WAITING",
+    "DEFAULT_AGENT_SEARCH_ITERATIONS",
+    "DEFAULT_AGENT_SEARCH_RESULT_COUNT",
+    "DEFAULT_RAG_RESULT_LIMIT",
+    "DEFAULT_SEARCH_RESULT_LIMIT",
+    "EXTRA_EFFORT_ITERATION_FACTOR",
+    "FOLDERS_INDEX_THEMSELVES_TEMPLATE",
+    "FOLDERS_KEEP_EMBEDDER_TEMPLATE",
+    "FOLDERS_LEFT_NOTE",
+    "FOLDER_CLOSED_PROGRESS",
+    "KEYWORD_SEARCH_STARTING",
+    "SEMANTIC_SEARCH_WAITING",
+    "SEMANTIC_SEARCH_WAITING_TEMPLATE",
+    "AppState",
+    "_activate_vault",
+    "_answer_with_agent",
+    "_answered_by",
+    "_apply_vault_embedding_config",
+    "_browser_url",
+    "_build_whoosh_index",
+    "_chat_citations",
+    "_clear_pipelines",
+    "_collect_config_status",
+    "_document_file_response",
+    "_effective_models",
+    "_existing_non_vault_entries",
+    "_filter_outcome_note",
+    "_folder_banner",
+    "_folder_chunk",
+    "_folder_progress_line",
+    "_folder_source_file",
+    "_fulltext_index_job_snapshot",
+    "_get_chunk_text_for_path_and_snippet",
+    "_index_job_snapshot",
+    "_indexed_source_paths",
+    "_is_dangerous_delete_target",
+    "_iter_lancedb_docs_for_whoosh",
+    "_keyword_search_enabled",
+    "_launch_browser_when_ready",
+    "_leave_folder_mode",
+    "_load_active_filter",
+    "_load_docs_rows",
+    "_nonglob_prefix",
+    "_open_folder_indexes",
+    "_parse_int_setting",
+    "_partial_index_note",
+    "_port_in_use",
+    "_prefix_note",
+    "_process_keyword_results",
+    "_process_semantic_results",
+    "_record_vault_embedding_config",
+    "_refresh_agent_pipelines",
+    "_refresh_pipelines",
+    "_resolve_indexed_source_file",
+    "_resolve_source_pattern",
+    "_resolve_vault_request",
+    "_retrieval_filter_context",
+    "_run_index_job",
+    "_running_instance_url",
+    "_select_with_agent",
+    "_state",
+    "_strip_answer_source_paths",
+    "_update_document_counts",
+    "_vault_selected",
+    "_vault_source_folder",
+    "add_folder",
+    "app",
+    "ask_waiting",
+    "chunk_text",
+    "close_folder",
+    "folders_status",
+    "get_state",
+    "index_documents_into_vault",
+    "init_pipelines",
+    "is_documents_folder",
+    "list_directories",
+    "load_saved_model_overrides",
+    "main",
+    "open_closed_folder",
+    "open_saved_folders",
+    "rebuild_folder",
+    "reembed_folder",
+    "remove_folder",
+    "resolve_source_file",
+    "retrieval_filter_blocker",
+    "run_app",
+    "semantic_search_waiting",
+    "start_fulltext_index_job",
+    "start_index_job",
+    "startup_folders",
+    "suggest_vault_path",
+    "templates",
+]
 
 configure_logger("root:ERROR")
 
@@ -99,115 +258,10 @@ logger = logging.getLogger(__name__)
 # Constants
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 STATIC_DIR = Path(__file__).parent / "static"
-SNIPPET_MAX_LENGTH = 300
-# Chunks Ask (and keyword search) retrieve when the Settings page sets none.
-# With the default 300x3 shingles, 5 chunks often held the right file but not
-# the passage the answer needed; 8 answered measurably better on a Q/A benchmark.
-DEFAULT_RAG_RESULT_LIMIT = 8
-# How many results the Semantic Search page shows. Unlike the Ask/keyword
-# count, this is fixed rather than configurable; both the plain and the
-# filtered semantic pipelines pass it explicitly, so the page's result count
-# is this constant rather than whatever default the vector store happens to
-# ship.
-DEFAULT_SEARCH_RESULT_LIMIT = 10
-DEFAULT_AGENT_SEARCH_ITERATIONS = agent_search.DEFAULT_MAX_ITERATIONS
-DEFAULT_AGENT_SEARCH_RESULT_COUNT = agent_search.DEFAULT_MAX_CHUNKS
-# Extra Effort multiplies the agent's iteration cap for one question. On the
-# vault-tune benchmark doubling it (8 -> 16) lifted a strong tool-calling model
-# on multi-step questions and changed little for weaker ones, so it is an
-# opt-in per question rather than a higher default.
-EXTRA_EFFORT_ITERATION_FACTOR = 2
-
-
-@dataclass
-class AppState:
-    """Application state container for vault configuration and pipelines."""
-
-    vault_path: str = ""
-    search_pipeline: Callable[[str], Any] | None = None
-    # Plain chat returns the answer string, or a result dict when it is built
-    # with include_background (filtered retrieval); keyword chat always
-    # returns the result dict.
-    chat_pipeline: Callable[[str], str | dict[str, Any]] | None = None
-    keyword_chat_pipeline: Callable[[str], dict[str, Any]] | None = None
-    keyword_search_pipeline: Callable[[str], list[Any]] | None = None
-    # Agent-driven retrieval, offered on both search-style pages: an agent
-    # runs the vector and keyword searches as tools, keeps/ignores chunks, and
-    # stops when it judges it could answer the question from what it kept.
-    # agent_search_result_count only bounds how much it may collect, and
-    # agent_search_iterations how many turns it may take, if it never does.
-    # The Search page shows the chunks it kept; Ask answers
-    # from them. Both come from one AgentVaultChat segment (built once, so the
-    # embedder and the agent model are not set up twice), and both are None
-    # when the agent's model cannot be built — the pages then offer their
-    # plain pipelines only.
-    agent_search_pipeline: Callable[[str], agent_search.AgentSearchOutcome] | None = (
-        None
-    )
-    agent_chat_pipeline: Callable[[str], agent_search.AgentChatOutcome] | None = None
-    # The same two with EXTRA_EFFORT_ITERATION_FACTOR times the iteration cap,
-    # behind the pages' Extra Effort checkbox; set and cleared with the above.
-    agent_search_extra_pipeline: (
-        Callable[[str], agent_search.AgentSearchOutcome] | None
-    ) = None
-    agent_chat_extra_pipeline: Callable[[str], agent_search.AgentChatOutcome] | None = (
-        None
-    )
-    # Why the agent pipelines could not be built (empty when they were), so
-    # the pages can say why the option is missing instead of hiding it
-    # without a word.
-    agent_unavailable_reason: str = ""
-    # Retrieval filter (issue #22): the open vault's script, whether it is
-    # active (present + enabled + compiles), and the search-page pipelines
-    # that apply it on demand. Each filtered pipeline returns
-    # (results, filter_error) where filter_error is None unless the script
-    # failed at run time and the unfiltered results were kept.
-    result_filter_script: str | None = None
-    result_filter_active: bool = False
-    result_filter_strict: bool = False
-    result_filter_error: str | None = None
-    filtered_search_pipeline: Callable[[str], tuple[list[Any], str | None]] | None = (
-        None
-    )
-    filtered_keyword_search_pipeline: (
-        Callable[[str], tuple[list[Any], str | None]] | None
-    ) = None
-    shingled_chunks_count: int = 0
-    keyword_search_enabled: bool = False
-    show_source_paths: bool = False
-    last_refresh_time: float = 0.0
-    # Model overrides chosen in the web interface. None falls through to
-    # TalkPipe configuration and then the vault defaults.
-    embedding_model: str | None = None
-    embedding_source: str | None = None
-    chat_model: str | None = None
-    chat_source: str | None = None
-    chunk_size: int | None = None
-    shingle_size: int | None = None
-    shingle_overlap: int | None = None
-    rag_result_limit: int | None = None
-    agent_search_iterations: int | None = None
-    agent_search_result_count: int | None = None
-    # Folder mode: the folders searched directly, each with its own index.
-    # While any is open, vault_path is the first folder's index so the
-    # single-vault helpers keep working, and the pipelines search them all.
-    folders: list[str] = field(default_factory=list)
-    # The folder all of the open named vault's documents come from, offered
-    # as "search that folder instead"; None until computed for this vault.
-    vault_source_folder: str | None = None
-
-
-# Application state singleton
-_state = AppState()
 
 app = FastAPI(title="Talkpipe Vault", description="Search and chat with your vault")
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
-
-
-def get_state() -> AppState:
-    """Dependency that provides access to application state."""
-    return _state
 
 
 def _template_context(
@@ -240,1555 +294,12 @@ def _template_context(
     return context
 
 
-def _effective_models(state: AppState) -> dict[str, Any]:
-    """Resolve the app configuration in effect (overrides, config, defaults)."""
-    return {
-        "embedding_model": state.embedding_model or get_embedding_model(),
-        "embedding_source": state.embedding_source or get_embedding_source(),
-        "chat_model": state.chat_model or get_chat_model(),
-        "chat_source": state.chat_source or get_chat_source(),
-        "chunk_size": state.chunk_size or DEFAULT_CHUNK_SIZE,
-        "shingle_size": state.shingle_size or DEFAULT_SHINGLE_SIZE,
-        "shingle_overlap": state.shingle_overlap or DEFAULT_SHINGLE_OVERLAP,
-        "rag_result_limit": state.rag_result_limit or DEFAULT_RAG_RESULT_LIMIT,
-        "agent_search_iterations": state.agent_search_iterations
-        or DEFAULT_AGENT_SEARCH_ITERATIONS,
-        "agent_search_result_count": state.agent_search_result_count
-        or DEFAULT_AGENT_SEARCH_RESULT_COUNT,
-    }
-
-
-def _drop_unavailable_source(
-    source: str | None, model: str | None, role: str, origin: str
-) -> tuple[str | None, str | None]:
-    """Return (source, model), dropping both when the source is unavailable.
-
-    A persisted provider choice can stop being valid — for example a
-    plugin-provided embedder whose package was uninstalled. Building a pipeline
-    with it raises, which used to abort server startup entirely; the fix then
-    lives on a Settings page that never comes up. Dropping the stale pair (the
-    model name is meaningless without its provider) falls back to the TalkPipe
-    configuration/defaults so the server boots and the Settings page can flag
-    the mismatch.
-    """
-    if not source:
-        return source, model
-    available = getEmbeddingSources() if role == "embedding" else getPromptSources()
-    if source in available:
-        return source, model
-    message = (
-        f"Warning: saved {role} source '{source}' ({origin}) is not available "
-        f"(available: {', '.join(available)}). Falling back to the configured "
-        f"default; fix the choice on the Settings page or edit "
-        f"{user_settings.settings_file_path()}."
-    )
-    print(message, file=sys.stderr)
-    logger.warning(message)
-    return None, None
-
-
-def load_saved_model_overrides() -> None:
-    """Apply model overrides persisted by the settings page to app state."""
-    overrides = user_settings.get_model_overrides()
-    embedding_source, embedding_model = _drop_unavailable_source(
-        overrides.get("embedding_source"),
-        overrides.get("embedding_model"),
-        "embedding",
-        "saved settings",
-    )
-    chat_source, chat_model = _drop_unavailable_source(
-        overrides.get("chat_source"),
-        overrides.get("chat_model"),
-        "chat",
-        "saved settings",
-    )
-    _state.embedding_model = embedding_model
-    _state.embedding_source = embedding_source
-    _state.chat_model = chat_model
-    _state.chat_source = chat_source
-    _state.chunk_size = overrides.get("chunk_size")
-    _state.shingle_size = overrides.get("shingle_size")
-    _state.shingle_overlap = overrides.get("shingle_overlap")
-    _state.rag_result_limit = overrides.get("rag_result_limit")
-    _state.agent_search_iterations = overrides.get("agent_search_iterations")
-    _state.agent_search_result_count = overrides.get("agent_search_result_count")
-
-
-def _parse_int_setting(value: str, label: str, minimum: int) -> int | None:
-    """Parse an integer setting from form data, allowing blank values."""
-    text = value.strip()
-    if not text:
-        return None
-    try:
-        number = int(text)
-    except ValueError as exc:
-        raise ValueError(f"{label} must be a whole number.") from exc
-    if number < minimum:
-        raise ValueError(f"{label} must be at least {minimum}.")
-    return number
-
-
 def _redirect_with_message(url: str, **params: str) -> RedirectResponse:
     """Redirect to a vault page with query-string feedback parameters."""
     filtered = {key: value for key, value in params.items() if value}
     if filtered:
         url = f"{url}?{urllib.parse.urlencode(filtered)}"
     return RedirectResponse(url=url, status_code=303)
-
-
-def _keyword_search_enabled(vault_path: str) -> bool:
-    """Return True when the vault has a readable Whoosh full-text index."""
-    if not vault_path:
-        return False
-
-    whoosh_index_path = get_whoosh_index_path(vault_path)
-
-    # Opening WhooshFullTextIndex creates the index directory as a side
-    # effect, which would leave every vault with a confusing empty
-    # fulltext_vault/ folder just from checking whether keyword search is
-    # available. Only probe when the directory already exists.
-    if not os.path.isdir(whoosh_index_path):
-        return False
-
-    try:
-        with WhooshFullTextIndex(whoosh_index_path):
-            return True
-    except Exception:
-        return False
-
-
-def _iter_lancedb_docs_for_whoosh(vault_path: str) -> list[dict[str, str]]:
-    """
-    Read docs-table records from LanceDB and normalize for Whoosh indexing.
-
-    Expects rows where `document` is either JSON text or a dict containing content/path/title.
-    """
-    documents: list[dict[str, str]] = []
-    for row in _load_docs_rows(vault_path):
-        parsed_doc = _extract_document_record(row)
-        path = str(
-            parsed_doc.get("path")
-            or parsed_doc.get("source")
-            or parsed_doc.get("id")
-            or row.get("id", "")
-        )
-        filename = str(
-            parsed_doc.get("filename")
-            or parsed_doc.get("title")
-            or (Path(path).name if path else "")
-        )
-        documents.append(
-            {
-                "doc_id": str(row.get("id", path)),
-                "content": str(parsed_doc.get("content", "")),
-                "path": path,
-                "filename": filename,
-            }
-        )
-
-    return documents
-
-
-def _build_whoosh_index(
-    vault_path: str,
-    documents: list[dict[str, str]],
-    progress: Callable[[int, int], None] | None = None,
-) -> None:
-    """Rebuild the vault's Whoosh full-text index from normalized documents.
-
-    Expects documents as dicts with doc_id, content, path, and filename keys.
-    The existing index is replaced. Documents keep their LanceDB row ids as
-    Whoosh doc_ids so search results can be resolved back to stored chunks.
-    (talkpipe's indexWhoosh segment reserves the doc_id schema field, so the
-    index is built through WhooshFullTextIndex to control ids directly.)
-    The optional progress callback receives (docs_done, total_docs) after each
-    document is added.
-    """
-    whoosh_index_path = get_whoosh_index_path(vault_path)
-    if os.path.isdir(whoosh_index_path):
-        shutil.rmtree(whoosh_index_path)
-
-    total = len(documents)
-    # One writer committed once for the whole rebuild: add_document commits
-    # per call, which makes Whoosh re-merge its segments on every document
-    # and degrades quadratically with vault size.
-    with (
-        WhooshFullTextIndex(whoosh_index_path, fields=WHOOSH_INDEX_FIELDS) as ix,
-        ix.ix.writer() as writer,
-    ):
-        for done, document in enumerate(documents, start=1):
-            writer.update_document(
-                doc_id=document.get("doc_id") or str(uuid.uuid4()),
-                **{
-                    field: str(document.get(field, "")) for field in WHOOSH_INDEX_FIELDS
-                },
-            )
-            if progress is not None:
-                progress(done, total)
-
-
-# --------------------------------------------------------------------------
-# Folder mode: folders searched directly, indexed in the background
-#
-# The engine and its segments live in pipelines/folder_index.py; this is the
-# glue both interfaces share (the terminal interface calls these helpers too).
-
-_folder_scheduler: folder_index.FolderScheduler | None = None
-_folder_scheduler_lock = threading.Lock()
-
-
-def _scheduler() -> folder_index.FolderScheduler:
-    """The process's folder indexer, started on first use."""
-    global _folder_scheduler
-    with _folder_scheduler_lock:
-        if _folder_scheduler is None:
-            _folder_scheduler = folder_index.FolderScheduler(
-                ingest_lock_dir=user_settings.get_vault_home()
-            )
-            _folder_scheduler.start()
-            # Finish the batch in progress and release the folders on exit;
-            # whatever is left resumes from the manifest next time.
-            atexit.register(_folder_scheduler.stop)
-        return _folder_scheduler
-
-
-def _open_folder_indexes(state: AppState) -> list[folder_index.FolderIndex]:
-    """The open folders' indexes, in the order the folders were added."""
-    if _folder_scheduler is None or not state.folders:
-        return []
-    by_root = {str(f.root): f for f in _folder_scheduler.folders()}
-    return [by_root[root] for root in state.folders if root in by_root]
-
-
-def _index_paths(state: AppState) -> list[str]:
-    """Every index the pipelines search: the open folders', else the vault."""
-    if state.folders:
-        return [f.index_path for f in _open_folder_indexes(state)]
-    return [state.vault_path] if state.vault_path else []
-
-
-def _search_target(state: AppState) -> str | list[str]:
-    """The vault_path the search segments get (a list in folder mode)."""
-    return _index_paths(state) if state.folders else state.vault_path
-
-
-def folders_status(state: AppState) -> list[dict[str, Any]]:
-    """Each open folder's indexing progress and role, for both interfaces."""
-    models = _effective_models(state)
-    current = f"{models['embedding_source']}/{models['embedding_model']}"
-    statuses = []
-    for folder in _open_folder_indexes(state):
-        status = folder.status()
-        status["embedding_differs"] = bool(status["embedding"]) and (
-            status["embedding"] != current
-        )
-        status["current_embedding"] = current
-        status["chunking_differs"] = (
-            folder.chunk_size,
-            folder.shingle_size,
-            folder.overlap,
-        ) != (
-            models["chunk_size"],
-            models["shingle_size"],
-            models["shingle_overlap"],
-        )
-        status["progress"] = _folder_progress_line(status)
-        status["closed"] = False
-        statuses.append(status)
-    statuses.extend(
-        _closed_folder_status(root) for root in user_settings.get_closed_folders()
-    )
-    return statuses
-
-
-FOLDER_CLOSED_PROGRESS = "Closed · not searched; its index is kept"
-
-
-def _closed_folder_status(root: str) -> dict[str, Any]:
-    """A closed folder's entry in the folder list: no indexing, nothing to wait for."""
-    return {
-        "root": root,
-        "name": Path(root).name or root,
-        "closed": True,
-        "phase": "closed",
-        "progress": FOLDER_CLOSED_PROGRESS,
-        "finished": True,
-        "complete": True,
-        "files_total": 0,
-        "files_keyword": 0,
-        "files_embedded": 0,
-        "files_pending": 0,
-        "files_error": 0,
-        "files_empty": 0,
-        "chunks": 0,
-        "keyword_coverage": 0.0,
-        "vector_coverage": 0.0,
-        "in_folder": True,
-        "index_path": "",
-        "location_reason": "",
-        "role": "closed",
-        "writer": "",
-        "stalled": False,
-        "error": "",
-        "vector_error": "",
-        "watch_mode": "",
-        "embedding": "",
-        "current_embedding": "",
-        "embedding_differs": False,
-        "chunking_differs": False,
-    }
-
-
-def _folder_progress_line(status: dict[str, Any]) -> str:
-    """One line on where a folder's indexing stands, for the folder list."""
-    total = status["files_total"]
-    phase = status["phase"]
-    if phase == "scanning" and not total:
-        return "Scanning for documents…"
-    if phase in ("waiting", "stopped") and not total:
-        return "Waiting for the indexer…"
-    if not total:
-        return "No documents found yet"
-    keyword, embedded = status["files_keyword"], status["files_embedded"]
-    if phase == "stalled":
-        return f"Indexing stalled at {embedded}/{total} files ({status['writer']})"
-    if keyword < total:
-        return f"Keyword index {keyword}/{total} files"
-    if embedded < total:
-        paused = " (paused)" if phase == "paused" else ""
-        return f"Searchable by keyword · meaning {embedded}/{total} files{paused}"
-    if status.get("role") == "read-only":
-        # Nobody can write this index, so changes to the files are not picked up.
-        return f"Ready · {total} file{'' if total == 1 else 's'} · read-only index"
-    watching = {
-        "live": " · watching for changes",
-        # No change events (read-only or network folder): rescans only.
-        "rescan": " · checked for changes every "
-        f"{folder_files.UNWATCHED_RESCAN_SECONDS // 60} minutes",
-    }.get(status.get("watch_mode") or "", "")
-    return f"Ready · {total} file{'' if total == 1 else 's'}{watching}"
-
-
-def _folder_progress_text(status: dict[str, Any]) -> str:
-    """ "notes (keywords 62%, meaning 16%)" for an unfinished folder."""
-    keyword = round(100 * status["keyword_coverage"])
-    meaning = round(100 * status["vector_coverage"])
-    if status["phase"] == "scanning" and not status["files_total"]:
-        return f"{status['name']} (scanning)"
-    return f"{status['name']} (keywords {keyword}%, meaning {meaning}%)"
-
-
-def _folder_banner(state: AppState) -> str:
-    """The still-indexing notice every page shows, or "" when all are done."""
-    unfinished = [s for s in folders_status(state) if not s["finished"]]
-    if not unfinished:
-        return ""
-    names = ", ".join(_folder_progress_text(s) for s in unfinished)
-    return (
-        f"Still indexing {names}. Results may miss documents; keyword matches "
-        "are included for files not embedded yet."
-    )
-
-
-# Notices both interfaces show, worded once; the terminal interface fills in
-# its own page names (the Vault tab, the Keywords tab, ...).
-SEMANTIC_SEARCH_WAITING_TEMPLATE = (
-    "Semantic search starts once the first documents are embedded (progress "
-    "is on {progress}). {others} work now."
-)
-SEMANTIC_SEARCH_WAITING = SEMANTIC_SEARCH_WAITING_TEMPLATE.format(
-    progress="Vaults & Documents", others="Keyword Search and Ask"
-)
-KEYWORD_SEARCH_STARTING = (
-    "Keyword search starts shortly: the open folders are being scanned, and "
-    "their keyword index is built first."
-)
-FOLDERS_INDEX_THEMSELVES_TEMPLATE = (
-    "Folders index themselves: add the folder under Folders above. To index "
-    "into a named vault instead, {how}."
-)
-FOLDERS_KEEP_EMBEDDER_TEMPLATE = (
-    " The embedding model changed: each folder keeps searching with the model "
-    "it was indexed with until you re-embed it ({action})."
-)
-
-
-def semantic_search_waiting(
-    state: AppState, notice: str = SEMANTIC_SEARCH_WAITING
-) -> str:
-    """Why semantic search is not offered yet, or "" when it is.
-
-    In folder mode it waits until some open folder has vectors: before that
-    there is nothing to rank by meaning, and embedding the query could wait
-    on the model's first download. Ask answers from keywords meanwhile.
-    """
-    if state.folders and not any(
-        folder_index.vectors_started(path) for path in _index_paths(state)
-    ):
-        return notice
-    return ""
-
-
-ASK_WAITING = (
-    "Indexing has only just started, so nothing is searchable yet. Ask again "
-    "in a few seconds: answers draw on keyword matches as soon as the first "
-    "files are indexed (progress is on Vaults & Documents)."
-)
-
-
-def ask_waiting(state: AppState) -> str:
-    """Ask's reply while no open folder has indexed a file yet, else "".
-
-    Answering then would only report that the documents say nothing; an
-    empty folder whose scan has finished is not waiting.
-    """
-    statuses = (
-        [s for s in folders_status(state) if not s["closed"]] if state.folders else []
-    )
-    if statuses and all(
-        not s["files_keyword"] and s["phase"] != "ready" for s in statuses
-    ):
-        return ASK_WAITING
-    return ""
-
-
-def _partial_index_note(state: AppState) -> str:
-    """The Ask "Answered by" addition while folders are still embedding."""
-    unfinished = [s for s in folders_status(state) if not s["finished"]]
-    if not unfinished:
-        return ""
-    parts = ", ".join(
-        f"{s['name']} {round(100 * s['vector_coverage'])}% embedded" for s in unfinished
-    )
-    return f"partial index: {parts} · keyword matches included"
-
-
-def _within_path(path: str, ancestor: str) -> bool:
-    return path == ancestor or path.startswith(ancestor.rstrip(os.sep) + os.sep)
-
-
-def _activate_folders(state: AppState) -> None:
-    """Point the pipelines at the open folders (or at nothing)."""
-    paths = _index_paths(state) if state.folders else []
-    if not paths:
-        state.vault_path = ""
-        _clear_pipelines(state)
-        return
-    state.vault_path = paths[0]
-    # Not the first folder's recorded embedder, as for a named vault: every
-    # folder is searched with its own, so the active one stays the Settings
-    # choice, which new folders are indexed with and Re-embed offers.
-    _apply_vault_embedding_config(None)
-    _refresh_pipelines(force=True)
-    _update_document_counts(state.vault_path)
-
-
-def _clear_pipelines(state: AppState) -> None:
-    state.search_pipeline = None
-    state.chat_pipeline = None
-    state.keyword_chat_pipeline = None
-    state.keyword_search_pipeline = None
-    state.keyword_search_enabled = False
-    state.result_filter_active = False
-    state.filtered_search_pipeline = None
-    state.filtered_keyword_search_pipeline = None
-    state.agent_search_pipeline = None
-    state.agent_chat_pipeline = None
-    state.agent_search_extra_pipeline = None
-    state.agent_chat_extra_pipeline = None
-    state.shingled_chunks_count = 0
-
-
-# Held while the list of open folders changes: two requests adding the same
-# folder at once (a double click) must not both get past the duplicate check.
-_folders_lock = threading.Lock()
-
-
-def add_folder(state: AppState, raw_path: str) -> tuple[str, str]:
-    """Start searching the folder *raw_path* (and everything under it).
-
-    Returns (message, error). The folder is fenced by the document roots,
-    like indexing; a folder inside an open one is refused (it is already
-    searched), and one containing open folders replaces them. Opening the
-    first folder leaves named-vault mode. Indexing starts in the background.
-    """
-    with _folders_lock:
-        return _add_folder(state, raw_path)
-
-
-def _add_folder(state: AppState, raw_path: str) -> tuple[str, str]:
-    text = raw_path.strip()
-    if not text:
-        return "", "Choose a folder to search."
-    roots = access_control.document_roots()
-    confined = access_control.confine(os.path.expanduser(text), roots)
-    if confined is None:
-        return "", (
-            f"Folders on this server must be under {access_control.describe(roots)}."
-        )
-    if not confined.is_dir():
-        what = "is not a folder" if confined.exists() else "does not exist"
-        return "", f"{confined} {what}."
-    root = str(confined)
-    for existing in state.folders:
-        if root == existing:
-            return f"{root} is already being searched.", ""
-        if _within_path(root, existing):
-            return "", f"{root} is already covered by {existing}."
-    models = _effective_models(state)
-    try:
-        folder = folder_index.open_folder(
-            root,
-            embedding_source=models["embedding_source"],
-            embedding_model=models["embedding_model"],
-            chunk_size=models["chunk_size"],
-            shingle_size=models["shingle_size"],
-            overlap=models["shingle_overlap"],
-            index_location=user_settings.get_index_location(),
-        )
-    except OSError as exc:
-        return "", str(exc)
-    uuid = folder_index.read_index_status(folder.index_path).get("index_uuid")
-    others = {
-        folder_index.read_index_status(f.index_path).get("index_uuid")
-        for f in _open_folder_indexes(state)
-    }
-    if uuid and uuid in others:
-        return "", (
-            f"{root} holds a copy of another open folder's index. Delete its "
-            f"{FOLDER_INDEX_DIRNAME} folder to give it an index of its own."
-        )
-    if not state.folders and state.vault_path:
-        # Leaving named-vault mode; the vault stays in the recent list.
-        state.vault_path = ""
-    replaced = [e for e in state.folders if _within_path(e, root)]
-    for existing in replaced:
-        _close_folder(state, existing)
-    _scheduler().add(folder)
-    state.folders.append(root)
-    user_settings.set_open_folders(state.folders)
-    _mark_closed(root, closed=False)
-    user_settings.set_last_session(user_settings.SESSION_FOLDERS)
-    _activate_folders(state)
-    where = (
-        "in the folder"
-        if folder.location.in_folder
-        else f"in app data ({folder.location.reason})"
-    )
-    message = (
-        f"Searching {root}. Its index is kept {where}; indexing runs in the background."
-    )
-    if replaced:
-        message += f" It replaces {', '.join(replaced)}, which it contains."
-    return message, ""
-
-
-def _close_folder(state: AppState, root: str) -> folder_index.FolderIndex | None:
-    folder = next((f for f in _open_folder_indexes(state) if str(f.root) == root), None)
-    if folder is not None and _folder_scheduler is not None:
-        _folder_scheduler.remove(folder)
-    if root in state.folders:
-        state.folders.remove(root)
-    return folder
-
-
-def _mark_closed(root: str, *, closed: bool) -> None:
-    """Add *root* to, or drop it from, the closed-folder list."""
-    others = [p for p in user_settings.get_closed_folders() if p != root]
-    user_settings.set_closed_folders([*others, root] if closed else others)
-
-
-def close_folder(state: AppState, root: str) -> tuple[str, str]:
-    """Stop searching and indexing *root* but keep it in the folder list.
-
-    Returns (message, error). The folder's index is kept where it is, so
-    opening the folder again is instant; until then it is not searched and
-    its indexer does not run.
-    """
-    with _folders_lock:
-        if root not in state.folders:
-            return "", f"{root} is not being searched."
-        _close_folder(state, root)
-        user_settings.set_open_folders(state.folders)
-        _mark_closed(root, closed=True)
-        _activate_folders(state)
-    message = (
-        f"Closed {root}: it is not searched until you open it again. Its index "
-        "is kept, so opening it is instant."
-    )
-    return message, ""
-
-
-def open_closed_folder(state: AppState, root: str) -> tuple[str, str]:
-    """Search a closed folder again (the folder-list Open action)."""
-    if root not in user_settings.get_closed_folders():
-        return "", f"{root} is not a closed folder."
-    return add_folder(state, root)
-
-
-def remove_folder(
-    state: AppState, root: str, delete_index: bool = False
-) -> tuple[str, str]:
-    """Drop *root*, open or closed, from the folder list; with *delete_index*,
-    delete its index too.
-
-    Returns (message, error). Only the index directory is ever deleted,
-    never the documents, and not while another process is indexing it.
-    """
-    with _folders_lock:
-        if root in user_settings.get_closed_folders():
-            _mark_closed(root, closed=False)
-            try:
-                folder: folder_index.FolderIndex | None = folder_index.open_folder(
-                    root, index_location=user_settings.get_index_location()
-                )
-            except OSError:
-                folder = None
-            message = f"Removed {root} from the folder list."
-        elif root not in state.folders:
-            return "", f"{root} is not being searched."
-        else:
-            folder = _close_folder(state, root)
-            user_settings.set_open_folders(state.folders)
-            _activate_folders(state)
-            message = f"Stopped searching {root}."
-    if delete_index and folder is not None:
-        problem = folder_index.delete_folder_index(folder)
-        if problem:
-            return message, f"Its index was not deleted: {problem}."
-        message += f" Deleted its index ({folder.index_path})."
-    elif folder is not None:
-        message += " Its index is kept, so adding it again is instant."
-    return message, ""
-
-
-def _folder_by_root(state: AppState, root: str) -> folder_index.FolderIndex | None:
-    return next((f for f in _open_folder_indexes(state) if str(f.root) == root), None)
-
-
-def reembed_folder(state: AppState, root: str) -> tuple[str, str]:
-    """Rebuild *root*'s vectors with the current Settings embedder."""
-    folder = _folder_by_root(state, root)
-    if folder is None:
-        return "", f"{root} is not being searched."
-    if not folder.is_writer:
-        return "", "Another vault process is indexing this folder; re-embed it there."
-    models = _effective_models(state)
-    source, model = models["embedding_source"], models["embedding_model"]
-    _scheduler().submit(folder, lambda: folder.reembed(source, model)).wait(30)
-    _activate_folders(state)
-    message = (
-        f"Re-embedding {root} with {source}/{model}. Keyword search keeps "
-        "answering meanwhile."
-    )
-    return message, ""
-
-
-def rebuild_folder(state: AppState, root: str) -> tuple[str, str]:
-    """Re-chunk and re-index *root* with the current chunking settings."""
-    folder = _folder_by_root(state, root)
-    if folder is None:
-        return "", f"{root} is not being searched."
-    if not folder.is_writer:
-        return "", "Another vault process is indexing this folder; rebuild it there."
-    models = _effective_models(state)
-    _scheduler().submit(
-        folder,
-        lambda: folder.rebuild(
-            models["chunk_size"], models["shingle_size"], models["shingle_overlap"]
-        ),
-    ).wait(30)
-    _activate_folders(state)
-    return f"Rebuilding the index of {root} with the current chunk settings.", ""
-
-
-def open_saved_folders(state: AppState, roots: list[str]) -> list[str]:
-    """Open several folders (startup, --resume); return the problems."""
-    problems = []
-    for root in roots:
-        _, error = add_folder(state, root)
-        if error:
-            problems.append(error)
-    return problems
-
-
-def is_documents_folder(path: str) -> bool:
-    """True when a path given on the command line should open as a folder.
-
-    That is a folder already searched in folder mode (it holds .tpvault),
-    or an existing folder of files that holds no vault data; anything else
-    (a vault, an empty or missing folder) opens as a named vault, as before.
-    """
-    folder = Path(path).expanduser()
-    if (folder / FOLDER_INDEX_DIRNAME).is_dir():
-        return True
-    return _existing_non_vault_entries(folder) > 0
-
-
-def resumable_folders() -> list[str]:
-    """The folders to reopen on --resume: the last session's, if it had any."""
-    if user_settings.get_last_session() != user_settings.SESSION_FOLDERS:
-        return []
-    return [p for p in user_settings.get_open_folders() if Path(p).is_dir()]
-
-
-def startup_folders(
-    vault_path: str, dirs: list[str], *, resume: bool, as_vault: bool
-) -> tuple[str, list[str], bool, str]:
-    """What a command line opens: the folders, and the vault path left over.
-
-    Shared by vault-server and vault-tui. A ``vault_path`` naming a folder
-    of documents joins the ``--dir`` folders unless *as_vault*; with no
-    folders, the last session's folders reopen when *resume* is set or no
-    path was given. Returns (vault_path, folders, resumed, error): a vault
-    path given together with ``--dir`` is an error, since folders and a
-    named vault do not open together.
-    """
-    folders = [str(Path(p).expanduser()) for p in dirs]
-    if vault_path and not as_vault and is_documents_folder(vault_path):
-        folders.insert(0, str(Path(vault_path).expanduser()))
-        vault_path = ""
-    if vault_path and folders:
-        return (
-            vault_path,
-            folders,
-            False,
-            (
-                "--dir cannot be combined with a vault path: folders and a named "
-                "vault do not open together."
-            ),
-        )
-    resumed = False
-    if not folders and (resume or not vault_path):
-        folders = resumable_folders()
-        resumed = bool(folders)
-    return vault_path, folders, resumed, ""
-
-
-FOLDERS_LEFT_NOTE = (
-    " The folders you had open are no longer searched (folders and a named "
-    "vault do not open together); add one again on this page to go back."
-)
-"""Appended to the message when opening a named vault closed the folders."""
-
-
-def _leave_folder_mode(state: AppState) -> None:
-    """Close every folder (they stay remembered) before opening a vault."""
-    with _folders_lock:
-        for root in list(state.folders):
-            _close_folder(state, root)
-
-
-def _folder_chunk(state: AppState, key: str) -> tuple[dict[str, Any], str] | None:
-    """The stored chunk behind a folder result's lookup key, and its index.
-
-    Folder chunk ids are unique across indexes, so the key names one chunk;
-    Whoosh holds every chunk, embedded or not.
-    """
-    for path in _index_paths(state):
-        whoosh_path = get_whoosh_index_path(path)
-        if not os.path.isdir(whoosh_path):
-            continue
-        with WhooshFullTextIndex(whoosh_path) as ix:
-            document = ix.get_document(key)
-        if document:
-            return document, path
-    return None
-
-
-def _folder_source_file(state: AppState, key: str) -> Path | None:
-    """The document behind a folder result, confined to the open folders.
-
-    Only a stored chunk's own path is ever served: a key that names no
-    chunk resolves to nothing, so a request cannot pick an arbitrary file
-    under an open folder (the indexer skips dotfiles on purpose).
-    """
-    found = _folder_chunk(state, key)
-    if found is None:
-        return None
-    candidate = str(found[0].get("path", ""))
-    root = folder_index.index_folder_root(found[1])
-    recorded = folder_index.read_index_status(found[1]).get("recorded_root")
-    if root is not None and recorded:
-        candidate = folder_index.rebase_source(candidate, str(recorded), str(root))
-    confined = access_control.confine(candidate, [Path(r) for r in state.folders])
-    return confined if confined is not None and confined.is_file() else None
-
-
-def chunk_text(state: AppState, key: str, snippet: str = "") -> str:
-    """The full text of the chunk a result's lookup key names ("" if none).
-
-    Both interfaces resolve results through this: in folder mode the key is
-    a chunk id found in the folders' keyword indexes, else it is a docs-row
-    id or indexed path in the open vault.
-    """
-    if state.folders:
-        found = _folder_chunk(state, key)
-        return str(found[0].get("content", "")) if found else ""
-    return next(
-        (
-            text
-            for index in _index_paths(state)
-            if (text := _get_chunk_text_for_path_and_snippet(index, key, snippet))
-        ),
-        "",
-    )
-
-
-def resolve_source_file(state: AppState, key: str) -> Path | None:
-    """The source document behind a result's lookup key, or None."""
-    if state.folders:
-        return _folder_source_file(state, key)
-    return _resolve_indexed_source_file(state.vault_path, key)
-
-
-def init_pipelines(vault_path: str) -> None:
-    """
-    Initialize the search and chat pipelines.
-
-    This function modifies the global application state to set up pipelines
-    for semantic search, keyword search, and RAG-based chat.
-
-    Args:
-        vault_path: Path to LanceDB created by makevectordatabase.
-    """
-    ensure_supported_vault_layout(vault_path)
-    _state.vault_path = vault_path
-    _state.vault_source_folder = None
-    _apply_vault_embedding_config(vault_path)
-    # Opening a vault must always rebuild the pipelines — the 5-second throttle
-    # would otherwise leave the previous vault's state (including
-    # keyword_search_enabled) in place when switching vaults in quick succession.
-    _refresh_pipelines(force=True)
-
-    # Get document counts from storage locations
-    _update_document_counts(vault_path)
-
-
-def _apply_vault_embedding_config(vault_path: str | None) -> None:
-    """Set the active embedder to the one the vault was indexed with.
-
-    Embeddings are only comparable to a query embedded with the same model, so on
-    open we restore the vault's recorded embedder. Legacy vaults with no record
-    keep the user's saved override / default unchanged (the same behavior as
-    before this was tracked) — resolved from the saved overrides rather than from
-    whatever a previously opened vault left behind — and the mismatch is surfaced
-    on the Settings page's configuration status. With no vault path the saved
-    override / default is applied, as for a legacy vault.
-    """
-    recorded = vault_metadata.load_embedding_config(vault_path) if vault_path else None
-    saved = user_settings.get_model_overrides()
-    saved_source, saved_model = _drop_unavailable_source(
-        saved.get("embedding_source"),
-        saved.get("embedding_model"),
-        "embedding",
-        "saved settings",
-    )
-    recorded_source = recorded.get("source") if recorded else None
-    recorded_model = recorded.get("model") if recorded else None
-    if recorded_source:
-        recorded_source, recorded_model = _drop_unavailable_source(
-            recorded_source,
-            recorded_model,
-            "embedding",
-            "recorded in the vault's vault_metadata.json",
-        )
-    if recorded_source or recorded_model:
-        _state.embedding_source = recorded_source or saved_source
-        _state.embedding_model = recorded_model or saved_model
-    else:
-        _state.embedding_source = saved_source
-        _state.embedding_model = saved_model
-
-
-def _load_active_filter(vault_path: str) -> str | None:
-    """Resolve the vault's retrieval filter and record its state on the app.
-
-    Returns the script text only when it should actually run: present in the
-    vault, enabled on this machine for this vault, and compiling cleanly. A
-    script that no longer compiles is recorded as an error and *not* applied —
-    Ask and the search pages keep working unfiltered, and the state is surfaced
-    on the Vaults & Documents page and in the configuration status.
-    """
-    script = retrieval_filter.load_script(vault_path)
-    flags = user_settings.get_retrieval_filter_flags(vault_path)
-    _state.result_filter_script = script
-    _state.result_filter_strict = flags["strict"]
-    _state.result_filter_error = None
-    _state.result_filter_active = False
-    if not script or not flags["enabled"]:
-        return None
-    error = retrieval_filter.validate_script(script)
-    if error:
-        _state.result_filter_error = error
-        logger.warning(
-            "Retrieval filter for %s is unusable and was not applied: %s",
-            vault_path,
-            error,
-        )
-        return None
-    _state.result_filter_active = True
-    return script
-
-
-def _refresh_pipelines(force: bool = False) -> None:
-    """
-    Refresh/reinitialize the pipelines to ensure fresh database connections.
-
-    This is useful when new documents are added to ensure the pipelines
-    see the latest data from the databases.
-
-    Args:
-        force: If True, always refresh. If False, refresh only if more than
-            5 seconds have passed since last refresh (to avoid excessive refreshes).
-    """
-    vault_path = _state.vault_path
-    if not vault_path:
-        return
-
-    current_time = time.time()
-    # Refresh if forced or if more than 5 seconds have passed
-    if not force and (current_time - _state.last_refresh_time) < 5.0:
-        return
-
-    target = _search_target(_state)
-    filter_script = _load_active_filter(vault_path)
-    if isinstance(target, list) and len(target) > 1:
-        # A retrieval filter belongs to one vault; with several folders
-        # open none applies (the pages say so).
-        filter_script = None
-        _state.result_filter_active = False
-    _state.search_pipeline = VaultSearch(
-        vault_path=target,
-        embedding_model=_state.embedding_model,
-        embedding_source=_state.embedding_source,
-        # Serves two readers with different counts: the Search pages, which
-        # show DEFAULT_SEARCH_RESULT_LIMIT, and Ask's citation list, which
-        # shows the configured Ask result count. Fetch enough for whichever
-        # is larger and let each truncate — leaving the limit unset would
-        # instead inherit the vector store's own default, so the Search
-        # page's result count would be set outside this application.
-        limit=max(
-            DEFAULT_SEARCH_RESULT_LIMIT,
-            _state.rag_result_limit or DEFAULT_RAG_RESULT_LIMIT,
-        ),
-        # Folders still embedding are keyword-searched too.
-        keyword_fallback=bool(_state.folders),
-    ).as_function(single_in=True, single_out=True)
-    _state.chat_pipeline = VaultChat(
-        vault_path=target,
-        embedding_model=_state.embedding_model,
-        embedding_source=_state.embedding_source,
-        chat_model=_state.chat_model,
-        chat_source=_state.chat_source,
-        limit=_state.rag_result_limit or DEFAULT_RAG_RESULT_LIMIT,
-        result_filter_script=filter_script,
-        result_filter_strict=_state.result_filter_strict,
-        # With a filter, the pipeline reports the retrieval it actually
-        # prompted with (and the filter outcome) instead of the answer string.
-        include_background=bool(filter_script),
-    ).as_function(single_in=True, single_out=True)
-    _state.keyword_search_enabled = any(
-        _keyword_search_enabled(path) for path in _index_paths(_state)
-    )
-    if _state.keyword_search_enabled:
-        _state.keyword_search_pipeline = VaultTextSearch(
-            vault_path=target,
-            limit=_state.rag_result_limit or DEFAULT_RAG_RESULT_LIMIT,
-        ).as_function(single_in=True, single_out=False)
-        try:
-            _state.keyword_chat_pipeline = VaultChat(
-                vault_path=target,
-                embedding_model=_state.embedding_model,
-                embedding_source=_state.embedding_source,
-                chat_model=_state.chat_model,
-                chat_source=_state.chat_source,
-                limit=_state.rag_result_limit or DEFAULT_RAG_RESULT_LIMIT,
-                keyword_search=True,
-                include_background=True,
-                result_filter_script=filter_script,
-                result_filter_strict=_state.result_filter_strict,
-            ).as_function(single_in=True, single_out=True)
-        except Exception:
-            # Unlike the plain chat pipeline, this one instantiates the chat
-            # LLM eagerly (for keyword extraction), which can fail on a bad
-            # model configuration. Ask must keep working without the option.
-            logger.warning(
-                "Could not build the keyword-augmented Ask pipeline",
-                exc_info=True,
-            )
-            _state.keyword_chat_pipeline = None
-    else:
-        _state.keyword_search_pipeline = None
-        _state.keyword_chat_pipeline = None
-    _refresh_filtered_search_pipelines(target, filter_script)
-    _refresh_agent_pipelines(target)
-    _state.last_refresh_time = current_time
-
-
-# Wording shared by the web Ask page and the terminal interface for the two
-# things an agent run cannot do: run when its model could not be built, and
-# apply the vault's retrieval filter (the agent searches through its own
-# tools, which the filter never sees). Kept here so both interfaces say the
-# same thing and neither silently ignores the request.
-AGENT_UNAVAILABLE_NOTE = "the agent is unavailable right now — answered without it"
-AGENT_FILTER_NOTE = (
-    "the vault's retrieval filter does not apply to the agent's selection"
-)
-EXTRA_EFFORT_NOTE = "Extra Effort"
-AGENT_SEARCH_FILTER_NOTE = (
-    "The custom transform does not apply to the agent's selection and was not run."
-)
-
-
-def _answer_with_agent(
-    state: AppState, message: str, extra_effort: bool = False
-) -> tuple[str, list[dict[str, Any]], list[str], str]:
-    """Answer *message* through the agent pipeline.
-
-    Returns (response, citations, trace, note): the answer, the chunks the
-    agent kept — exactly the RAG context, so they are the citations — the
-    tool-call trace, and the note on how the run ended. Both interfaces call
-    this so their agent branches cannot drift apart. *extra_effort* runs the
-    agent with the raised iteration cap.
-    """
-    pipeline = state.agent_chat_pipeline
-    if extra_effort and state.agent_chat_extra_pipeline:
-        pipeline = state.agent_chat_extra_pipeline
-    if pipeline is None:
-        # Callers check availability first; this is the type-narrowing guard,
-        # written as a real check rather than an assert so it survives -O and
-        # satisfies bandit (B101).
-        raise RuntimeError("the agent pipeline is not available")
-    outcome = pipeline(message)
-    note = outcome.note
-    if pipeline is state.agent_chat_extra_pipeline:
-        note = _prefix_note(note, EXTRA_EFFORT_NOTE)
-    return (
-        outcome.response,
-        _process_semantic_results(outcome.results),
-        outcome.trace,
-        note,
-    )
-
-
-def _select_with_agent(
-    state: AppState, text: str, extra_effort: bool = False
-) -> agent_search.AgentSearchOutcome:
-    """Run the Search page's agent selection for *text*.
-
-    The Search route and ``VaultService.search`` share it, as they share
-    ``_answer_with_agent``. *extra_effort* runs the agent with the raised
-    iteration cap, and the outcome's note then says so.
-    """
-    pipeline = state.agent_search_pipeline
-    if extra_effort and state.agent_search_extra_pipeline:
-        pipeline = state.agent_search_extra_pipeline
-    if pipeline is None:
-        raise RuntimeError("the agent pipeline is not available")
-    outcome = pipeline(text)
-    if pipeline is state.agent_search_extra_pipeline:
-        outcome.note = f"{EXTRA_EFFORT_NOTE}: {outcome.note}"
-    return outcome
-
-
-def _prefix_note(note: str, prefix: str) -> str:
-    """Put *prefix* in front of a possibly empty "Answered by" note."""
-    return f"{prefix} · {note}" if note else prefix
-
-
-def _refresh_agent_pipelines(vault_path: str | list[str]) -> None:
-    """(Re)build the agent-driven Search and Ask pipelines.
-
-    One AgentVaultChat backs both: its chunk selection is what the Search page
-    shows, and answering from that selection is what Ask uses, so the embedder
-    and the agent model are built once per refresh rather than twice.
-
-    Building it resolves the agent's model eagerly, which fails on a bad chat
-    configuration; Search and Ask must keep working without the option, so
-    failure leaves both pipelines unset and the checkboxes hidden.
-    """
-    try:
-        segment = agent_search.AgentVaultChat(
-            vault_path=vault_path,
-            embedding_model=_state.embedding_model,
-            embedding_source=_state.embedding_source,
-            chat_model=_state.chat_model,
-            chat_source=_state.chat_source,
-            max_chunks=_state.agent_search_result_count
-            or DEFAULT_AGENT_SEARCH_RESULT_COUNT,
-            max_iterations=_state.agent_search_iterations
-            or DEFAULT_AGENT_SEARCH_ITERATIONS,
-        )
-    except Exception as exc:
-        logger.warning("Could not build the agent pipelines", exc_info=True)
-        _state.agent_search_pipeline = None
-        _state.agent_chat_pipeline = None
-        _state.agent_search_extra_pipeline = None
-        _state.agent_chat_extra_pipeline = None
-        _state.agent_unavailable_reason = str(exc) or type(exc).__name__
-        return
-    _state.agent_unavailable_reason = ""
-    _state.agent_search_pipeline = segment.select_chunks
-    _state.agent_chat_pipeline = segment.as_function(single_in=True, single_out=True)
-    extra = segment.with_max_iterations(
-        segment.max_iterations * EXTRA_EFFORT_ITERATION_FACTOR
-    )
-    _state.agent_search_extra_pipeline = extra.select_chunks
-    _state.agent_chat_extra_pipeline = extra.as_function(
-        single_in=True, single_out=True
-    )
-
-
-def _refresh_filtered_search_pipelines(
-    vault_path: str | list[str], filter_script: str | None
-) -> None:
-    """(Re)build the opt-in filtered variants of the search-page pipelines.
-
-    Each variant over-fetches, runs the vault's retrieval filter, truncates
-    back to the page's result count, and returns (results, filter_error).
-    Built only when a filter is active; the search pages show their "apply
-    custom transform" checkbox only when the matching variant exists.
-    """
-    _state.filtered_search_pipeline = None
-    _state.filtered_keyword_search_pipeline = None
-    if not filter_script:
-        return
-
-    overfetch = retrieval_filter.FILTER_OVERFETCH_FACTOR
-    try:
-        semantic_limit = DEFAULT_SEARCH_RESULT_LIMIT
-        semantic_search = VaultSearch(
-            vault_path=vault_path,
-            embedding_model=_state.embedding_model,
-            embedding_source=_state.embedding_source,
-            limit=semantic_limit * overfetch,
-        ).as_function(single_in=True, single_out=True)
-        semantic_filter = SearchResultFilter(
-            script=filter_script,
-            field="_background",
-            limit=semantic_limit,
-            strict=_state.result_filter_strict,
-            rename_fields=SEARCH_RESULT_RENAMES,
-        )
-
-        def _filtered_semantic(query: str) -> tuple[list[Any], str | None]:
-            raw = semantic_search(query)
-            if isinstance(raw, dict):
-                raw = [raw]
-            return semantic_filter.apply(list(raw or []))
-
-        _state.filtered_search_pipeline = _filtered_semantic
-    except Exception:
-        logger.warning(
-            "Could not build the filtered semantic-search pipeline", exc_info=True
-        )
-
-    if not _state.keyword_search_enabled:
-        return
-    try:
-        keyword_limit = _state.rag_result_limit or DEFAULT_RAG_RESULT_LIMIT
-        keyword_search = VaultTextSearch(
-            vault_path=vault_path,
-            limit=keyword_limit * overfetch,
-        ).as_function(single_in=True, single_out=False)
-        keyword_filter = SearchResultFilter(
-            script=filter_script,
-            field="_background",
-            limit=keyword_limit,
-            strict=_state.result_filter_strict,
-            rename_fields=SEARCH_RESULT_RENAMES,
-        )
-
-        def _filtered_keyword(query: str) -> tuple[list[Any], str | None]:
-            return keyword_filter.apply(list(keyword_search(query)))
-
-        _state.filtered_keyword_search_pipeline = _filtered_keyword
-    except Exception:
-        logger.warning(
-            "Could not build the filtered keyword-search pipeline", exc_info=True
-        )
-
-
-def _update_document_counts(vault_path: str) -> None:
-    """Update document counts from vault storage locations.
-
-    In folder mode the count is the open folders' chunks, embedded or not.
-    """
-    if _state.folders:
-        _state.shingled_chunks_count = sum(
-            int(folder_index.read_index_status(path).get("chunks") or 0)
-            for path in _index_paths(_state)
-        )
-        return
-    ensure_supported_vault_layout(vault_path)
-    vectordb_path = get_vector_db_path(vault_path)
-
-    # Get counts from LanceDB tables
-    try:
-        doc_store = LanceDBDocumentStore(
-            path=vectordb_path,
-            table_name=DEFAULT_VECTOR_TABLE_NAME,
-        )
-        # keyword_search_enabled is owned by _refresh_pipelines, which every
-        # caller runs first; only the failure path below overrides it.
-        _state.shingled_chunks_count = doc_store.count()
-    except Exception:
-        _state.shingled_chunks_count = 0
-        _state.keyword_search_enabled = False
-
-
-def _get_field(obj: Any, field: str, default: Any = "") -> Any:
-    """Extract a field from either a dict or object."""
-    if isinstance(obj, dict):
-        return obj.get(field, default)
-    return getattr(obj, field, default)
-
-
-def _create_snippet(text: str, max_length: int = SNIPPET_MAX_LENGTH) -> str:
-    """Create a truncated snippet from text content."""
-    snippet = text[:max_length].replace("\n", " ").strip()
-    if len(text) > max_length:
-        snippet += "..."
-    return snippet
-
-
-def _resolve_title(title: str, filename: str, path: str) -> str:
-    """Resolve display title with fallback chain: title -> filename -> path basename."""
-    if title:
-        return title
-    if filename:
-        return filename
-    if path:
-        return Path(path).name
-    return "Unknown"
-
-
-def _with_folder(title: str, document: Any) -> str:
-    """A result's title, followed by its folder's name when several folders
-    are open, so same-named files from different folders can be told apart
-    without showing paths."""
-    folder = _get_field(document, "folder", "")
-    if folder and len(_state.folders) > 1:
-        return f"{title} — {folder}"
-    return title
-
-
-def _result_doc_id(result: Any, doc: Any) -> str:
-    """Return the stable result row id when the search result exposes one."""
-    doc_id = _get_field(result, "doc_id", "")
-    if doc_id:
-        return str(doc_id)
-    doc_id = _get_field(doc, "_doc_id", "") or _get_field(doc, "doc_id", "")
-    return str(doc_id) if doc_id else ""
-
-
-def _process_semantic_results(raw_results: Any) -> list[dict[str, Any]]:
-    """
-    Process raw semantic search results into display-ready format.
-
-    Args:
-        raw_results: Raw results from the semantic search pipeline.
-
-    Returns:
-        List of result dicts with path, filename, snippet, and score fields.
-    """
-    if not raw_results:
-        return []
-
-    if isinstance(raw_results, dict):
-        raw_results = [raw_results]
-
-    results: list[dict[str, Any]] = []
-
-    for result in raw_results:
-        doc = result.document if hasattr(result, "document") else result
-
-        doc_id = _result_doc_id(result, doc)
-        path = (
-            _get_field(doc, "path", "")
-            or _get_field(doc, "source", "")
-            or _get_field(doc, "id", "")
-            or "Unknown"
-        )
-        snippet_text = (
-            _get_field(doc, "content", "")
-            or _get_field(doc, "shingle", "")
-            or _get_field(doc, "shingle_text", "")
-        )
-        title = _get_field(doc, "title", "")
-        filename = _get_field(doc, "filename", "")
-
-        # Calculate score from distance
-        if hasattr(result, "score"):
-            score = result.score
-        elif hasattr(result, "_distance"):
-            score = 1 - result._distance
-        elif isinstance(result, dict):
-            score = 1 - result.get("_distance", 0)
-        else:
-            score = 0
-
-        results.append(
-            {
-                "path": path,
-                "lookup_path": doc_id or path,
-                "filename": _with_folder(_resolve_title(title, filename, path), doc),
-                "snippet": _create_snippet(snippet_text),
-                # Some vector backends (e.g. model2vec) don't return a usable similarity
-                # score and report 0.0 for every hit. Rendering "Score: 0.0000" on every
-                # result is misleading, so only surface a score when it's meaningful.
-                "score": f"{score:.4f}" if score and score > 0 else "",
-            }
-        )
-
-    return results
-
-
-def _chat_citations(state: AppState, message: str) -> list[dict[str, Any]]:
-    """Return display-ready source chunks for an Ask response."""
-    if not state.search_pipeline:
-        return []
-
-    raw_results = state.search_pipeline(message)
-    limit = state.rag_result_limit or DEFAULT_RAG_RESULT_LIMIT
-    return _process_semantic_results(raw_results)[:limit]
-
-
-def _strip_answer_source_paths(answer: str) -> str:
-    """Replace absolute paths in the answer's trailing Sources list with basenames.
-
-    The RAG pipeline appends a "Sources:" section listing the retrieved files
-    by absolute path. Search pages hide filesystem paths unless the server was
-    started with --show-source-paths, so the Ask answer must do the same.
-    """
-    marker = "\n\nSources:\n"
-    index = answer.rfind(marker)
-    if index == -1:
-        return answer
-
-    head = answer[: index + len(marker)]
-    lines = []
-    for line in answer[index + len(marker) :].splitlines():
-        if line.startswith("- "):
-            lines.append("- " + os.path.basename(line[2:].strip()))
-        else:
-            lines.append(line)
-    return head + "\n".join(lines)
-
-
-def _answered_by(state: AppState) -> str:
-    """Describe the chat provider/model that generates Ask answers."""
-    models = _effective_models(state)
-    if models["chat_source"] == "eliza":
-        return (
-            "eliza (built-in scripted responder for smoke tests — "
-            "it does not use your documents)"
-        )
-    return f"{models['chat_source']} / {models['chat_model']}"
-
-
-def _process_keyword_results(raw_results: list[Any]) -> list[dict[str, Any]]:
-    """
-    Process raw keyword search results into display-ready format.
-
-    Args:
-        raw_results: Raw results from the keyword search pipeline.
-
-    Returns:
-        List of result dicts with path, filename, snippet, and score fields.
-    """
-    results: list[dict[str, Any]] = []
-
-    for result in raw_results:
-        doc_id = _get_field(result, "doc_id", "")
-        score = _get_field(result, "score", 0)
-        document = _get_field(result, "document", None)
-        if document is None:
-            document = result
-
-        content = _get_field(document, "content", "") or _get_field(
-            result, "content", ""
-        )
-        path = (
-            _get_field(document, "path", "")
-            or _get_field(result, "path", "")
-            or doc_id
-            or "Unknown"
-        )
-        title = _get_field(document, "title", "")
-        filename = _get_field(document, "filename", "") or _get_field(
-            result, "filename", ""
-        )
-
-        results.append(
-            {
-                "path": path,
-                "lookup_path": doc_id or path,
-                "filename": _with_folder(
-                    _resolve_title(title, filename, path), document
-                ),
-                "snippet": _create_snippet(content),
-                "score": f"{score:.4f}",
-            }
-        )
-
-    return results
-
-
-def _extract_document_record(row: dict[str, Any]) -> dict[str, Any]:
-    """Normalize a LanceDB docs-row into a dict-like document."""
-    record: dict[str, Any] = normalize_document_cell(row.get("document", {}))
-    return record
-
-
-def _load_docs_rows(vault_path: str) -> Iterator[dict[str, Any]]:
-    """Stream id/document rows from the vault's TalkPipe docs table.
-
-    Reads column-pruned batches instead of materializing the table:
-    ``to_arrow()`` holds every row's embedding vector in memory at once —
-    gigabytes on a large vault — and no caller needs the vectors.
-    """
-    ensure_supported_vault_layout(vault_path)
-    vectordb_path = get_vector_db_path(vault_path)
-    doc_store = LanceDBDocumentStore(
-        path=vectordb_path,
-        table_name=DEFAULT_VECTOR_TABLE_NAME,
-    )
-    table, _ = doc_store._get_table()
-    if hasattr(table, "search"):
-        query = table.search(None).select(["id", "document"]).limit(None)
-        for batch in query.to_batches():
-            yield from batch.to_pylist()
-        return
-    # Fallback for table objects without the query API (e.g. test doubles).
-    if hasattr(table, "to_arrow"):
-        yield from table.to_arrow().to_pylist()
-        return
-    if hasattr(table, "to_pandas"):
-        yield from table.to_pandas().to_dict(orient="records")
-        return
-    raise RuntimeError(
-        "Unsupported LanceDB table reader: expected to_arrow() or to_pandas()."
-    )
-
-
-def _normalize_snippet_prefix(snippet: str) -> str:
-    """Normalize UI snippet text for matching against stored chunk content."""
-    normalized = " ".join(snippet.split())
-    if normalized.endswith("..."):
-        normalized = normalized[:-3].rstrip()
-    return normalized
-
-
-def _document_lookup_keys(row: dict[str, Any], doc: dict[str, Any]) -> set[str]:
-    """Return non-empty identifiers that may be used to look up a document."""
-    keys = {
-        str(doc.get("path") or ""),
-        str(doc.get("source") or ""),
-        str(doc.get("id") or ""),
-        str(row.get("id") or ""),
-    }
-    return {key for key in keys if key}
-
-
-def _indexed_source_paths(vault_path: str) -> set[str]:
-    """Return source file paths referenced by the current vault index."""
-    rows = _load_docs_rows(vault_path)
-    source_paths: set[str] = set()
-    for row in rows:
-        doc = _extract_document_record(row)
-        for key in ("path", "source", "id"):
-            value = str(doc.get(key) or "")
-            if value:
-                source_paths.add(value)
-    return source_paths
-
-
-def _resolve_indexed_source_file(vault_path: str, key: str) -> Path | None:
-    """Resolve a result lookup key (row id or indexed path) to its source file.
-
-    Search results and Ask citations identify chunks by ``lookup_path`` — the
-    stable docs-row id when one exists, the indexed path otherwise. Either kind
-    of key is matched against the docs table and mapped back to the source file
-    path recorded at indexing time.
-    """
-    for row in _load_docs_rows(vault_path):
-        doc = _extract_document_record(row)
-        if key not in _document_lookup_keys(row, doc):
-            continue
-        source = (
-            str(doc.get("path") or "")
-            or str(doc.get("source") or "")
-            or str(doc.get("id") or "")
-        )
-        if source:
-            return Path(source)
-    return None
-
-
-# Media types the browser may render directly. Everything else — notably
-# text/html and image/svg+xml, which could run scripts with the app's origin —
-# is served as a download instead.
-_INLINE_MEDIA_TYPES = {
-    "application/pdf",
-    "image/png",
-    "image/jpeg",
-    "image/gif",
-    "image/webp",
-}
-
-# Text-like documents shown in-browser as plain text, whatever their real
-# media type (browsers download text/markdown and friends otherwise).
-_INLINE_TEXT_EXTENSIONS = {".txt", ".text", ".md", ".markdown", ".rst", ".log"}
-
-
-def _document_file_response(source_path: Path) -> FileResponse:
-    """Serve a source document, inline when the browser can safely render it."""
-    if source_path.suffix.lower() in _INLINE_TEXT_EXTENSIONS:
-        return FileResponse(
-            source_path,
-            media_type="text/plain; charset=utf-8",
-            filename=source_path.name,
-            content_disposition_type="inline",
-        )
-    media_type, _ = mimetypes.guess_type(source_path.name)
-    if media_type in _INLINE_MEDIA_TYPES:
-        return FileResponse(
-            source_path,
-            media_type=media_type,
-            filename=source_path.name,
-            content_disposition_type="inline",
-        )
-    return FileResponse(source_path, filename=source_path.name)
-
-
-def _get_chunk_text_for_path_and_snippet(
-    vault_path: str, path: str, snippet: str
-) -> str:
-    """Return full text for a selected chunk identified by path/id and snippet."""
-    rows = _load_docs_rows(vault_path)
-    snippet_prefix = _normalize_snippet_prefix(snippet)
-    first_snippet_match = ""
-    for row in rows:
-        doc = _extract_document_record(row)
-        content = str(doc.get("content", "")).strip()
-        if not content:
-            continue
-        snippet_matches = snippet_prefix and snippet_prefix in " ".join(content.split())
-        if snippet_matches and not first_snippet_match:
-            first_snippet_match = content
-        if path not in _document_lookup_keys(row, doc):
-            continue
-        if snippet_prefix and not snippet_matches:
-            continue
-        return content
-    return first_snippet_match
-
-
-def _vault_selected(state: AppState) -> bool:
-    """Return True when a vault is currently selected."""
-    return bool(state.vault_path)
 
 
 def _require_vault(state: AppState) -> RedirectResponse | None:
@@ -1945,11 +456,6 @@ async def home(
     )
 
 
-# The check lives with the vault layout helpers so pipelines can use it; the
-# old name stays for the callers here and in the terminal interface.
-_existing_non_vault_entries = existing_non_vault_entries
-
-
 @app.get("/vaults", response_class=HTMLResponse)
 async def vaults_page(
     message: str | None = None,
@@ -1967,67 +473,6 @@ async def vaults_page(
         error=error or "",
         confirm_path=confirm_path or "",
     )
-
-
-def _resolve_vault_request(raw_vault_path: str) -> tuple[Path | None, str, str]:
-    """Validate a user-supplied vault path.
-
-    Returns (vault_path, placement_note, error): the path is None when the
-    error message is non-empty. The note explains any automatic relocation and
-    belongs in the success message shown to the user.
-    """
-    raw_path = raw_vault_path.strip()
-    if not raw_path:
-        return None, "", "Enter a vault path."
-
-    # Pure string expansion; the filesystem is only ever touched through the
-    # confined path below.
-    expanded = os.path.expanduser(raw_path)
-
-    # Failsafe for fenced deployments (e.g. the container, where vaults live
-    # under /app/data): a bare name like "my-vault" would otherwise resolve
-    # against the server's working directory and be refused by the fence.
-    # Place it under the vault root instead and tell the user below.
-    root = access_control.vault_root()
-    placed_under_root = False
-    if root is not None and not os.path.isabs(expanded):
-        expanded = os.path.join(os.fspath(root), expanded)
-        placed_under_root = True
-    placement_note = (
-        f" (You entered '{raw_path}'; vaults on this server live under "
-        f"{root}, so it was placed there automatically.)"
-        if placed_under_root
-        else ""
-    )
-
-    # Every later filesystem touch (existence checks, mkdir, indexing) uses
-    # the confined (resolved and root-checked) path, never the raw request.
-    confined = access_control.confine_vault(expanded)
-    if confined is None:
-        return (
-            None,
-            "",
-            f"Vaults on this server must live under {access_control.vault_root()}.",
-        )
-    if confined.is_file():
-        return None, "", f"{confined} is a file. A vault must be a directory."
-    return confined, placement_note, ""
-
-
-def _activate_vault(vault_path: Path) -> str:
-    """Create the vault folder if needed, open it, and remember it.
-
-    Returns an error message, or an empty string when the vault is open.
-    """
-    try:
-        vault_path.mkdir(parents=True, exist_ok=True)
-        _leave_folder_mode(_state)
-        init_pipelines(str(vault_path))
-    except (OSError, ValueError) as exc:
-        return str(exc)
-    user_settings.remember_vault(str(vault_path))
-    user_settings.set_last_session(user_settings.SESSION_VAULT)
-    return ""
 
 
 @app.post("/vaults/open", response_class=HTMLResponse)
@@ -2092,20 +537,6 @@ async def open_vault(
         )
     return _redirect_with_message(
         "/", message=f"Opened vault at {vault_path}.{placement_note}"
-    )
-
-
-def _is_dangerous_delete_target(real_path: Path) -> bool:
-    """Return True for paths too broad to ever delete as a vault.
-
-    Guards against wiping the filesystem root, the user's home directory, or
-    other shallow top-level paths even if they somehow reach this code.
-    """
-    home = Path(os.path.realpath(Path.home()))
-    return (
-        real_path == real_path.parent  # filesystem root
-        or real_path == home
-        or len(real_path.parts) < 3
     )
 
 
@@ -2247,80 +678,6 @@ async def documents_page(
     )
 
 
-def _vault_source_folder(state: AppState) -> str:
-    """The folder every document of the open named vault lies in, or "".
-
-    A named vault cannot be converted in place (its chunk ids are random),
-    but when its documents share one folder the page offers to search that
-    folder directly instead. Computed once per opened vault: it reads the
-    docs table's paths.
-    """
-    if state.folders or not state.vault_path:
-        return ""
-    if state.vault_source_folder is None:
-        state.vault_source_folder = ""
-        with contextlib.suppress(Exception):
-            sources = [
-                path
-                for path in _indexed_source_paths(state.vault_path)
-                if os.path.isabs(path)
-            ]
-            if sources:
-                common = Path(os.path.commonpath(sources))
-                if common.is_file():
-                    common = common.parent
-                real = Path(os.path.realpath(common))
-                if common.is_dir() and not _is_dangerous_delete_target(real):
-                    state.vault_source_folder = str(common)
-    return state.vault_source_folder
-
-
-def retrieval_filter_blocker(state: AppState) -> str:
-    """Why the retrieval filter cannot be edited now, or "" when it can.
-
-    A filter belongs to one index: the open named vault or the one open
-    folder. Both interfaces show the editor, and accept a save, only then.
-    """
-    if not state.vault_path:
-        return "Open a folder or a vault before configuring its retrieval filter."
-    if len(state.folders) > 1:
-        return (
-            "A retrieval filter applies to one open folder; close the others "
-            "to edit it."
-        )
-    return ""
-
-
-def _retrieval_filter_context(state: AppState, **pending: Any) -> dict[str, Any]:
-    """Build the retrieval-filter section context for the documents page.
-
-    ``pending`` overrides let the save/validate route re-render the page with
-    the submitted (possibly unsaved) values and outcome instead of what is on
-    disk, keeping the user's text in the editor.
-    """
-    if retrieval_filter_blocker(state):
-        return {"available": False}
-    script = retrieval_filter.load_script(state.vault_path) or ""
-    flags = user_settings.get_retrieval_filter_flags(state.vault_path)
-    error = retrieval_filter.validate_script(script) if script else None
-    context: dict[str, Any] = {
-        "available": True,
-        # What the filter belongs to, as the page should name it: the open
-        # folder (its index holds the script) or the named vault.
-        "kind": "folder" if state.folders else "vault",
-        "target": state.folders[0] if state.folders else state.vault_path,
-        "script": script,
-        "enabled": flags["enabled"],
-        "strict": flags["strict"],
-        "error": error,
-        "active": bool(script) and flags["enabled"] and not error,
-        "open": False,
-        "message": "",
-    }
-    context.update(pending)
-    return context
-
-
 def _render_documents_with_filter(
     request: Request, state: AppState, **pending: Any
 ) -> Any:
@@ -2410,372 +767,10 @@ async def save_retrieval_filter(
     return _redirect_with_message("/documents", message=f"Retrieval filter {outcome}.")
 
 
-def suggest_vault_path(source_path: str) -> str:
-    """Suggest a vault folder to create for a chosen documents folder.
-
-    The name follows the documents folder ("~/notes" -> "<root>/notes-vault")
-    so the vault is recognizable, and lands beside it under the configured
-    vault root (the home directory when unrestricted). An existing folder is
-    only suggested when it is empty or already holds vault data — otherwise the
-    name is numbered until it is free, so the suggestion never proposes writing
-    index files into a folder of someone's documents. Returns "" when no
-    sensible name can be derived.
-    """
-    prefix = _nonglob_prefix(os.path.expanduser(source_path.strip()))
-    if not prefix or prefix == ".":
-        return ""
-    # The chosen documents folder is fenced by the document roots (the same
-    # fence indexing itself applies), not the picker's browse union.
-    base = access_control.confine(prefix, access_control.document_roots())
-    if base is None:
-        return ""
-    if base.is_file():
-        base = base.parent
-    stem = re.sub(r"[^A-Za-z0-9._-]+", "-", base.name).strip("-._")
-    if not stem:
-        return ""
-
-    parent = access_control.vault_root() or Path.home()
-    for attempt in range(1, 51):
-        name = f"{stem}-vault" if attempt == 1 else f"{stem}-vault-{attempt}"
-        candidate = access_control.confine_vault(parent / name)
-        if candidate is None:
-            return ""
-        if not candidate.exists():
-            return str(candidate)
-        # Reusable: an empty folder, or one that already holds this vault.
-        if candidate.is_dir() and _existing_non_vault_entries(candidate) == 0:
-            return str(candidate)
-    return ""
-
-
 @app.get("/api/suggest-vault")
 async def suggest_vault(source: str = "") -> JSONResponse:
     """Suggest a vault path for a documents folder, for the combined form."""
     return JSONResponse(content={"path": suggest_vault_path(source) if source else ""})
-
-
-def _resolve_source_pattern(raw_source: str) -> str:
-    """Turn a folder path into a recursive glob; leave explicit globs alone.
-
-    The directory check runs on the confined (resolved and root-checked)
-    path so nothing outside the document roots is ever touched; a source
-    outside the fence keeps its raw form and is rejected by the indexing
-    endpoint's own containment check.
-    """
-    source = os.path.expanduser(raw_source.strip())
-    confined = access_control.confine(source, access_control.document_roots())
-    if confined is not None and confined.is_dir():
-        return os.path.join(source, "**", "*")
-    return source
-
-
-def _nonglob_prefix(pattern: str) -> str:
-    """Return the leading part of a glob pattern up to the first wildcard.
-
-    This is the concrete directory a pattern walks from, which is what the
-    document-root restriction is checked against.
-    """
-    prefix_parts: list[str] = []
-    for part in Path(pattern).parts:
-        if any(char in part for char in "*?["):
-            break
-        prefix_parts.append(part)
-    if not prefix_parts:
-        return "."
-    return str(Path(*prefix_parts))
-
-
-def index_documents_into_vault(
-    vault_path: str,
-    source_pattern: str,
-    embedding_model: str,
-    embedding_source: str,
-    chunk_size: int = DEFAULT_CHUNK_SIZE,
-    shingle_size: int = DEFAULT_SHINGLE_SIZE,
-    shingle_overlap: int = DEFAULT_SHINGLE_OVERLAP,
-    overwrite: bool = False,
-    progress: Callable[[int, int, str], None] | None = None,
-) -> tuple[int, int]:
-    """Index documents matching a glob into the vault's docs table.
-
-    Thin wrapper over TalkPipe's build_rag_database (the same driver behind
-    the makevectordatabase CLI) so the resulting table matches what the
-    search/chat pipelines expect: the driver preflights the embedder,
-    truncates over-long chunks instead of aborting, and counts chunks whose
-    embedding failed. This wrapper adds the vault specifics — the recorded
-    per-vault embedding dimension is passed as the expected dimension, driver
-    errors are reworded against the web UI (Settings page, Overwrite
-    checkbox), and the embedding config is recorded to vault_metadata.json.
-    Returns (indexed_chunks, skipped_chunks). The optional progress callback
-    receives (chunks_done, files_done, current_source_path) as chunks flow
-    through the pipeline.
-    """
-    ensure_supported_vault_layout(vault_path)
-    recorded = None if overwrite else vault_metadata.load_embedding_config(vault_path)
-    try:
-        result = build_rag_database(
-            source_pattern,
-            path=get_vector_db_path(vault_path),
-            embedding_model=embedding_model,
-            embedding_source=embedding_source,
-            table_name=DEFAULT_VECTOR_TABLE_NAME,
-            chunk_size=chunk_size,
-            shingle_size=shingle_size,
-            overlap=shingle_overlap,
-            overwrite=overwrite,
-            batch_size=25,
-            expected_dimension=(recorded or {}).get("dimension"),
-            progress=progress,
-        )
-    except EmbeddingDimensionMismatchError as exc:
-        recorded = recorded or {}
-        raise RuntimeError(
-            f"Nothing was indexed: this vault was indexed with "
-            f"{recorded.get('source')}/{recorded.get('model')} "
-            f"({exc.expected}-dimensional vectors), but "
-            f"{embedding_source}/{embedding_model} produces "
-            f"{exc.actual}-dimensional vectors, so adding to the existing "
-            f"index would fail. Check Overwrite to rebuild the vault with the "
-            f"new embedder, or restore the original embedding settings."
-        ) from exc
-    except EmbedderPreflightError as exc:
-        raise RuntimeError(
-            f"Nothing was indexed: {exc} Embedding settings can be changed "
-            f"under Settings."
-        ) from exc
-    except RagIngestError as exc:
-        raise RuntimeError(f"Nothing was indexed: {exc}") from exc
-    if result.chunks_indexed > 0:
-        _record_vault_embedding_config(
-            vault_path, embedding_source, embedding_model, result.dimension
-        )
-    return result.chunks_indexed, result.chunks_skipped
-
-
-def _record_vault_embedding_config(
-    vault_path: str,
-    embedding_source: str,
-    embedding_model: str,
-    dimension: int | None = None,
-) -> None:
-    """Record how this vault was indexed so reopening restores the embedder.
-
-    Best effort: metadata problems must never fail an indexing run that already
-    wrote its vectors.
-    """
-    try:
-        retrieval_template = get_retrieval_template(embedding_model)
-    except Exception:  # pragma: no cover - defensive; config read is cheap
-        retrieval_template = None
-    vault_metadata.record_embedding_config(
-        vault_path,
-        source=embedding_source,
-        model=embedding_model,
-        dimension=(
-            dimension
-            if dimension is not None
-            else vault_metadata.probe_embedding_dimension(
-                embedding_source, embedding_model
-            )
-        ),
-        retrieval_template=retrieval_template,
-        server_url=_indexing_server_url(embedding_source),
-    )
-
-
-def _indexing_server_url(embedding_source: str) -> str | None:
-    """Non-authoritative breadcrumb for where the embedder ran.
-
-    Only meaningful for a server-backed embedder whose location the user set
-    explicitly (Ollama). It is recorded for traceability and never applied on
-    open — the live URL is always resolved fresh from the environment.
-    """
-    if embedding_source == "ollama":
-        return os.environ.get("TALKPIPE_OLLAMA_SERVER_URL") or None
-    return None
-
-
-@dataclass
-class IndexJob:
-    """Progress of the (single) background document-indexing job."""
-
-    running: bool = False
-    phase: str = ""  # "counting" while the source walk runs, then "indexing"
-    source: str = ""
-    vault_path: str = ""
-    embedding: str = ""
-    total_files: int = 0
-    files_done: int = 0
-    current_file: str = ""
-    chunks: int = 0
-    message: str = ""
-    error: str | None = None
-
-
-_index_job = IndexJob()
-_index_job_lock = threading.Lock()
-
-
-def _index_job_snapshot() -> dict[str, Any]:
-    with _index_job_lock:
-        return asdict(_index_job)
-
-
-@contextlib.contextmanager
-def _index_run_guard(vault_path: str) -> Iterator[None]:
-    """Held while a named-vault run writes the vault.
-
-    No other vault process may index the same vault meanwhile (two
-    concurrent runs would interleave their writes), and this process's
-    folder indexer waits, so only one embedding run is in memory at a time.
-    """
-    lock = filelock.FileLock(
-        os.path.join(vault_path, folder_index.WRITER_LOCK_FILENAME),
-        is_singleton=False,
-    )
-    try:
-        lock.acquire(timeout=0)
-    except filelock.Timeout:
-        raise RuntimeError(
-            "Another vault process is indexing this vault; wait for it to finish."
-        ) from None
-    try:
-        with (
-            _folder_scheduler.paused()
-            if _folder_scheduler is not None
-            else contextlib.nullcontext()
-        ):
-            yield
-    finally:
-        lock.release()
-
-
-def _run_index_job(
-    vault_path: str,
-    source: str,
-    pattern: str,
-    embedding_model: str,
-    embedding_source: str,
-    chunk_size: int,
-    shingle_size: int,
-    shingle_overlap: int,
-    overwrite: bool,
-) -> None:
-    """Thread target: run one indexing job, publishing progress as it goes.
-
-    Starts with a counting pass over the source tree (published as phase
-    "counting" with a live file count) so large trees show activity instead
-    of appearing hung, then switches to phase "indexing" for the embed run.
-    """
-
-    def report(chunks: int, files_done: int, current: str) -> None:
-        with _index_job_lock:
-            _index_job.chunks = chunks
-            _index_job.files_done = files_done
-            _index_job.current_file = Path(current).name if current else ""
-
-    try:
-        with _index_run_guard(vault_path):
-            any_match = False
-            total_files = 0
-            for matched in globlib.iglob(pattern, recursive=True):
-                any_match = True
-                if os.path.isfile(matched):
-                    total_files += 1
-                    with _index_job_lock:
-                        _index_job.total_files = total_files
-            if not any_match:
-                with _index_job_lock:
-                    _index_job.error = (
-                        f"'{source}' matched no files. Check the folder path "
-                        "or glob pattern."
-                    )
-                return
-            with _index_job_lock:
-                _index_job.phase = "indexing"
-
-            chunk_count, skipped = index_documents_into_vault(
-                vault_path=vault_path,
-                source_pattern=pattern,
-                embedding_model=embedding_model,
-                embedding_source=embedding_source,
-                chunk_size=chunk_size,
-                shingle_size=shingle_size,
-                shingle_overlap=shingle_overlap,
-                overwrite=overwrite,
-                progress=report,
-            )
-            _refresh_pipelines(force=True)
-            _update_document_counts(vault_path)
-            with _index_job_lock:
-                if chunk_count == 0:
-                    _index_job.error = (
-                        "The matched files contained no readable document "
-                        "content; nothing was indexed."
-                    )
-                else:
-                    _index_job.message = (
-                        f"Indexed {chunk_count} chunk(s) from "
-                        f"{_index_job.files_done} file(s) using "
-                        f"{embedding_source}/{embedding_model}."
-                    )
-                    if skipped:
-                        _index_job.message += (
-                            f" Skipped {skipped} chunk(s) that failed to embed "
-                            "— check the server log for details."
-                        )
-    except Exception as exc:
-        with _index_job_lock:
-            _index_job.error = str(exc)
-    finally:
-        with _index_job_lock:
-            _index_job.running = False
-            _index_job.current_file = ""
-
-
-def start_index_job(
-    vault_path: str,
-    source: str,
-    pattern: str,
-    embedding_model: str,
-    embedding_source: str,
-    chunk_size: int,
-    shingle_size: int,
-    shingle_overlap: int,
-    overwrite: bool,
-) -> bool:
-    """Start the background indexing job; False if one is already running."""
-    global _index_job
-    with _index_job_lock:
-        if _index_job.running:
-            return False
-        # A fresh instance resets every other field to its dataclass default.
-        _index_job = IndexJob(
-            running=True,
-            phase="counting",
-            source=source,
-            vault_path=vault_path,
-            embedding=f"{embedding_source}/{embedding_model}",
-        )
-
-    thread = threading.Thread(
-        target=_run_index_job,
-        args=(
-            vault_path,
-            source,
-            pattern,
-            embedding_model,
-            embedding_source,
-            chunk_size,
-            shingle_size,
-            shingle_overlap,
-            overwrite,
-        ),
-        daemon=True,
-    )
-    thread.start()
-    return True
 
 
 @app.get("/api/index-status")
@@ -2861,94 +856,6 @@ def folders_rebuild(
     return _redirect_with_message("/documents", message=message, error=error)
 
 
-@dataclass
-class FulltextIndexJob:
-    """Progress of the (single) background full-text (Whoosh) index build."""
-
-    running: bool = False
-    vault_path: str = ""
-    total_docs: int = 0
-    docs_done: int = 0
-    message: str = ""
-    error: str | None = None
-
-
-_fulltext_index_job = FulltextIndexJob()
-_fulltext_index_job_lock = threading.Lock()
-
-
-def _fulltext_index_job_snapshot() -> dict[str, Any]:
-    with _fulltext_index_job_lock:
-        return asdict(_fulltext_index_job)
-
-
-def _run_fulltext_index_job(vault_path: str) -> None:
-    """Thread target: rebuild the Whoosh index, publishing progress as it goes."""
-    started = time.monotonic()
-    next_log_pct = 0
-
-    def report(docs_done: int, total_docs: int) -> None:
-        nonlocal next_log_pct
-        with _fulltext_index_job_lock:
-            _fulltext_index_job.docs_done = docs_done
-            _fulltext_index_job.total_docs = total_docs
-        # Console progress: log on each ~10% step so long builds stay legible.
-        pct = int(docs_done / total_docs * 100) if total_docs else 0
-        if pct >= next_log_pct:
-            print(
-                f"  full-text index: {docs_done}/{total_docs} docs ({pct}%)",
-                flush=True,
-            )
-            next_log_pct = (pct // 10 + 1) * 10
-
-    try:
-        with _index_run_guard(vault_path):
-            documents = _iter_lancedb_docs_for_whoosh(vault_path)
-            with _fulltext_index_job_lock:
-                _fulltext_index_job.total_docs = len(documents)
-            print(
-                f"Building full-text index: {len(documents)} document(s) from {vault_path}",
-                flush=True,
-            )
-            _build_whoosh_index(vault_path, documents, progress=report)
-            _refresh_pipelines(force=True)
-            _update_document_counts(vault_path)
-            elapsed = time.monotonic() - started
-            print(
-                f"Full-text index built: {len(documents)} document(s) in {elapsed:.1f}s",
-                flush=True,
-            )
-            with _fulltext_index_job_lock:
-                _fulltext_index_job.message = (
-                    f"Full-text index created with {len(documents)} document(s)."
-                )
-    except Exception as exc:
-        print(f"Full-text index build failed: {exc}", flush=True)
-        with _fulltext_index_job_lock:
-            _fulltext_index_job.error = f"Failed to create index: {exc}"
-    finally:
-        with _fulltext_index_job_lock:
-            _fulltext_index_job.running = False
-
-
-def start_fulltext_index_job(vault_path: str) -> bool:
-    """Start the background full-text index build; False if one is already running."""
-    global _fulltext_index_job
-    with _fulltext_index_job_lock:
-        if _fulltext_index_job.running:
-            return False
-        # A fresh instance resets every other field to its dataclass default.
-        _fulltext_index_job = FulltextIndexJob(running=True, vault_path=vault_path)
-
-    thread = threading.Thread(
-        target=_run_fulltext_index_job,
-        args=(vault_path,),
-        daemon=True,
-    )
-    thread.start()
-    return True
-
-
 @app.get("/api/fulltext-index-status")
 async def fulltext_index_status() -> JSONResponse:
     """Report the state of the background full-text index build."""
@@ -2974,65 +881,6 @@ def config_status(
     return JSONResponse(
         content=_collect_config_status(state, probe=probe, allow_download=download)
     )
-
-
-def _collect_config_status(
-    state: AppState, probe: bool = True, allow_download: bool = False
-) -> dict[str, Any]:
-    """Build the config-status report for the effective model selection."""
-    vault_selected = _vault_selected(state)
-    vault_embedding = (
-        vault_metadata.load_embedding_config(state.vault_path)
-        if vault_selected
-        else None
-    )
-    filter_info = None
-    if vault_selected:
-        script = retrieval_filter.load_script(state.vault_path)
-        if script:
-            flags = user_settings.get_retrieval_filter_flags(state.vault_path)
-            # The compiler's message can quote exception text, which does not
-            # belong in this API response (information exposure through an
-            # exception); the status only says *that* the script is broken.
-            # The full message is where scripts get fixed: the vault's
-            # retrieval-filter editor (Validate).
-            filter_info = {
-                "enabled": flags["enabled"],
-                "strict": flags["strict"],
-                "error": (
-                    "The filter script does not compile. Open the vault's "
-                    "retrieval filter editor and press Validate to see the "
-                    "compiler message."
-                    if retrieval_filter.validate_script(script)
-                    else None
-                ),
-            }
-    return diagnostics.collect_config_status(
-        _effective_models(state),
-        vault_selected=vault_selected,
-        vault_embedding=vault_embedding,
-        vault_indexed=vault_selected and _vault_has_documents(state.vault_path),
-        retrieval_filter=filter_info,
-        probe=probe,
-        allow_download=allow_download,
-    )
-
-
-def _vault_has_documents(vault_path: str) -> bool:
-    """True when the vault's docs table exists and holds at least one chunk.
-
-    Any failure to read the table (no table yet, unreadable vault) counts as
-    "no documents": for the embedding↔index diagnostic that is the state where
-    no recorded config should be expected.
-    """
-    try:
-        doc_store = LanceDBDocumentStore(
-            path=get_vector_db_path(vault_path),
-            table_name=DEFAULT_VECTOR_TABLE_NAME,
-        )
-        return bool(doc_store.count() > 0)
-    except Exception:
-        return False
 
 
 def _open_vault_for_indexing(
@@ -3440,19 +1288,6 @@ async def search_page(
 ) -> Response:
     """Render the semantic search interface page."""
     return _render_page(request, state, "search.html", query="", results=None)
-
-
-def _filter_outcome_note(count: int, filter_error: str | None) -> str:
-    """Describe the outcome of an opt-in filtered search for the results page."""
-    if filter_error:
-        return (
-            "The custom transform failed and was skipped — showing unfiltered "
-            f"results ({filter_error})."
-        )
-    return (
-        f"Custom transform applied — {count} result{'s' if count != 1 else ''} "
-        "after filtering."
-    )
 
 
 @app.post("/search", response_class=HTMLResponse)

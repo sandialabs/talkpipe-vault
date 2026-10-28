@@ -714,9 +714,11 @@ src/talkpipe_vault/
 │   ├── config.py                   # Config resolution and vault layout
 │   ├── building_and_watching.py    # Experimental watcher pipelines
 │   └── cli.py                      # Experimental watcher CLI helpers
-├── apps/                           # vault-server: query.py (routes), vault_server.py (CLI),
-│                                   #   vault_index.py (vault-index CLI), user_settings.py,
-│                                   #   credentials.py, access_control.py, templates/
+├── apps/                           # vault-server: query.py (routes, run_app), state.py,
+│                                   #   pipelines.py, folders.py, vaults.py, results.py,
+│                                   #   vault_store.py, vault_server.py (CLI), vault_index.py
+│                                   #   (vault-index CLI), user_settings.py, credentials.py,
+│                                   #   access_control.py, templates/
 ├── tui/                            # vault-tui: app.py, service.py, app.tcss
 └── watchdog.py                     # fileWatcher
 ```

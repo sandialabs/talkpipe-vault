@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from talkpipe_vault.apps import query, user_settings
+from talkpipe_vault.apps import state as app_state
 from talkpipe_vault.tui.service import VaultService
 from tests.conftest import build_docs_vault
 
@@ -31,9 +32,9 @@ def _isolated_home(tmp_path, monkeypatch):
 
 
 def _drop_folder_scheduler():
-    if query._folder_scheduler is not None:
-        query._folder_scheduler.stop()
-        query._folder_scheduler = None
+    if app_state._folder_scheduler is not None:
+        app_state._folder_scheduler.stop()
+        app_state._folder_scheduler = None
 
 
 @pytest.fixture(scope="module")

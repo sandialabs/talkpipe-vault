@@ -26,6 +26,7 @@ from typing import Any
 from talkpipe.llm.config import getEmbeddingSources, getPromptSources
 
 from talkpipe_vault.apps import access_control, credentials, query, user_settings
+from talkpipe_vault.apps import state as app_state
 from talkpipe_vault.pipelines import (
     config,
     diagnostics,
@@ -455,8 +456,8 @@ class VaultService:
 
     def shutdown(self) -> None:
         """Finish the folder indexer's batch in progress and release the folders."""
-        if query._folder_scheduler is not None:
-            query._folder_scheduler.stop()
+        if app_state._folder_scheduler is not None:
+            app_state._folder_scheduler.stop()
 
     def open_vault(
         self, raw_path: str, *, confirm_non_vault: bool = False
