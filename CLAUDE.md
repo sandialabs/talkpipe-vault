@@ -47,7 +47,12 @@ src/talkpipe_vault/
     ├── config.py               # Model/template config resolution + vault layout helpers
     ├── cli.py                  # Experimental watcher CLI helpers (not installed as scripts)
     ├── building_and_watching.py # Experimental watch/batch vector DB pipelines
-    ├── searching_and_prompting.py # VaultSearch / VaultChat / VaultTextSearch segments
+    ├── search_results.py       # Result shape: normalize, mergeSearchResults, reciprocal rank fusion, filterSearchResults
+    ├── keyword_search.py       # searchLance, extractSearchKeywords, keyword-query helpers
+    ├── vault_paths.py          # resolve_vault_paths, check_searchable, _SearchesVaultPaths, _IndexView
+    ├── vault_search.py         # vaultSearch, vaultTextSearch and the fan-out searches
+    ├── vault_chat.py           # vaultChat
+    ├── searching_and_prompting.py # Original import path: re-exports the five modules above
     ├── folder_files.py         # Folder mode's shared rules: index location, document files, change tracker, file diff
     ├── folder_manifest.py      # Manifest: a folder index's per-file state (sqlite)
     ├── folder_scheduler.py     # FolderScheduler: the background indexing thread
@@ -237,7 +242,10 @@ raw-distance search) have no public `LanceDBDocumentStore` method yet, so
 internals; a talkpipe issue asks for them. Remove the private calls when it
 lands.
 
-**Search** (`searching_and_prompting.py`): `VaultSearch`, `VaultTextSearch`,
+**Search** (`vault_search.py`, `vault_chat.py`, `vault_paths.py`; the old
+`searching_and_prompting.py` re-exports everything for existing imports and
+must gain a name whenever one of the five modules gains a public one):
+`VaultSearch`, `VaultTextSearch`,
 `VaultChat` and `AgentVaultSearch` accept a list of paths; `resolve_vault_paths`
 maps a documents folder to its index and `needs_fan_out` keeps a single named
 vault on its old pipeline. The three segments share `_SearchesVaultPaths`:

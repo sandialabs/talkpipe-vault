@@ -2,6 +2,7 @@
 
 ## In Development
 
+- **For pipelines: the search module is split by function.** `searching_and_prompting` grew to every search component at once; its contents now live in `search_results` (the result shape, `mergeSearchResults`, reciprocal rank fusion, `filterSearchResults`), `keyword_search` (`searchLance`, `extractSearchKeywords`, keyword-query helpers), `vault_paths` (folders to indexes, searchable checks, the segments' shared base), `vault_search` (`vaultSearch`, `vaultTextSearch`) and `vault_chat` (`vaultChat`), so an application can import the piece it needs. `talkpipe_vault.pipelines.searching_and_prompting` still exports every name, so existing imports keep working; ChatterLang is unaffected.
 - **A folder index built on another operating system keeps its citations.** Sources are stored as absolute paths from where the folder was indexed; a `.tpvault` carried from Windows to Linux or macOS (or back) left every result and open-file link pointing at a path of the other system. The rebase that already follows a moved folder now reads the stored paths in the convention they were written with, so the index is searchable and its files open without a rebuild.
 
 ## 1.1.0a2 (2026-10-25)

@@ -290,7 +290,7 @@ hits from the same embedder merge by distance and the rest by reciprocal
 rank, and every hit's document gets a `folder`.
 
 ```python
-from talkpipe_vault.pipelines.searching_and_prompting import VaultSearch
+from talkpipe_vault.pipelines.vault_search import VaultSearch
 
 search = VaultSearch(
     vault_path=["/path/to/notes", "/path/to/papers"], limit=3
@@ -338,11 +338,8 @@ rest. Results dedupe by `doc_id`.
 
 ```python
 from talkpipe.pipe.fields import ToDict
-from talkpipe_vault.pipelines.searching_and_prompting import (
-    MergeSearchResults,
-    VaultSearch,
-    VaultTextSearch,
-)
+from talkpipe_vault.pipelines.search_results import MergeSearchResults
+from talkpipe_vault.pipelines.vault_search import VaultSearch, VaultTextSearch
 
 folders = ["/path/to/notes", "/path/to/papers"]
 hybrid = (
@@ -387,10 +384,8 @@ it. This is the segment behind the interfaces' per-index retrieval filter
 
 ```python
 from talkpipe.pipe.fields import ToDict
-from talkpipe_vault.pipelines.searching_and_prompting import (
-    SearchResultFilter,
-    VaultSearch,
-)
+from talkpipe_vault.pipelines.search_results import SearchResultFilter
+from talkpipe_vault.pipelines.vault_search import VaultSearch
 
 no_drafts = (
     ToDict(field_list="_:query")
@@ -418,7 +413,7 @@ This is the keyword boost the Ask page offers, and the `extract_keywords`
 tool the agent gets.
 
 ```python
-from talkpipe_vault.pipelines.searching_and_prompting import ExtractSearchKeywords
+from talkpipe_vault.pipelines.keyword_search import ExtractSearchKeywords
 
 to_query = ExtractSearchKeywords(
     chat_source="ollama", chat_model="qwen3:8b"
@@ -467,7 +462,7 @@ Options, all combinable:
 A redacting question answerer, with the context it used:
 
 ```python
-from talkpipe_vault.pipelines.searching_and_prompting import VaultChat
+from talkpipe_vault.pipelines.vault_chat import VaultChat
 
 ask = VaultChat(
     vault_path="/path/to/notes",
@@ -594,9 +589,9 @@ blocks for Python code:
 | `talkpipe_vault.pipelines.folder_files.diff_files(root, subtree, known, extensions)` | Compare a folder with a record of it: `added`, `changed`, `touched`, `deleted` |
 | `talkpipe_vault.pipelines.folder_files.ChangeTracker(root)` | Debounced watcher events plus periodic rescans; `due(now)` says what to compare |
 | `talkpipe_vault.pipelines.folder_files.resolve_index_location(root, external_base)` | Where per-folder state may live (in the folder, else app data) and why |
-| `talkpipe_vault.pipelines.searching_and_prompting.reciprocal_rank_fusion(lists, limit=...)` | Fuse ranked result lists into one `SearchResult` list |
-| `talkpipe_vault.pipelines.searching_and_prompting.normalize_search_result(hit, rename_fields)` | Turn a keyword-hit dict or a `SearchResult` into a `SearchResult` |
-| `talkpipe_vault.pipelines.searching_and_prompting.resolve_vault_paths(vault_path)` | Map folders to their indexes; what every search component does first |
+| `talkpipe_vault.pipelines.search_results.reciprocal_rank_fusion(lists, limit=...)` | Fuse ranked result lists into one `SearchResult` list |
+| `talkpipe_vault.pipelines.search_results.normalize_search_result(hit, rename_fields)` | Turn a keyword-hit dict or a `SearchResult` into a `SearchResult` |
+| `talkpipe_vault.pipelines.vault_paths.resolve_vault_paths(vault_path)` | Map folders to their indexes; what every search component does first |
 | `talkpipe_vault.pipelines.vault_metadata.load_embedding_config(index_path)` | The embedder an index was built with (`source`, `model`, `dimension`), or `None` |
 
 `folder_files` is what the indexer and `folderChanges` share: a third
@@ -705,7 +700,12 @@ src/talkpipe_vault/
 │   ├── folder_scheduler.py         # The background indexing thread
 │   ├── folder_manifest.py          # Per-file index state (sqlite)
 │   ├── folder_changes.py           # folderChanges
-│   ├── searching_and_prompting.py  # vaultSearch, vaultTextSearch, vaultChat, merge, filter, keywords
+│   ├── search_results.py           # Result shape, merge, reciprocal rank fusion, filter
+│   ├── keyword_search.py           # searchLance, extractSearchKeywords, keyword queries
+│   ├── vault_paths.py              # Folders → indexes, searchable checks, the segments' shared base
+│   ├── vault_search.py             # vaultSearch, vaultTextSearch (fan-out over several indexes)
+│   ├── vault_chat.py               # vaultChat
+│   ├── searching_and_prompting.py  # The original import path; re-exports all of the above
 │   ├── retrieval_filter.py         # Per-index filter scripts
 │   ├── agent_tools.py              # Agent tool pack (see AGENT_RETRIEVAL.md)
 │   ├── agent_search.py             # vaultAgentSearch, vaultAgentChat

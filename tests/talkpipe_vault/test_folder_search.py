@@ -6,18 +6,16 @@ from pathlib import Path
 import pytest
 from talkpipe.search.abstract import SearchResult
 
-from talkpipe_vault.pipelines import folder_index
+from talkpipe_vault.pipelines import folder_index, vault_search
 from talkpipe_vault.pipelines.config import FOLDER_INDEX_DIRNAME
-from talkpipe_vault.pipelines.searching_and_prompting import (
+from talkpipe_vault.pipelines.keyword_search import words_query
+from talkpipe_vault.pipelines.search_results import (
     MergeSearchResults,
-    VaultChat,
-    VaultSearch,
-    VaultTextSearch,
-    _IndexView,
     reciprocal_rank_fusion,
-    resolve_vault_paths,
-    words_query,
 )
+from talkpipe_vault.pipelines.vault_chat import VaultChat
+from talkpipe_vault.pipelines.vault_paths import _IndexView, resolve_vault_paths
+from talkpipe_vault.pipelines.vault_search import VaultSearch, VaultTextSearch
 from tests.conftest import FAKE_EMBEDDING_SOURCE
 
 
@@ -138,14 +136,12 @@ def test_keyword_search_spans_folders(two_folders):
 def test_keyword_fallback_finds_files_not_yet_embedded(
     tmp_path, vault_home, fake_embedder, monkeypatch
 ):
-    from talkpipe_vault.pipelines import searching_and_prompting
-
     root = _folder(tmp_path, "docs", {"log.txt": "The lighthouse lamp failed.\n"})
     _index(root, vectors=False)
     assert not folder_index.vectors_started(folder_index.find_index_path(root))
     # With no vectors the query is not embedded at all, so a first search
     # never waits on the embedding model.
-    monkeypatch.setattr(searching_and_prompting, "LLMEmbed", None)
+    monkeypatch.setattr(vault_search, "LLMEmbed", None)
     assert _search(str(root))("lighthouse lamp") == []
     results = _search(str(root), keyword_fallback=True)("lighthouse lamp")
     assert results
@@ -364,16 +360,14 @@ def test_one_unreachable_embedder_leaves_the_other_folders_semantic(
 def test_the_embedder_is_made_on_the_first_query(two_folders, monkeypatch):
     # Making one can download its model; building the search (opening a
     # folder in the web interface) must not wait for that.
-    from talkpipe_vault.pipelines import searching_and_prompting
-
     made = []
-    real = searching_and_prompting.LLMEmbed
+    real = vault_search.LLMEmbed
 
     def counting(*args, **kwargs):
         made.append(kwargs["model"])
         return real(*args, **kwargs)
 
-    monkeypatch.setattr(searching_and_prompting, "LLMEmbed", counting)
+    monkeypatch.setattr(vault_search, "LLMEmbed", counting)
     search = _search(list(two_folders))
     assert made == []
     assert search("lighthouse keeper")

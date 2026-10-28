@@ -9,12 +9,15 @@ import pytest
 from talkpipe import compile
 from talkpipe.search.abstract import SearchResult
 
-from talkpipe_vault.pipelines.searching_and_prompting import (
-    SEARCH_RESULT_RENAMES,
+from talkpipe_vault.pipelines import searching_and_prompting
+from talkpipe_vault.pipelines.keyword_search import (
     ExtractSearchKeywords,
+    keyword_query_from_llm_output,
+)
+from talkpipe_vault.pipelines.search_results import (
+    SEARCH_RESULT_RENAMES,
     MergeSearchResults,
     SearchResultFilter,
-    keyword_query_from_llm_output,
 )
 
 # Compiles, but every item it touches raises at run time.
@@ -304,3 +307,12 @@ class TestSearchResultFilter:
         (result,) = list(segment([{"other": []}]))
 
         assert result["_background"] == []
+
+
+def test_the_original_module_path_still_exports_every_component():
+    # searching_and_prompting was split by function; pipelines written
+    # against it keep importing from it.
+    for name in searching_and_prompting.__all__:
+        assert getattr(searching_and_prompting, name) is not None
+    assert searching_and_prompting.MergeSearchResults is MergeSearchResults
+    assert searching_and_prompting.ExtractSearchKeywords is ExtractSearchKeywords

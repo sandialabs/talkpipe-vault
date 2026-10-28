@@ -3,8 +3,8 @@
 import json
 from typing import Any, ClassVar
 
-from talkpipe_vault.pipelines import searching_and_prompting
-from talkpipe_vault.pipelines.searching_and_prompting import searchLance
+from talkpipe_vault.pipelines import keyword_search
+from talkpipe_vault.pipelines.keyword_search import searchLance
 
 
 class _FakeSearch:
@@ -54,7 +54,7 @@ class _FakeDocStore:
 
 def _patch_doc_store(monkeypatch: Any, table: _FakeTable) -> None:
     monkeypatch.setattr(
-        searching_and_prompting,
+        keyword_search,
         "LanceDBDocumentStore",
         lambda **_: _FakeDocStore(table),
     )

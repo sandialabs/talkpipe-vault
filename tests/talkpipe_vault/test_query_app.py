@@ -9,12 +9,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from talkpipe_vault.apps import query, user_settings
-from talkpipe_vault.pipelines import (
-    agent_search,
-    retrieval_filter,
-    searching_and_prompting,
-)
-from talkpipe_vault.pipelines.searching_and_prompting import VaultTextSearch
+from talkpipe_vault.pipelines import agent_search, retrieval_filter, vault_search
+from talkpipe_vault.pipelines.vault_search import VaultTextSearch
 from talkpipe_vault.tui.service import VaultService
 
 
@@ -1641,9 +1637,9 @@ def test_vault_text_search_default_limit_returns_all_whoosh_results(
         captured.update(kwargs)
         return _FakeSearchWhoosh()
 
-    monkeypatch.setattr(searching_and_prompting, "searchWhoosh", _fake_search_whoosh)
+    monkeypatch.setattr(vault_search, "searchWhoosh", _fake_search_whoosh)
     monkeypatch.setattr(
-        searching_and_prompting,
+        vault_search,
         "get_whoosh_index_path",
         lambda _vault_path: str(tmp_path / "fulltext_vault"),
     )

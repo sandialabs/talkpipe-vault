@@ -47,7 +47,7 @@ from strands import tool as strands_tool
 from talkpipe.search.abstract import SearchResult
 from talkpipe_agents import resolve_agent_tools
 
-from .searching_and_prompting import normalize_search_result
+from .search_results import normalize_search_result
 
 logger = logging.getLogger(__name__)
 

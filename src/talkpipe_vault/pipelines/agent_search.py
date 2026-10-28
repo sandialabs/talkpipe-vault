@@ -63,13 +63,10 @@ from .config import (
     get_vector_db_path,
     get_whoosh_index_path,
 )
-from .searching_and_prompting import (
-    SEARCH_RESULT_RENAMES,
-    ExtractSearchKeywords,
-    VaultSearch,
-    VaultTextSearch,
-    resolve_vault_paths,
-)
+from .keyword_search import ExtractSearchKeywords
+from .search_results import SEARCH_RESULT_RENAMES
+from .vault_paths import resolve_vault_paths
+from .vault_search import VaultSearch, VaultTextSearch
 
 logger = logging.getLogger(__name__)
 

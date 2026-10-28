@@ -1,15 +1,12 @@
-"""Unit tests for the searching_and_prompting pipeline module."""
+"""Tests for the vaultSearch, vaultTextSearch and vaultChat segments against a live model."""
 
 from pathlib import Path
 
 import pytest
 from talkpipe import compile
 
-from talkpipe_vault.pipelines.searching_and_prompting import (
-    VaultChat,
-    VaultSearch,
-    VaultTextSearch,
-)
+from talkpipe_vault.pipelines.vault_chat import VaultChat
+from talkpipe_vault.pipelines.vault_search import VaultSearch, VaultTextSearch
 from tests.conftest import build_docs_vault
 
 # Get the path to sample documents

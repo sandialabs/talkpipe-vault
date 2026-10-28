@@ -84,14 +84,13 @@ from talkpipe_vault.pipelines.config import (
     get_vector_db_path,
     get_whoosh_index_path,
 )
-from talkpipe_vault.pipelines.searching_and_prompting import (
+from talkpipe_vault.pipelines.search_results import (
     SEARCH_RESULT_RENAMES,
     SearchResultFilter,
-    VaultChat,
-    VaultSearch,
-    VaultTextSearch,
     normalize_document_cell,
 )
+from talkpipe_vault.pipelines.vault_chat import VaultChat
+from talkpipe_vault.pipelines.vault_search import VaultSearch, VaultTextSearch
 
 configure_logger("root:ERROR")
 
