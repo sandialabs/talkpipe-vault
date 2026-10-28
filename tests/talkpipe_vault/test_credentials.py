@@ -132,6 +132,15 @@ def test_normalize_url_changes_keeps_blank_and_missing_fields():
     assert notes == []
 
 
+def test_normalize_url_changes_rejects_a_value_with_spaces():
+    """Text with spaces is not a URL; it must not be saved with http:// in front."""
+    with pytest.raises(credentials.UrlCredentialError) as excinfo:
+        credentials.normalize_url_changes({"ollama_server_url": "not a url"})
+
+    assert excinfo.value.key == "ollama_server_url"
+    assert "is not a URL" in str(excinfo.value)
+
+
 def test_normalize_url_changes_rejects_unusable_url_naming_the_field():
     """An unusable URL is refused with the field's label and key."""
     with pytest.raises(credentials.UrlCredentialError) as excinfo:

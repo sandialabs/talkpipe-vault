@@ -171,6 +171,11 @@ def normalize_server_url(value: str) -> tuple[str, str]:
     typed = value.strip()
     if not typed:
         return "", ""
+    if any(ch.isspace() for ch in typed):
+        raise ValueError(
+            f"{typed!r} is not a URL — enter the server's address as "
+            "http://host:port (e.g. http://localhost:11434)."
+        )
     scheme, sep, rest = typed.partition("://")
     if not sep:
         # "host:11434" has no "://"; urlparse would take "host" for a scheme.
