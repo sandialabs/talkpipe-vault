@@ -773,7 +773,8 @@ def redact_term(
 `segment` and `register_segment` are importable from `talkpipe` itself. The
 decorators run at import time, so the Python pipe API sees `redact_term(...)`
 at once; the entry point is what lets `chatterlang_script` in a fresh process
-find `redactTerm`.
+find `redactTerm`. To try it from a script before packaging it, name the file:
+`chatterlang_script --load-module redact.py --script '... | redactTerm[term="DRAFT"] | print'`.
 
 ## Testing without models
 

@@ -187,13 +187,35 @@ def test_banner_lists_only_the_folders_that_exist(tmp_path, monkeypatch, capsys)
 
     vault_server.main()
 
+    captured = capsys.readouterr()
     folders_line = next(
-        line for line in capsys.readouterr().out.splitlines() if "Folders:" in line
+        line for line in captured.out.splitlines() if "Folders:" in line
     )
     assert str(real) in folders_line
     assert str(typo) not in folders_line
-    # The app still gets both, and warns about the missing one when opening.
-    assert calls["folders"] == [str(typo), str(real)]
+    # The missing folder is reported on stderr, before the banner, and the
+    # app opens only the folders that exist.
+    assert f"Warning: {typo} does not exist." in captured.err
+    assert calls["folders"] == [str(real)]
+
+
+def test_only_missing_dirs_start_without_folders(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv(user_settings.VAULT_HOME_ENV, str(tmp_path / "home"))
+    calls = {}
+    monkeypatch.setattr(vault_server, "run_app", lambda **k: calls.update(k))
+    typo = tmp_path / "nots"
+    monkeypatch.setattr(
+        "sys.argv", ["vault-server", "--dir", str(typo), "--no-browser"]
+    )
+
+    vault_server.main()
+
+    captured = capsys.readouterr()
+    assert f"Warning: {typo} does not exist." in captured.err
+    assert "Folders: none yet" in captured.out
+    assert "most recently used" not in captured.out
+    assert calls["folders"] == []
+    assert calls["vault_path"] == ""
 
 
 def test_launch_browser_opens_once_server_accepts(monkeypatch):

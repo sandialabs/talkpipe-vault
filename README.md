@@ -64,7 +64,8 @@ Or install it as a standalone command with [uv](https://docs.astral.sh/uv/):
 `uv tool upgrade talkpipe-vault` upgrades it).
 
 Your browser opens at http://127.0.0.1:8002 with `~/notes` being indexed in
-the background. Search and ask right away; the pages say how far indexing
+the background (on a headless machine add `--no-browser` and open the address
+it prints). Search and ask right away; the pages say how far indexing
 has got. Started again later, `vault-server` reopens the folders you had
 open. Without a path, add folders on the **Vaults & Documents** page. A
 path that does not exist is created as a new, empty named vault and the

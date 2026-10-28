@@ -240,20 +240,26 @@ def main() -> None:
             print(f"Error opening vault at {vault_path}: {exc}", file=sys.stderr)
             sys.exit(1)
 
+    # A folder that cannot be searched is reported here, before the banner
+    # promises a running server, and left out of what the app opens.
+    usable = []
+    for folder in folders:
+        if Path(folder).is_dir():
+            usable.append(folder)
+        else:
+            what = "is not a folder" if Path(folder).exists() else "does not exist"
+            print(f"Warning: {folder} {what}.", file=sys.stderr)
+    folders = usable
+    if not folders and not vault_path:
+        resumed = False
+
     print("=" * 60)
     print("Starting TalkPipe Vault")
     print("=" * 60)
     if folders:
         suffix = " (last session)" if resumed else ""
-        # A missing --dir is warned about when the app opens the folders;
-        # list only the ones it can search.
-        usable = [folder for folder in folders if Path(folder).is_dir()]
-        if usable:
-            print(f"Folders: {', '.join(usable)}{suffix}")
-            print("Indexed in the background; ask questions right away.")
-        else:
-            print("Folders: none of those given can be searched (see below);")
-            print("add folders in the web interface after it starts.")
+        print(f"Folders: {', '.join(folders)}{suffix}")
+        print("Indexed in the background; ask questions right away.")
     elif resumed:
         print(f"Vault storage: {vault_path} (most recently used)")
     elif new_vault:

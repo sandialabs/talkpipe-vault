@@ -406,7 +406,7 @@ import it, so name the file when you run the script:
 When the web or terminal interface builds the segment, it passes the chat
 source/model from Settings (or TalkPipe configuration), and the two limits
 from Settings. Everything else is the default. `_refresh_agent_pipelines` in
-`apps/query.py` is the one place that happens; it builds a single
+`apps/pipelines.py` is the one place that happens; it builds a single
 `AgentVaultChat` and hands `select_chunks` to the Search page and the whole
 segment to Ask, so the embedder and the agent model are set up once. A chat
 configuration that cannot be run as an agent leaves both pages' checkboxes

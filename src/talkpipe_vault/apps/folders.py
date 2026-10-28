@@ -514,7 +514,8 @@ def startup_folders(
 
 FOLDERS_LEFT_NOTE = (
     " The folders you had open are no longer searched (folders and a named "
-    "vault do not open together); add one again on this page to go back."
+    "vault do not open together); add one again on the Vaults & Documents "
+    "page to go back."
 )
 """Appended to the message when opening a named vault closed the folders."""
 

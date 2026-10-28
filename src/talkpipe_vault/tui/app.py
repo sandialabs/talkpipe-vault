@@ -84,8 +84,9 @@ up to date, keyword index included. Select an open folder in the list for \
 Close selected (it stays listed, index kept, not searched), Remove selected, \
 Remove and delete its index, or Re-embed selected (after changing the \
 embedding model); Open selected, or Enter, on a closed folder or one searched \
-before searches it again. Named vaults (advanced): open/create a vault, index documents, recent \
-vaults, retrieval filter. Index documents adds to the open vault; tick \
+before searches it again; Retrieval filter edits the filter script of the one \
+open folder (or of the open named vault). Named vaults (advanced): open/create a \
+vault, index documents, recent vaults. Index documents adds to the open vault; tick \
 "Overwrite existing index" to replace it (re-indexing the same folder without it duplicates \
 chunks). Enter in either path field runs Index documents. Adding documents \
 does not update the full-text index — rebuild it on the Keywords tab. \
@@ -370,8 +371,9 @@ STARTER RECIPES
     | lambdaFilter[expression="'/archive/' not in item['document'].get('source', '')"]
 
   Drop low-scoring results (only when your embedding backend reports
-  similarity scores; the default model2vec embedder scores most hits
-  near 0, so there this would drop every result):
+  similarity scores; the default model2vec embedder scores all but the
+  closest match or two near 0, so there this drops most results, not
+  just weak ones):
     | lambdaFilter[expression="item['score'] > 0.2"]
 
   For the common case — is this text inside that field? — isIn and

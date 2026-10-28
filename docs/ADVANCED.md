@@ -221,6 +221,15 @@ pip install podman-compose   # podman needs a compose provider
 podman compose up -d
 ```
 
+Unlike the README's `podman run` line, the compose services **build the
+image from this checkout** (`build:` in `docker-compose.yml`): clone the
+repository first and expect the first `up` to take several minutes. Pass the
+package version as the compose file's comment shows
+(`APP_VERSION="$(python3 -m setuptools_scm)" podman compose build`), or the
+image reports version 0.1.0. To run the published image instead, pull it and
+set `IMAGE_NAME=ghcr.io/sandialabs/talkpipe-vault:experimental` in `.env`;
+compose builds only when the named image is absent.
+
 Nothing to search is configured here: the service starts
 `vault-server --resume`, so it reopens the folders (or vault) you last had
 open and otherwise opens on the Vaults & Documents page. Folder indexes and
@@ -246,12 +255,19 @@ are all inherited:
 
 ```dockerfile
 # Containerfile.custom
-FROM ghcr.io/sandialabs/talkpipe-vault:experimental   # latest, once a full release has folder mode
+# `experimental` is the current pre-release; use `latest` once a full
+# release has folder mode.
+FROM ghcr.io/sandialabs/talkpipe-vault:experimental
 
 # Extra Python packages (e.g. a TalkPipe plugin or provider SDK). The base
-# image runs as user "vault", so switch to root to install system-wide.
+# image runs as user "vault" and ships without pip (it is removed once the
+# vault is installed), so switch to root, reinstall pip for this one step
+# and drop it again.
 USER root
-RUN pip install --no-cache-dir your-extra-package
+RUN dnf install -y python3-pip \
+    && pip install --no-cache-dir your-extra-package \
+    && dnf remove -y python3-pip \
+    && dnf clean all
 USER vault
 
 # Different default sources/models for embeddings and chat — any registered
