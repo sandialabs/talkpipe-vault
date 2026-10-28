@@ -37,7 +37,7 @@ import socket
 import time
 import uuid
 from collections.abc import Iterable, Iterator
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Annotated, Any
 
 import filelock
@@ -823,6 +823,29 @@ def index_folder_root(index_path: str | Path) -> Path | None:
         return Path(data["root"])
     except (OSError, ValueError, KeyError, TypeError):
         return None
+
+
+def rebase_source(value: str, recorded_root: str, current_root: str) -> str:
+    """Rewrite *value* from under the folder's recorded path to its current one.
+
+    Stored sources are absolute paths written where the folder was indexed.
+    They were written with the recorded root's separator convention (a
+    backslash in the root means it came from Windows), so the remainder is
+    split by that convention and rejoined with this platform's: an index
+    built on another operating system keeps citing files that open. A value
+    not under the recorded root, or an unmoved folder, is returned unchanged.
+    """
+    if not (recorded_root and current_root and recorded_root != current_root):
+        return value
+    rest = value[len(recorded_root) :]
+    if not value.startswith(recorded_root) or not rest:
+        return value
+    windows = "\\" in recorded_root
+    separators = "\\/" if windows else "/"
+    if rest[0] not in separators:
+        return value
+    pure = PureWindowsPath if windows else PurePosixPath
+    return str(Path(current_root, *pure(rest.lstrip(separators)).parts))
 
 
 def read_index_status(index_path: str | Path) -> dict[str, Any]:

@@ -1010,8 +1010,8 @@ def _folder_source_file(state: AppState, key: str) -> Path | None:
     candidate = str(found[0].get("path", ""))
     root = folder_index.index_folder_root(found[1])
     recorded = folder_index.read_index_status(found[1]).get("recorded_root")
-    if root is not None and recorded and candidate.startswith(recorded + os.sep):
-        candidate = str(root) + candidate[len(recorded) :]
+    if root is not None and recorded:
+        candidate = folder_index.rebase_source(candidate, str(recorded), str(root))
     confined = access_control.confine(candidate, [Path(r) for r in state.folders])
     return confined if confined is not None and confined.is_file() else None
 

@@ -1,6 +1,7 @@
 """Tests for searching folder indexes, alone and several together."""
 
 import shutil
+from pathlib import Path
 
 import pytest
 from talkpipe.search.abstract import SearchResult
@@ -12,6 +13,7 @@ from talkpipe_vault.pipelines.searching_and_prompting import (
     VaultChat,
     VaultSearch,
     VaultTextSearch,
+    _IndexView,
     reciprocal_rank_fusion,
     resolve_vault_paths,
     words_query,
@@ -161,6 +163,69 @@ def test_hits_from_a_moved_folder_point_at_its_new_place(
     assert hit.document["source"] == str(moved.resolve() / "log.txt")
     [keyword_hit] = VaultTextSearch(vault_path=str(moved)).process_value("lamp")
     assert keyword_hit["document"]["path"] == str(moved.resolve() / "log.txt")
+
+
+@pytest.mark.parametrize(
+    ("recorded", "current", "value", "expected"),
+    [
+        # Moved on the same platform, either convention.
+        ("/data/old", "/data/new", "/data/old/sub/a.txt", ("sub", "a.txt")),
+        (
+            "C:\\Users\\x\\old",
+            "C:\\Users\\x\\new",
+            "C:\\Users\\x\\old\\sub\\a.txt",
+            ("sub", "a.txt"),
+        ),
+        # Built on Windows, opened on posix.
+        (
+            "C:\\Users\\x\\Docs",
+            "/home/y/Docs",
+            "C:\\Users\\x\\Docs\\sub\\a.txt",
+            ("sub", "a.txt"),
+        ),
+        # Built on posix, opened on Windows (which also accepts "/").
+        (
+            "/home/x/Docs",
+            "C:\\Users\\y\\Docs",
+            "/home/x/Docs/sub/a.txt",
+            ("sub", "a.txt"),
+        ),
+        # A backslash in a posix file name is part of the name.
+        ("/data/old", "/data/new", "/data/old/odd\\name.txt", ("odd\\name.txt",)),
+    ],
+)
+def test_rebase_source_follows_the_recorded_root_convention(
+    recorded, current, value, expected
+):
+    assert folder_index.rebase_source(value, recorded, current) == str(
+        Path(current, *expected)
+    )
+
+
+@pytest.mark.parametrize(
+    ("recorded", "current", "value"),
+    [
+        ("/data/old", "/data/old", "/data/old/a.txt"),  # not moved
+        ("", "/data/new", "/data/old/a.txt"),  # nothing recorded
+        ("/data/old", "/data/new", "/data/older/a.txt"),  # a sibling folder
+        ("/data/old", "/data/new", "/data/old"),  # the root itself
+        ("C:\\Users\\x", "/home/y", "D:\\Users\\x\\a.txt"),  # another drive
+    ],
+)
+def test_rebase_source_leaves_other_paths_alone(recorded, current, value):
+    assert folder_index.rebase_source(value, recorded, current) == value
+
+
+def test_hits_from_an_index_built_on_windows_cite_files_here(tmp_path):
+    view = _IndexView(
+        path=str(tmp_path / FOLDER_INDEX_DIRNAME),
+        label="Docs",
+        current_root=str(tmp_path),
+        recorded_root="C:\\Users\\x\\Docs",
+    )
+    doc = view.tag({"source": "C:\\Users\\x\\Docs\\notes\\log.txt", "title": "log"})
+    assert doc["source"] == str(tmp_path / "notes" / "log.txt")
+    assert doc["folder"] == "Docs"
 
 
 def test_chat_answers_from_several_folders(two_folders):

@@ -513,6 +513,32 @@ def test_open_file_serves_only_indexed_documents(client, docs):
     assert b"lighthouse keeper" in served.content
 
 
+def test_open_file_serves_a_document_from_an_index_built_on_windows(
+    client, docs, monkeypatch
+):
+    # The chunk's stored source and the index's recorded root are the
+    # Windows paths the folder was indexed under; the folder is open here.
+    query.add_folder(query._state, str(docs))
+    assert _wait(_complete)
+    query._refresh_pipelines(force=True)
+    [hit] = query._process_semantic_results(
+        query._state.search_pipeline("lighthouse storm")
+    )[:1]
+    found = query._folder_chunk(query._state, hit["lookup_path"])
+    assert found is not None
+    document, index_path = found
+    document = {**document, "path": "C:\\Users\\x\\Docs\\lighthouse.txt"}
+    monkeypatch.setattr(
+        query, "_folder_chunk", lambda state, key: (document, index_path)
+    )
+    status = dict(query.folder_index.read_index_status(index_path))
+    status["recorded_root"] = "C:\\Users\\x\\Docs"
+    monkeypatch.setattr(query.folder_index, "read_index_status", lambda path: status)
+    served = client.get("/open-file", params={"path": hit["lookup_path"]})
+    assert served.status_code == 200
+    assert b"lighthouse keeper" in served.content
+
+
 def test_an_empty_folder_is_finished_not_still_indexing(client, tmp_path):
     empty = tmp_path / "empty"
     empty.mkdir()

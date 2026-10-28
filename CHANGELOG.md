@@ -2,6 +2,8 @@
 
 ## In Development
 
+- **A folder index built on another operating system keeps its citations.** Sources are stored as absolute paths from where the folder was indexed; a `.tpvault` carried from Windows to Linux or macOS (or back) left every result and open-file link pointing at a path of the other system. The rebase that already follows a moved folder now reads the stored paths in the convention they were written with, so the index is searchable and its files open without a rebuild.
+
 ## 1.1.0a2 (2026-10-25)
 
 ### Folders: point at folders and ask

@@ -547,12 +547,12 @@ class _IndexView:
     def tag(self, document: Any) -> dict[str, Any]:
         doc = dict(document or {})
         doc["folder"] = self.label
-        old, new = self.recorded_root, self.current_root
-        if old and new and old != new:
-            for key in ("source", "path"):
-                value = doc.get(key)
-                if isinstance(value, str) and value.startswith(old + os.sep):
-                    doc[key] = new + value[len(old) :]
+        for key in ("source", "path"):
+            value = doc.get(key)
+            if isinstance(value, str):
+                doc[key] = folder_index.rebase_source(
+                    value, self.recorded_root, self.current_root
+                )
         return doc
 
 
