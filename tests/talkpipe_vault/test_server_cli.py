@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from talkpipe_vault.apps import query, user_settings, vault_server
+from talkpipe_vault.apps import access_control, query, user_settings, vault_server
 
 _REAL_RUNNING_INSTANCE_URL = query._running_instance_url
 
@@ -41,30 +41,37 @@ def test_browser_url_normalizes_wildcard_hosts(host, expected):
     assert query._browser_url(host, 8002) == expected
 
 
-def _capture_run_app(monkeypatch):
+def test_module_form_opens_browser_by_default(monkeypatch):
     calls = {}
-    monkeypatch.setattr(
-        query, "run_app", lambda *a, **k: calls.update(args=a, kwargs=k)
-    )
-    return calls
-
-
-def test_main_opens_browser_by_default(monkeypatch):
-    calls = _capture_run_app(monkeypatch)
-    monkeypatch.setattr("sys.argv", ["vault-server"])
+    monkeypatch.setattr(vault_server, "run_app", lambda **k: calls.update(k))
+    monkeypatch.setattr("sys.argv", ["query.py"])
 
     query.main()
 
-    assert calls["kwargs"]["open_browser"] is True
+    assert calls["open_browser"] is True
 
 
-def test_main_no_browser_flag_disables_open(monkeypatch):
-    calls = _capture_run_app(monkeypatch)
-    monkeypatch.setattr("sys.argv", ["vault-server", "--no-browser"])
+def test_module_form_takes_the_vault_server_command_line(tmp_path, monkeypatch):
+    """``python -m talkpipe_vault.apps.query`` is documented as taking the same
+    options as ``vault-server``; a folder of documents opens in folder mode
+    and ``--dir`` adds another."""
+    monkeypatch.setenv(user_settings.VAULT_HOME_ENV, str(tmp_path / "home"))
+    calls = {}
+    monkeypatch.setattr(vault_server, "run_app", lambda **k: calls.update(k))
+    notes = tmp_path / "notes"
+    notes.mkdir()
+    (notes / "a.md").write_text("# a\n")
+    papers = tmp_path / "papers"
+    papers.mkdir()
+    argv = ["query.py", str(notes), "--dir", str(papers), "--no-browser"]
+    monkeypatch.setattr("sys.argv", argv)
 
     query.main()
 
-    assert calls["kwargs"]["open_browser"] is False
+    assert calls["folders"] == [str(notes), str(papers)]
+    assert calls["vault_path"] == ""
+    assert calls["open_browser"] is False
+    assert calls["port"] == vault_server.DEFAULT_PORT
 
 
 def test_vault_server_main_opens_browser_by_default(monkeypatch):
@@ -148,6 +155,24 @@ def test_a_missing_path_says_it_becomes_a_new_empty_vault(
     assert calls["vault_path"] == str(typo)  # opened as before
     assert "new, empty named vault" in out
     assert "check the path" in out
+
+
+def test_a_broken_path_fence_fails_before_the_banner(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv(user_settings.VAULT_HOME_ENV, str(tmp_path / "home"))
+    monkeypatch.setenv(access_control.DOCUMENT_ROOTS_ENV, str(tmp_path / "missing"))
+    calls = {}
+    monkeypatch.setattr(vault_server, "run_app", lambda **k: calls.update(k))
+    monkeypatch.setattr("sys.argv", ["vault-server", "--no-browser"])
+
+    with pytest.raises(SystemExit) as excinfo:
+        vault_server.main()
+
+    captured = capsys.readouterr()
+    assert excinfo.value.code == 1
+    assert "Starting TalkPipe Vault" not in captured.out
+    assert access_control.DOCUMENT_ROOTS_ENV in captured.err
+    assert str(tmp_path / "missing") in captured.err
+    assert not calls
 
 
 def test_banner_lists_only_the_folders_that_exist(tmp_path, monkeypatch, capsys):

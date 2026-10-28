@@ -471,9 +471,13 @@ hybrid = (
     )
 ).as_function(single_in=True, single_out=True)
 
-for hit in hybrid("deployment rollback")["hits"]:
-    print(round(hit.score, 2), hit.document["folder"], hit.document["source"])
+for rank, hit in enumerate(hybrid("deployment rollback")["hits"], start=1):
+    print(rank, hit.document["folder"], hit.document["source"])
 ```
+
+A fused hit's `score` is its reciprocal-rank sum, a small fraction (about
+1/(60 + rank) per list) that only orders the list; print the rank, not the
+score.
 
 The same in ChatterLang (`toDict`'s `_` is the whole item):
 
@@ -547,7 +551,8 @@ index yourself; it raises when the index is missing. Parameters: `path`,
 ### Plain RAG: `vaultChat`
 
 Retrieves, builds a RAG prompt, and asks the chat model. Emits the answer
-with a `Sources:` list appended.
+with a `Sources:` list appended: the documents of every chunk retrieved for
+the prompt (`limit` of them), not only those the answer drew on.
 
 ```python
 import talkpipe
@@ -566,7 +571,10 @@ Options, all combinable:
   boost). `keyword_limit` caps those hits.
 - `result_filter_script="| isNotIn[...]"`: runs `filterSearchResults` over
   each retrieval stream before the prompt; `result_filter_strict=True` fails
-  the question instead of answering unfiltered when the script breaks.
+  the question instead of answering unfiltered when the script breaks. In a
+  ChatterLang script the inner script's quotes are single quotes
+  (`result_filter_script="| isNotIn[field='document.content', value='DRAFT']"`);
+  `\"` is not an escape in ChatterLang.
 - `include_background=True`: emit a dict instead of a string, with
   `response`, `background` (the `SearchResult` list the prompt was built
   from), `filter_error`, and with `keyword_search` the `keyword_hits` count.
@@ -739,6 +747,33 @@ is the reference; the vault's own components follow it:
   `myName = "my_package.module:my_function"` under
   `[project.entry-points."talkpipe.segments"]` (or `"talkpipe.sources"`) in
   `pyproject.toml`, so a fresh process resolves the name.
+
+The whole of a function segment that drops search hits mentioning a term,
+for a pipeline such as `vaultSearch[...] | redactTerm[term="DRAFT"]`:
+
+```python
+from collections.abc import Iterable, Iterator
+from typing import Annotated
+
+from talkpipe import register_segment, segment
+
+
+@register_segment("redactTerm")
+@segment()
+def redact_term(
+    items: Iterable,
+    term: Annotated[str, "Drop any hit whose content contains this text"] = "DRAFT",
+) -> Iterator:
+    """Expects a list of SearchResult per item, as vaultSearch emits; emits the
+    list without the hits whose document content contains the term."""
+    for hits in items:
+        yield [hit for hit in hits if term not in hit.document.get("content", "")]
+```
+
+`segment` and `register_segment` are importable from `talkpipe` itself. The
+decorators run at import time, so the Python pipe API sees `redact_term(...)`
+at once; the entry point is what lets `chatterlang_script` in a fresh process
+find `redactTerm`.
 
 ## Testing without models
 

@@ -369,8 +369,9 @@ STARTER RECIPES
   Drop results from a folder, by source path:
     | lambdaFilter[expression="'/archive/' not in item['document'].get('source', '')"]
 
-  Drop low-scoring results (only useful when your embedding backend
-  reports similarity scores):
+  Drop low-scoring results (only when your embedding backend reports
+  similarity scores; the default model2vec embedder scores most hits
+  near 0, so there this would drop every result):
     | lambdaFilter[expression="item['score'] > 0.2"]
 
   For the common case — is this text inside that field? — isIn and

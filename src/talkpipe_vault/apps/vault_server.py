@@ -208,6 +208,13 @@ def main() -> None:
         return
     port = _choose_port(args.host, args.port)
 
+    # A path fence naming a missing folder fails here, before the banner
+    # promises a running server (run_app checks again for other callers).
+    problems = access_control.startup_errors()
+    if problems:
+        print(f"Error: {' '.join(problems)}", file=sys.stderr)
+        sys.exit(1)
+
     # Before any worker threads exist: keep LanceDB ingestion memory flat
     # (see talkpipe_vault.memtune).
     memtune.limit_malloc_arenas()

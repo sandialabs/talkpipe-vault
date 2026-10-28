@@ -213,10 +213,10 @@ class TestVaultChat:
 
     def test_keyword_search_chat_with_whoosh_index(self, populated_vector_db):
         """Keyword-augmented chat should answer with the full merged pipeline."""
-        from talkpipe_vault.apps import query as query_app
+        from talkpipe_vault.apps import vault_store
 
-        documents = query_app._iter_lancedb_docs_for_whoosh(populated_vector_db)
-        query_app._build_whoosh_index(populated_vector_db, documents)
+        documents = vault_store._iter_lancedb_docs_for_whoosh(populated_vector_db)
+        vault_store._build_whoosh_index(populated_vector_db, documents)
         segment = VaultChat(vault_path=populated_vector_db, keyword_search=True)
 
         result = segment.process_value("What is FastAPI used for?")
@@ -236,10 +236,10 @@ class TestVaultChat:
         self, populated_vector_db
     ):
         """With include_background, the answer comes with the merged chunks."""
-        from talkpipe_vault.apps import query as query_app
+        from talkpipe_vault.apps import vault_store
 
-        documents = query_app._iter_lancedb_docs_for_whoosh(populated_vector_db)
-        query_app._build_whoosh_index(populated_vector_db, documents)
+        documents = vault_store._iter_lancedb_docs_for_whoosh(populated_vector_db)
+        vault_store._build_whoosh_index(populated_vector_db, documents)
         segment = VaultChat(
             vault_path=populated_vector_db,
             keyword_search=True,
@@ -295,7 +295,7 @@ class TestVaultTextSearch:
 
     def test_keyword_search_respects_result_limit(self, tmp_path):
         """A configured limit should cap how many keyword hits are returned."""
-        from talkpipe_vault.apps import query as query_app
+        from talkpipe_vault.apps import vault_store
 
         documents = [
             {
@@ -306,7 +306,7 @@ class TestVaultTextSearch:
             }
             for i in range(5)
         ]
-        query_app._build_whoosh_index(str(tmp_path), documents)
+        vault_store._build_whoosh_index(str(tmp_path), documents)
 
         unlimited = VaultTextSearch(vault_path=str(tmp_path))
         limited = VaultTextSearch(vault_path=str(tmp_path), limit=2)

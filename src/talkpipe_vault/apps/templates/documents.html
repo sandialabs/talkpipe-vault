@@ -96,8 +96,10 @@
                     <code>| lambdaFilter[expression="item['score'] &gt; 0.2"]</code>
                     <button type="button" class="btn-secondary filter-insert"
                             data-script="| lambdaFilter[expression=&quot;item['score'] > 0.2&quot;]">Insert</button>
-                    <span class="filter-recipe-hint">drop low-scoring results (only useful when your
-                        embedding backend reports similarity scores)</span>
+                    <span class="filter-recipe-hint">drop low-scoring results (only when your
+                        embedding backend reports similarity scores &mdash; the default
+                        model2vec embedder scores most hits near 0, so there this
+                        would drop every result)</span>
                 </li>
             </ul>
             <p>

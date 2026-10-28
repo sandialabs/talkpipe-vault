@@ -56,7 +56,7 @@ release).
 ```bash
 python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install --pre talkpipe-vault
-vault-server ~/notes
+vault-server ~/notes        # any folder of documents
 ```
 
 Or install it as a standalone command with [uv](https://docs.astral.sh/uv/):
@@ -66,7 +66,10 @@ Or install it as a standalone command with [uv](https://docs.astral.sh/uv/):
 Your browser opens at http://127.0.0.1:8002 with `~/notes` being indexed in
 the background. Search and ask right away; the pages say how far indexing
 has got. Started again later, `vault-server` reopens the folders you had
-open. Without a path, add folders on the **Vaults & Documents** page.
+open. Without a path, add folders on the **Vaults & Documents** page. A
+path that does not exist is created as a new, empty named vault and the
+startup banner says so; if you meant a folder of documents, check the
+spelling.
 
 The first index downloads the default embedding model from Hugging Face
 (about 250 MB, cached afterward). Search and indexing need nothing more.

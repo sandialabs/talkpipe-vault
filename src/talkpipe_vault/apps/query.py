@@ -10,7 +10,6 @@ Provides the following via web interface:
 - Settings: configure embedding and chat model source/name
 """
 
-import argparse
 import errno
 import json
 import logging
@@ -40,7 +39,7 @@ from fastapi.templating import Jinja2Templates
 from talkpipe.llm.config import getEmbeddingSources, getPromptSources
 from talkpipe.util.config import configure_logger
 
-from talkpipe_vault import DIST_NAME, __version__, memtune
+from talkpipe_vault import DIST_NAME, __version__
 from talkpipe_vault.apps import access_control, credentials, user_settings
 from talkpipe_vault.apps.folders import (
     ASK_WAITING,
@@ -1177,9 +1176,10 @@ async def save_settings(
         )
     elif embedding_changed:
         message += (
-            " The embedding model changed: existing vaults were indexed with "
-            "the previous model, so re-index their documents (with Overwrite) "
-            "before searching them."
+            " The embedding model changed: a folder indexed with the previous "
+            "model keeps searching with it until you re-embed it (Re-embed, on "
+            "Vaults & Documents); a named vault needs its documents re-indexed "
+            "(with Overwrite) before searching it."
         )
     return _redirect_with_message("/settings", message=message)
 
@@ -1926,56 +1926,15 @@ def _launch_browser_when_ready(host: str, port: int, timeout: float = 15.0) -> N
 
 
 def main() -> None:
-    """CLI entry point for vault query web application."""
-    # Before any worker threads exist: keep LanceDB ingestion memory flat
-    # (see talkpipe_vault.memtune).
-    memtune.limit_malloc_arenas()
-    parser = argparse.ArgumentParser(
-        description="Web application for searching and chatting with your vault"
-    )
-    parser.add_argument(
-        "vault_path",
-        nargs="?",
-        default="",
-        help=(
-            "Path to LanceDB directory containing the TalkPipe docs table "
-            "(e.g., output path from makevectordatabase). When omitted, "
-            "create or choose a vault from the web interface."
-        ),
-    )
-    parser.add_argument(
-        "--host",
-        default="127.0.0.1",
-        help="Host to bind to (default: 127.0.0.1)",
-    )
-    parser.add_argument(
-        "--port",
-        type=int,
-        default=8000,
-        help="Port to listen on (default: 8000)",
-    )
-    parser.add_argument(
-        "--show-source-paths",
-        action="store_true",
-        help=(
-            "Show source file paths in search results and enable HTTP links to those "
-            "files. Hidden by default."
-        ),
-    )
-    parser.add_argument(
-        "--no-browser",
-        action="store_true",
-        help="Do not open the app in a web browser on startup.",
-    )
+    """Entry point of ``python -m talkpipe_vault.apps.query``.
 
-    args = parser.parse_args()
-    run_app(
-        args.vault_path,
-        args.host,
-        args.port,
-        args.show_source_paths,
-        open_browser=not args.no_browser,
-    )
+    The same command line as ``vault-server`` (folder mode, ``--dir``,
+    ``--resume``, the port fallback and the flushed banner), so the module
+    form documented next to the console script behaves like it.
+    """
+    from talkpipe_vault.apps.vault_server import main as server_main
+
+    server_main()
 
 
 if __name__ == "__main__":
