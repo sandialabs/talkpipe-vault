@@ -397,9 +397,11 @@ search was meant to find: the relevant ones are kept, the rest discarded,
 and the agent is told what each kept chunk contributes. **It stops when it
 judges that what has been kept would answer the question well**, after one
 chunk or after eight; the Settings page's chunk limit and iteration cap only
-bound a run that never gets there. The results note says which happened, and
-every tool call and verdict is printed to the server console and listed
-under the results.
+bound a run that never gets there. The agent is told how many iterations it
+has and, after every tool call, how many are left, with the last one
+announced so it stops and lets the answer be built from what was kept. The
+results note says which happened, and every tool call and verdict is printed
+to the server console and listed under the results.
 
 - It runs on the chat model chosen under Settings and needs one that can
   call tools. Whether a model can only shows when a run starts: a server

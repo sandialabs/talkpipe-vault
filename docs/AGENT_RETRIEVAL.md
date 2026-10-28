@@ -147,6 +147,17 @@ ceiling is full, every tool refuses further calls with the same short message
 telling the model to stop — the rule is enforced inside the tools, so it
 holds behind any agent, not just the one the vault builds.
 
+The agent is told its turn budget. The opening prompt says how many turns
+it has, and every tool reply ends with how many are left (`5 of 8 turns
+left.`), the last one spelled out (`1 turn left: the next one is your last,
+so call enough_information now rather than searching again.`). The tools
+learn the count from the agent executing them: each is declared with
+Strands' `context=True`, and `note_turn` reads the cycles of the current
+invocation from the `ToolContext` — the same number the turn cap compares
+against — so the session needs no hook into the agent. Called outside an
+agent (a test, a script) there is no context, and a session with no
+`max_turns` says nothing about turns.
+
 `enough_information` is refused while nothing has been kept: an answer needs
 context, and a run that "succeeds" with none produces no answer at all.
 
@@ -292,6 +303,7 @@ session = AgentSearchSession(
     keyword_index_exists=lambda: True,  # False makes keyword_search say "no index"
     extract_keywords=None,              # or a callable(question) -> keyword query
     max_chunks=10,
+    max_turns=8,                        # the agent's cap, so replies count turns down
     tell=print,                         # every tool call and verdict, one line each
 )
 
@@ -355,6 +367,9 @@ What the session needs from your callables:
   citable.
 - `question`: what the judge judges against. The vault passes the query
   being run; a session built only to resolve tool names passes `""`.
+- `max_turns`: optional, the agent's turn cap. Set it to what you give the
+  agent (`max_turns=8` in `LLMAgent` above) and the tool replies count the
+  turns down; leave it out and they say nothing about turns.
 
 **A session is one query's state.** Build one per query, as the vault
 segments do in `make_session(question)`; the segment itself can be shared,
@@ -456,6 +471,12 @@ Three things to keep:
 - **Report what happened through `session.tell(...)`.** That is the trace the
   interfaces show and the console prints; a tool that acts silently is
   invisible to the person waiting.
+
+Optionally, declare the tool with `@strands_tool(context=True)`, take a
+`tool_context: ToolContext | None = None` parameter and call
+`note_turn(session, tool_context)` first, as the vault's tools do: then a
+run whose only call in a turn is your tool still counts that turn. Strands
+keeps the context parameter out of the schema the model sees.
 
 Then add the name to the prompt, or the model will not know it exists — the
 simplest way is to extend the default one:

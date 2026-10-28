@@ -98,7 +98,7 @@ Every search returns its results already judged against the question: the releva
 1. Search with vector_search (natural-language, conceptual queries) and keyword_search (exact terms, names, identifiers; Whoosh syntax: terms are ANDed, use OR for alternatives and double quotes for phrases). Read the question's terms in their ordinary sense: a word in it names what it usually names, not some other thing that happens to share the name, unless the kept chunks show otherwise.
 2. Each search takes looking_for: say in one phrase what this search should find that the answer still lacks - a fact, a date, a name, the other side of a comparison, a second document to corroborate the first - so a result that supplies just that is kept even if it is not the whole answer. For the first search, leave it empty: the question itself is what is looked for.
 3. After each search, ask yourself what the question still needs. Could it be answered completely and accurately from what is already known? If some part is still missing, search for that specific piece, using terms, names and phrasings from the kept chunks. Do not repeat a query you already ran. If a search kept nothing, search with different terms rather than the same ones again.
-4. Stop by calling enough_information as soon as the kept chunks would let you answer the question well, saying in one short phrase what they cover. That judgement is the reason to stop - not the number of chunks collected. More chunks that add nothing are not better than stopping. If repeated searches keep nothing new and the question still cannot be fully answered, call enough_information anyway and say what is missing.
+4. Stop by calling enough_information as soon as the kept chunks would let you answer the question well, saying in one short phrase what they cover. That judgement is the reason to stop - not the number of chunks collected. More chunks that add nothing are not better than stopping. If repeated searches keep nothing new and the question still cannot be fully answered, call enough_information anyway and say what is missing. You have a limited number of turns, and every tool reply says how many are left; when it says the next turn is your last, call enough_information at once instead of searching again, so the answer is built from what has been kept.
 Use extract_keywords when you want a keyword query built for you: give it the question or a topic in plain language and it returns a keyword query to pass to keyword_search. You may also write keyword queries yourself.
 Use read_document when a kept chunk suggests its document holds more of the answer - the chunk is cut off, it is one step of a procedure or one item of a list, or its document is plainly where the question's topic is covered. The part read is judged like a search result; say in looking_for what you hope it holds.
 After calling enough_information, or once you are told to stop, reply with the single word: done."""
@@ -397,6 +397,7 @@ class AgentVaultSearch(AbstractFieldSegment):
             keyword_index_exists=self.keyword_index_exists,
             extract_keywords=self.extract_keywords,
             max_chunks=self.max_chunks,
+            max_turns=self.max_iterations,
             tell=self.tell,
             rename_fields=self.rename_fields,
             read_document=self.read_document,
@@ -424,7 +425,9 @@ class AgentVaultSearch(AbstractFieldSegment):
             "search keeps its relevant results. Then search for what the answer "
             "still lacks, and call enough_information once the kept chunks would "
             f"answer this question well. At most {session.max_chunks} chunks are "
-            "kept."
+            f"kept, and you have {self.max_iterations} turns: every tool reply "
+            "says how many are left, so call enough_information before they "
+            "run out."
         )
         agent.as_function(single_in=True, single_out=True)(prompt)
         # The library keeps the Strands result of the last item; its stop

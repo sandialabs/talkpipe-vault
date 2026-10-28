@@ -56,6 +56,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from strands import tool as strands_tool
+from strands.types.tools import ToolContext
 from talkpipe.search.abstract import SearchResult
 from talkpipe_agents import resolve_agent_tools
 
@@ -189,7 +190,10 @@ class AgentSearchSession:
     (None when no model is available); ``read_document`` takes the source a
     hit's document records (its ``source`` or ``path``) and returns that
     document's whole text (None when documents cannot be read).
-    ``question`` is what the judge judges against.
+    ``question`` is what the judge judges against. ``max_turns`` is the
+    agent's turn cap, if one is set: every tool reply then says how many
+    turns are left, counted from what the agent executing the tool reports
+    (see :func:`note_turn`), and the last one is announced.
     """
 
     def __init__(
@@ -207,6 +211,7 @@ class AgentSearchSession:
         judged_vector_search: JudgedSearchFn | None = None,
         judged_keyword_search: JudgedSearchFn | None = None,
         judge: JudgedSearchFn | None = None,
+        max_turns: int | None = None,
     ) -> None:
         self._vector_search = vector_search
         self._keyword_search = keyword_search
@@ -218,6 +223,9 @@ class AgentSearchSession:
         self._read_document = read_document
         self.question = question.strip()
         self.max_chunks = max(1, max_chunks)
+        self.max_turns = max(1, max_turns) if max_turns is not None else None
+        # Model turns the run has used so far, as reported by the tools.
+        self.turns_used = 0
         self._tell = tell
         self._rename_fields = rename_fields or {}
         self._chunks: dict[str, _Chunk] = {}
@@ -346,8 +354,42 @@ class AgentSearchSession:
             head += f" {title}"
         return f"{head}\n{text}"
 
+    def note_turn(self, turns_used: int) -> None:
+        """Record that the run has used *turns_used* model turns.
+
+        The tools report it from the agent executing them (Strands counts a
+        model call as a cycle, and the turn cap is a cap on cycles), so the
+        status line can say how many turns are left. Never goes backwards.
+        """
+        self.turns_used = max(self.turns_used, turns_used)
+
+    @property
+    def turns_left(self) -> int | None:
+        """Turns the agent can still take after this reply, or None when no
+        cap is known. 1 means the next turn is its last."""
+        if self.max_turns is None:
+            return None
+        return max(0, self.max_turns - self.turns_used)
+
+    def turns_note(self) -> str:
+        """How many turns are left, for the model; "" when no cap is known."""
+        left = self.turns_left
+        if left is None:
+            return ""
+        if left == 0:
+            return "No turns left."
+        if left == 1:
+            # The reply the model is reading is the last one it can act on:
+            # a search now would end the run before it saw the results.
+            return (
+                "1 turn left: the next one is your last, so call "
+                "enough_information now rather than searching again."
+            )
+        return f"{left} of {self.max_turns} turns left."
+
     def _status_line(self) -> str:
-        return f"Kept {len(self.kept)} chunk(s), at most {self.max_chunks}."
+        status = f"Kept {len(self.kept)} chunk(s), at most {self.max_chunks}."
+        return with_turns(self, status)
 
     def _apply(self, chunk: _Chunk, reason: str, *, keep: bool) -> None:
         """Record a decision on *chunk* and trace it."""
@@ -737,10 +779,41 @@ def guard(session: AgentSearchSession, name: str) -> str:
     return f"The search is over — {reason}. Stop calling tools and reply: done"
 
 
+def with_turns(session: AgentSearchSession, reply: str) -> str:
+    """*reply* with the session's turn count appended, once.
+
+    Every tool reply ends with how many turns are left, whether or not it
+    carried the status line that already says so.
+    """
+    note = session.turns_note()
+    if note and note not in reply:
+        return f"{reply} {note}"
+    return reply
+
+
+def note_turn(session: AgentSearchSession, tool_context: Any) -> None:
+    """Tell *session* how many turns the agent executing a tool has used.
+
+    Strands hands a tool declared with ``context=True`` a ``ToolContext``
+    whose ``agent`` carries the event-loop metrics; the cycles of the
+    current invocation are the model calls so far, which is what the turn
+    cap counts. Called outside an agent (tests, a script) there is no
+    context, and this does nothing.
+    """
+    agent = getattr(tool_context, "agent", None)
+    metrics = getattr(agent, "event_loop_metrics", None)
+    invocation = getattr(metrics, "latest_agent_invocation", None)
+    cycles = getattr(invocation, "cycles", None)
+    if cycles is not None:
+        session.note_turn(len(cycles))
+
+
 @vault_agent_tool("vector_search")
 def make_vector_search(session: AgentSearchSession) -> Any:
-    @strands_tool
-    def vector_search(query: str, looking_for: str = "") -> str:
+    @strands_tool(context=True)
+    def vector_search(
+        query: str, looking_for: str = "", tool_context: ToolContext | None = None
+    ) -> str:
         """Semantic search over the vault: finds chunks whose meaning is
         close to the query, even when the words differ. Best with a
         full question or descriptive phrase. The results come back
@@ -754,8 +827,11 @@ def make_vector_search(session: AgentSearchSession) -> Any:
                 still lacks, in one phrase, so a result supplying just
                 that is kept. Leave it empty for the question itself.
         """
-        return guard(session, "vector_search") or session.vector_search(
-            query, looking_for
+        note_turn(session, tool_context)
+        return with_turns(
+            session,
+            guard(session, "vector_search")
+            or session.vector_search(query, looking_for),
         )
 
     return vector_search
@@ -763,8 +839,10 @@ def make_vector_search(session: AgentSearchSession) -> Any:
 
 @vault_agent_tool("keyword_search")
 def make_keyword_search(session: AgentSearchSession) -> Any:
-    @strands_tool
-    def keyword_search(query: str, looking_for: str = "") -> str:
+    @strands_tool(context=True)
+    def keyword_search(
+        query: str, looking_for: str = "", tool_context: ToolContext | None = None
+    ) -> str:
         """Exact-term search over the vault's full-text index: finds
         chunks containing the given words. Best for names, identifiers,
         and specific terms. Whoosh syntax: terms are ANDed, use OR for
@@ -778,8 +856,11 @@ def make_keyword_search(session: AgentSearchSession) -> Any:
                 still lacks, in one phrase, so a result supplying just
                 that is kept. Leave it empty for the question itself.
         """
-        return guard(session, "keyword_search") or session.keyword_search(
-            query, looking_for
+        note_turn(session, tool_context)
+        return with_turns(
+            session,
+            guard(session, "keyword_search")
+            or session.keyword_search(query, looking_for),
         )
 
     return keyword_search
@@ -787,8 +868,8 @@ def make_keyword_search(session: AgentSearchSession) -> Any:
 
 @vault_agent_tool("extract_keywords")
 def make_extract_keywords(session: AgentSearchSession) -> Any:
-    @strands_tool
-    def extract_keywords(question: str) -> str:
+    @strands_tool(context=True)
+    def extract_keywords(question: str, tool_context: ToolContext | None = None) -> str:
         """Ask a language model to turn a question or topic into a
         keyword query for keyword_search. Use it when you want good
         search-engine terms for a plain-language question instead of
@@ -798,16 +879,23 @@ def make_extract_keywords(session: AgentSearchSession) -> Any:
         Args:
             question: The question or topic, in plain language.
         """
-        return guard(session, "extract_keywords") or session.extract_keywords(question)
+        note_turn(session, tool_context)
+        return with_turns(
+            session,
+            guard(session, "extract_keywords") or session.extract_keywords(question),
+        )
 
     return extract_keywords
 
 
 @vault_agent_tool("read_document")
 def make_read_document(session: AgentSearchSession) -> Any:
-    @strands_tool
+    @strands_tool(context=True)
     def read_document(
-        chunk_id: str, start: int | None = None, looking_for: str = ""
+        chunk_id: str,
+        start: int | None = None,
+        looking_for: str = "",
+        tool_context: ToolContext | None = None,
     ) -> str:
         """Read the whole document a chunk came from, when you suspect more
         of it would help: the chunk is cut off, it is part of a list or a
@@ -823,8 +911,11 @@ def make_read_document(session: AgentSearchSession) -> Any:
             looking_for: What you hope this part of the document holds, in
                 one phrase, so it is kept when it supplies just that.
         """
-        return guard(session, "read_document") or session.read_document(
-            chunk_id, start, looking_for
+        note_turn(session, tool_context)
+        return with_turns(
+            session,
+            guard(session, "read_document")
+            or session.read_document(chunk_id, start, looking_for),
         )
 
     return read_document
@@ -832,8 +923,10 @@ def make_read_document(session: AgentSearchSession) -> Any:
 
 @vault_agent_tool("keep_chunk")
 def make_keep_chunk(session: AgentSearchSession) -> Any:
-    @strands_tool
-    def keep_chunk(chunk_id: str, reason: str = "") -> str:
+    @strands_tool(context=True)
+    def keep_chunk(
+        chunk_id: str, reason: str = "", tool_context: ToolContext | None = None
+    ) -> str:
         """Keep a chunk: it holds information that helps answer the
         question, even if only part of it. Kept chunks are the only thing
         the question will be answered from.
@@ -842,8 +935,10 @@ def make_keep_chunk(session: AgentSearchSession) -> Any:
             chunk_id: The id shown with the chunk, e.g. c3.
             reason: One short phrase saying what it contributes.
         """
-        return guard(session, "keep_chunk") or session.decide(
-            chunk_id, reason, keep=True
+        note_turn(session, tool_context)
+        return with_turns(
+            session,
+            guard(session, "keep_chunk") or session.decide(chunk_id, reason, keep=True),
         )
 
     return keep_chunk
@@ -851,8 +946,10 @@ def make_keep_chunk(session: AgentSearchSession) -> Any:
 
 @vault_agent_tool("ignore_chunk")
 def make_ignore_chunk(session: AgentSearchSession) -> Any:
-    @strands_tool
-    def ignore_chunk(chunk_id: str, reason: str = "") -> str:
+    @strands_tool(context=True)
+    def ignore_chunk(
+        chunk_id: str, reason: str = "", tool_context: ToolContext | None = None
+    ) -> str:
         """Ignore a chunk: it is about something other than the question,
         so nothing in it would help the answer.
 
@@ -860,8 +957,11 @@ def make_ignore_chunk(session: AgentSearchSession) -> Any:
             chunk_id: The id shown with the chunk, e.g. c3.
             reason: One short phrase saying why it is irrelevant.
         """
-        return guard(session, "ignore_chunk") or session.decide(
-            chunk_id, reason, keep=False
+        note_turn(session, tool_context)
+        return with_turns(
+            session,
+            guard(session, "ignore_chunk")
+            or session.decide(chunk_id, reason, keep=False),
         )
 
     return ignore_chunk
@@ -869,8 +969,10 @@ def make_ignore_chunk(session: AgentSearchSession) -> Any:
 
 @vault_agent_tool("enough_information")
 def make_enough_information(session: AgentSearchSession) -> Any:
-    @strands_tool
-    def enough_information(reason: str = "") -> str:
+    @strands_tool(context=True)
+    def enough_information(
+        reason: str = "", tool_context: ToolContext | None = None
+    ) -> str:
         """Declare that the chunks kept so far would let you answer the
         question well, and end the search. This is how a run should end:
         call it as soon as that is true, however many chunks that took.
@@ -881,6 +983,10 @@ def make_enough_information(session: AgentSearchSession) -> Any:
             reason: One short phrase saying what the kept chunks cover,
                 or what is still missing.
         """
-        return guard(session, "enough_information") or session.declare_enough(reason)
+        note_turn(session, tool_context)
+        return with_turns(
+            session,
+            guard(session, "enough_information") or session.declare_enough(reason),
+        )
 
     return enough_information

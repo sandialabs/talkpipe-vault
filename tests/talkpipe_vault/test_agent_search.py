@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import sys
 import threading
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -783,6 +784,7 @@ class TestAgentIsAnLLMAgent:
         assert "keep_chunk" not in prompt
         assert "ignore_chunk" not in prompt
         assert "ordinary sense" in prompt
+        assert "how many are left" in prompt
 
     def test_progress_reaches_the_session_trace(self):
         """llmAgent's own progress lines land in the trace the pages show."""
@@ -799,6 +801,95 @@ class TestAgentIsAnLLMAgent:
         assert session.question == "what is one?"
         assert session._judged_vector_search == segment.judged_vector_search
         assert session._judge == segment.judge
+
+    def test_the_session_knows_the_turn_cap(self):
+        """The iteration cap reaches the tools, so their replies can count
+        down; the Extra Effort copy passes its own."""
+        segment = _ScriptedSearch(lambda _tools: None, max_iterations=5)
+        assert segment.make_session("q").max_turns == 5
+        assert segment.with_max_iterations(10).make_session("q").max_turns == 10
+
+
+def _tool_context(turns_used: int) -> Any:
+    """What Strands hands a context-aware tool, reduced to the part the
+    tools read: the cycles of the agent's current invocation."""
+    invocation = SimpleNamespace(cycles=list(range(turns_used)))
+    metrics = SimpleNamespace(latest_agent_invocation=invocation)
+    return SimpleNamespace(agent=SimpleNamespace(event_loop_metrics=metrics))
+
+
+class TestTurnsLeft:
+    """Every tool reply says how many turns the agent has left, counted
+    from what the agent executing the tool reports, so the model knows when
+    to stop searching and call enough_information."""
+
+    def test_replies_count_down_and_announce_the_last_turn(self):
+        session, told, _ = _make_judged_session(
+            vector={"q": THREE[:1], "r": THREE[1:2], "s": THREE[2:]},
+            max_chunks=9,
+        )
+        session.max_turns = 3
+        tools = _tools(session)
+
+        out = tools["vector_search"](query="q", tool_context=_tool_context(1))
+        assert "2 of 3 turns left." in out
+        assert session.turns_left == 2
+        out = tools["vector_search"](query="r", tool_context=_tool_context(2))
+        assert "1 turn left: the next one is your last" in out
+        assert "call enough_information now" in out
+        assert session.turns_left == 1
+        out = tools["vector_search"](query="s", tool_context=_tool_context(3))
+        assert "No turns left." in out
+        # The status line carries it, so the trace shows it too.
+        assert told[-1].endswith("Kept 3 chunk(s), at most 9. No turns left.")
+
+    def test_the_count_never_goes_backwards(self):
+        session, _, _ = _make_judged_session(vector={"q": THREE[:1]})
+        session.max_turns = 4
+        tools = _tools(session)
+        tools["extract_keywords"](question="q", tool_context=_tool_context(3))
+        tools["extract_keywords"](question="r", tool_context=_tool_context(1))
+        assert session.turns_used == 3
+        assert session.turns_left == 1
+
+    def test_every_tool_reports_the_turn(self):
+        session, _, _ = _make_judged_session(
+            vector={"q": [_hit("a", "x", source="/d/a.md")]},
+            read_document=lambda s: "text",
+        )
+        session.max_turns = 8
+        tools = _tools(session)
+        tools["vector_search"](query="q", tool_context=_tool_context(1))
+        tools["keyword_search"](query="k", tool_context=_tool_context(2))
+        tools["read_document"](chunk_id="c1", tool_context=_tool_context(3))
+        tools["keep_chunk"](chunk_id="c1", tool_context=_tool_context(4))
+        tools["ignore_chunk"](chunk_id="c2", tool_context=_tool_context(5))
+        assert session.turns_used == 5
+        # A reply with no status line of its own still ends with the count.
+        out = tools["extract_keywords"](question="q", tool_context=_tool_context(6))
+        assert out.endswith("2 of 8 turns left.")
+        out = tools["enough_information"](reason="done", tool_context=_tool_context(7))
+        assert session.turns_used == 7
+        assert "done" in out
+        # A refusal carries it too, and the note appears once, not twice.
+        out = tools["vector_search"](query="again", tool_context=_tool_context(7))
+        assert out.count("turn left") == 1
+
+    def test_without_a_cap_or_a_context_nothing_is_said(self):
+        session, _, _ = _make_judged_session(vector={"q": THREE[:1]})
+        out = _tools(session)["vector_search"](query="q")
+        assert "turn" not in out
+        assert session.turns_left is None
+        # A cap but no agent context (a direct call): the full budget.
+        session, _, _ = _make_judged_session(vector={"q": THREE[:1]})
+        session.max_turns = 8
+        assert "8 of 8 turns left." in _tools(session)["vector_search"](query="q")
+
+    def test_the_context_parameter_is_hidden_from_the_model(self):
+        session, _, _ = _make_judged_session()
+        for tool in build_tools(session, agent_tools.vault_agent_tool_names()):
+            schema = tool.tool_spec["inputSchema"]["json"]["properties"]
+            assert "tool_context" not in schema, tool.tool_name
 
 
 class TestAgentVaultSearch:

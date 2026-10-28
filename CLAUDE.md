@@ -395,7 +395,16 @@ well from what it kept, not a result count** — it says so by calling `enough_i
 its reason. `max_chunks` (Settings → Agent Chunk Limit, default `DEFAULT_MAX_CHUNKS`) is a
 *ceiling* on collected context and `max_iterations` (Settings → Agent Search Iterations)
 is passed straight through as `llmAgent`'s `max_turns`; both only bound a run that never
-reaches that judgement. **The stop is enforced by the tools, not by an agent hook**: every
+reaches that judgement. The agent is told the turn budget: `run_agent`'s opening prompt
+says how many turns it has, and every tool reply's status line counts them down (`5 of 8
+turns left.`; at 1, "the next one is your last, so call enough_information now"). The
+count comes from the agent executing the tool — each vault tool is a
+`@strands_tool(context=True)` taking `tool_context`, and `note_turn` reads
+`tool_context.agent.event_loop_metrics.latest_agent_invocation.cycles`, the number the
+Strands turn cap compares against — so no hook is needed; `make_session` passes
+`max_turns=self.max_iterations`, and a session without `max_turns` (or a tool called
+without a context) says nothing about turns / assumes the full budget. **The stop is
+enforced by the tools, not by an agent hook**: every
 tool starts with `_guard`, which refuses once `session.should_stop` (`enough or
 at_capacity`) and says which — so the rule holds behind any agent, and there is no
 `BeforeToolCallEvent` callback of ours to keep in step with the library's. The note
