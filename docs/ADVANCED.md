@@ -390,22 +390,26 @@ page), not from `~/.talkpipe.toml`.
 
 **Let an agent select the results** (Semantic Search) and **Use Agent**
 (Ask) hand retrieval to an agent built on talkpipe-agents' `llmAgent`. It
-runs semantic and keyword searches as tools, reads what comes back, keeps the
-relevant chunks and discards the rest, and rewrites its queries from what it
-learns. **It stops when it judges that what it has kept would answer the
-question well**, after one chunk or after eight; the Settings page's chunk
-limit and iteration cap only bound a run that never gets there. The results
-note says which happened, counts the chunks it saw but never kept or ignored
-as "undecided", and every tool call is printed to the server console and
-listed under the results.
+runs semantic and keyword searches as tools and rewrites its queries from
+what it learns. Each search's results are judged inside the search, by the
+same chat model, against the question you asked and what the agent said the
+search was meant to find: the relevant ones are kept, the rest discarded,
+and the agent is told what each kept chunk contributes. **It stops when it
+judges that what has been kept would answer the question well**, after one
+chunk or after eight; the Settings page's chunk limit and iteration cap only
+bound a run that never gets there. The results note says which happened, and
+every tool call and verdict is printed to the server console and listed
+under the results.
 
 - It runs on the chat model chosen under Settings and needs one that can
   call tools. Whether a model can only shows when a run starts: a server
   without tool calling ends the run with an error note quoting what it said.
-- The default `mistral-small` often stops without keeping what it found (the
-  note then says it "stopped without saying it had enough"). In testing,
-  `qwen3:8b` and `gpt-oss` ran the agent cleanly; `minimax-m3.1-flash:cloud`
-  usually used up its iterations searching and reading without deciding
+- The default `mistral-small` often stops without saying it has enough (the
+  note then says so); its searches still keep what they found, so the
+  answer is built from that. In testing, `qwen3:8b` and `gpt-oss` ran the
+  agent cleanly. A model that reasons between tool calls, such as
+  `minimax-m3.1-flash:cloud`, may still use up its iterations searching,
+  but no longer loses what those searches found
   (the [developer's guide](AGENT_RETRIEVAL.md) says why).
 - On Ask, **Use Agent** supersedes the keyword boost (keyword search is one
   of the agent's tools), and the answer is built from the chunks it kept,

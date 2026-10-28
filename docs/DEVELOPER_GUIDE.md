@@ -54,6 +54,7 @@ folders there. Every block was run before it landed here.
 | `mergeSearchResults` | segment | an item holding result lists | the item with one merged list |
 | `filterSearchResults` | segment | an item holding a result list | the item with the list filtered by a ChatterLang script |
 | `extractSearchKeywords` | segment | a question | a Whoosh keyword query, written by a chat model |
+| `judgeSearchResults` | segment | an item holding a result list and a question | the item with each result judged by a chat model: keep or ignore, and why |
 | `vaultChat` | segment | a question | the answer string (or a dict with the background) |
 | `vaultAgentSearch` | segment | a question | an `AgentSearchOutcome`: the chunks an agent kept |
 | `vaultAgentChat` | segment | a question | an `AgentChatOutcome`: the answer built from them |
@@ -94,6 +95,7 @@ flowchart TB
         direction LR
         VS["vault_search.py<br/>vaultSearch · vaultTextSearch"]
         KW["keyword_search.py<br/>extractSearchKeywords · searchLance · words_query"]
+        JR["judge_results.py<br/>judgeSearchResults"]
         SR["search_results.py<br/>mergeSearchResults · filterSearchResults<br/>reciprocal_rank_fusion"]
         RF["retrieval_filter.py<br/>compiles a filter script"]
     end
@@ -125,7 +127,7 @@ flowchart TB
     CALLER --> CHAT & AGENT & VS & SR & FI & FC
 
     CHAT --> VS & KW & SR
-    AGENT --> TOOLS & VS & KW
+    AGENT --> TOOLS & VS & KW & JR
     TOOLS --> SR
     CHAT & AGENT --> VP
     CHAT & AGENT --> MODELS
@@ -134,9 +136,10 @@ flowchart TB
     VS -- words_query --> KW
     VS --> VP
     KW --> SR
+    JR --> SR
     SR --> RF
     VS -- vectors_started --> FI
-    VS & KW --> MODELS
+    VS & KW & JR --> MODELS
     VS & KW --> STORES
 
     VP -- find_index_path --> FI
@@ -153,7 +156,8 @@ How to read it when building something of your own:
 
 - **Import from the layer that does what you want.** An answer:
   `vault_chat` or `agent_search`. Hits: `vault_search`; keyword queries from
-  a question: `keyword_search`; combining, fusing or filtering result lists
+  a question: `keyword_search`; a chat model's verdict on each hit:
+  `judge_results`; combining, fusing or filtering result lists
   from any source, even another search engine: `search_results`, which
   depends on nothing above the TalkPipe `SearchResult`. Building or
   following indexes: `folder_index` and `folder_changes`.
@@ -523,6 +527,92 @@ A script that fails at run time leaves the list unfiltered and records why
 in `_filter_error`; `strict=True` raises instead, for redaction filters that
 must not fall back.
 
+### Judging results: `judgeSearchResults`
+
+A search returns what is *similar* to its query; this segment asks a chat
+model what is *useful* for a question. It reads a result list and the
+question from an item's fields and, in one model call, decides for every
+result whether to keep it and why. Optional fields sharpen the judgement:
+what the search was meant to find (`looking_for`, so a result that supplies
+just that part is kept), notes on what is already known (`known`, a list of
+strings, so a result that repeats them is ignored and one that adds to them
+is kept), and the ids of results already decided on (`seen`, skipped rather
+than judged again). The verdict for each result is a dict `{"result":
+SearchResult, "keep": bool, "reason": str}`, in rank order; with
+`drop_ignored=True` the segment sets only the kept `SearchResult` objects, a
+relevance filter. A model failure keeps every result with a reason starting
+`not judged`, so a pipeline degrades to the unjudged list rather than
+stopping. This is the judge behind each of the agent's searches
+([agent retrieval developer's guide](AGENT_RETRIEVAL.md)).
+
+```python
+from talkpipe_vault.pipelines.judge_results import JudgeSearchResults
+from talkpipe_vault.pipelines.vault_search import VaultSearch
+
+judged_search = (
+    VaultSearch(vault_path="/path/to/notes", field="query", set_as="results", limit=5)
+    | JudgeSearchResults(chat_source="ollama", chat_model="qwen3:8b")
+).as_function(single_in=True, single_out=True)
+
+item = judged_search(
+    {
+        "query": "rollback",
+        "question": "What is the rollback plan for the deployment?",
+        "looking_for": "who decides to roll back and how long it takes",
+    }
+)
+for verdict in item["judged"]:
+    mark = "keep" if verdict["keep"] else "skip"
+    print(mark, verdict["result"].document["title"], "—", verdict["reason"])
+```
+
+The same in ChatterLang, as a filter that passes only the kept hits on
+(`flatten` turns the kept list into one item per hit):
+
+```sh
+chatterlang_script --script '
+  INPUT FROM echo[data="What is the rollback plan for the deployment?"]
+  | toDict[field_list="_:question,_:query"]
+  | vaultSearch[vault_path="/path/to/notes", field="query", set_as="results", limit=5]
+  | judgeSearchResults[chat_source="ollama", chat_model="qwen3:8b", drop_ignored=True, set_as="hits"]
+  | extractProperty[property="hits"]
+  | flatten
+  | toDict[field_list="document.title:title"]
+  | print'
+```
+
+Without `drop_ignored`, `extractProperty[property="judged"] | flatten |
+toDict[field_list="result.document.title:title,keep,reason"]` prints every
+verdict with its reason. `question_field`, `results_field`,
+`looking_for_field`, `known_field` and `seen_field` rename the fields read;
+`max_chars` caps how much of each result the judge sees (1000 by default,
+a whole chunk at the default indexing settings).
+
+A judged search is also a ready-made **agent tool**. talkpipe-agents'
+`scriptTool` turns a ChatterLang script into a tool whose one argument is
+the script's input, so an `llmAgent` can call the pipeline above by name
+with no Python at all. The script compiles afresh per call, so the tool is
+stateless: it judges against the text the agent passes, not a question held
+elsewhere. (The vault's own agent uses stateful tools bound to one
+question, as the agent retrieval guide explains.) The tool's script is a
+string inside the script, so it uses single quotes; keep the whole thing in
+a file, which `--script` also accepts:
+
+```sh
+cat > judged_agent.cl <<'EOF'
+scriptTool[name="judged_search",
+           description="Search the notes for a question and return only the passages a judge found relevant to it. Pass the question in plain language.",
+           script="| toDict[field_list='_:question,_:query'] | vaultSearch[vault_path='/path/to/notes', field='query', set_as='results', limit=5] | judgeSearchResults[chat_source='ollama', chat_model='qwen3:8b', drop_ignored=True, set_as='hits'] | extractProperty[property='hits'] | flatten | toDict[field_list='document.title:title,document.content:content'] | dumpsJsonl"];
+INPUT FROM echo[data="What is the rollback plan for the deployment? Use judged_search and answer from what it returns."]
+| llmAgent[source="ollama", model="qwen3:8b", tools=["judged_search"]]
+| print
+EOF
+chatterlang_script --script judged_agent.cl
+```
+
+(`echo` splits its `data` on commas unless told otherwise, so a prompt
+with a comma needs `delimiter=`.)
+
 ### Keywords from a question: `extractSearchKeywords`
 
 Asks a chat model for the index-worthy terms in a question and returns a
@@ -602,14 +692,18 @@ print(len(out["background"]), "chunks used; filter error:", out["filter_error"])
 
 ### Agent retrieval: `vaultAgentSearch` and `vaultAgentChat`
 
-An agent runs the searches as tools, keeps the chunks it judges relevant,
-and stops when it judges it could answer. `vaultAgentSearch` emits the kept
-chunks (`outcome.results`), a note on how the run ended (`outcome.note`) and
-the tool-call trace; `vaultAgentChat` adds `outcome.response`. Both take the
-same parameters as `vaultChat` plus `tools`, `system_prompt`, `max_chunks`,
-`max_iterations`, `search_limit` and `progress` (a callable for the trace
-lines; `None` prints them). They need a chat model that handles tool calls
-well, such as `qwen3:8b`.
+An agent runs the searches as tools and stops when it judges it could
+answer. Each search is the pipeline above — `vaultSearch` or
+`vaultTextSearch` piped into `judgeSearchResults` — so its hits come back
+already kept or ignored, judged against the question and what the agent
+said the search was looking for; the agent's job is to decide what to search
+for next. `vaultAgentSearch` emits the kept chunks (`outcome.results`), a
+note on how the run ended (`outcome.note`) and the tool-call trace;
+`vaultAgentChat` adds `outcome.response`. Both take the same parameters as
+`vaultChat` plus `tools`, `system_prompt`, `max_chunks`, `max_iterations`,
+`search_limit` and `progress` (a callable for the trace lines; `None` prints
+them). They need a chat model that handles tool calls well, such as
+`qwen3:8b`; the same model judges.
 
 ```python
 from talkpipe_vault.pipelines.agent_search import AgentVaultChat
@@ -855,6 +949,7 @@ src/talkpipe_vault/
 │   ├── folder_changes.py           # folderChanges
 │   ├── search_results.py           # Result shape, merge, reciprocal rank fusion, filter
 │   ├── keyword_search.py           # searchLance, extractSearchKeywords, keyword queries
+│   ├── judge_results.py            # judgeSearchResults: a chat model's verdict on each hit
 │   ├── vault_paths.py              # Folders → indexes, searchable checks, the segments' shared base
 │   ├── vault_search.py             # vaultSearch, vaultTextSearch (fan-out over several indexes)
 │   ├── vault_chat.py               # vaultChat

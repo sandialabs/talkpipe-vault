@@ -55,6 +55,7 @@ src/talkpipe_vault/
     ├── building_and_watching.py # Experimental watch/batch vector DB pipelines
     ├── search_results.py       # Result shape: normalize, mergeSearchResults, reciprocal rank fusion, filterSearchResults
     ├── keyword_search.py       # searchLance, extractSearchKeywords, keyword-query helpers
+    ├── judge_results.py        # judgeSearchResults: an LLM judge over a search's hits
     ├── vault_paths.py          # resolve_vault_paths, check_searchable, _SearchesVaultPaths, _IndexView
     ├── vault_search.py         # vaultSearch, vaultTextSearch and the fan-out searches
     ├── vault_chat.py           # vaultChat
@@ -207,7 +208,7 @@ Sources: `fileWatcher`, `watchIntoVectorDB`, `listIntoVectorDB` (watcher ones ex
 `watchFolders`, `folderChanges`.
 Segments: `buildVectorDBFromPaths`, `vaultSearch`, `vaultChat`, `vaultTextSearch`,
 `searchLance`, `extractSearchKeywords`, `mergeSearchResults`, `filterSearchResults`,
-`vaultAgentSearch`, `vaultAgentChat`, `indexFolder`.
+`judgeSearchResults`, `vaultAgentSearch`, `vaultAgentChat`, `indexFolder`.
 
 ## Folder mode
 
@@ -303,12 +304,48 @@ pause the folder indexer (`_index_run_guard`). Settings: `open_folders`,
 and every block there was run; keep it so. `docs/ADVANCED.md` is for operators
 (Advanced Usage); component documentation goes in the Developer Guide.
 
-**Agent retrieval** is split in two, deliberately: `pipelines/agent_tools.py` owns *what
-the tools do*, `pipelines/agent_search.py` owns *the pipeline that runs them*. Nothing in
-the tool module knows about agents, models, or prompts, so the pack is what would move out
-if these tools were ever pulled into a generic package. `docs/AGENT_RETRIEVAL.md` is the
-developer's guide — using the tools over another search backend, behind another agent,
-adding a tool, reading the outcome; keep it current when either module changes.
+**Agent retrieval** is split in three, deliberately: `pipelines/judge_results.py` owns
+*the judge* (the `judgeSearchResults` segment, a general segment that knows only a chat
+model), `pipelines/agent_tools.py` owns *what the tools do*, `pipelines/agent_search.py`
+owns *the pipeline that runs them*. Nothing in the tool module knows about agents, models,
+or prompts, so the pack is what would move out if these tools were ever pulled into a
+generic package. `docs/AGENT_RETRIEVAL.md` is the developer's guide — using the tools over
+another search backend, behind another agent, adding a tool, reading the outcome; keep it
+current when any of the three modules changes.
+
+**Each agent search is a TalkPipe pipeline: search → judge** (issue #102). `_bind_vault`
+builds `vaultSearch[field="query", set_as="results"] | judgeSearchResults` once and
+`vaultTextSearch[..., multi_emit=False] | judgeSearchResults` per call (the Whoosh index
+can appear later), plus the judge alone for `read_document` parts; the segment's seams are
+`judged_vector_search(request)`, `judged_keyword_search(request)` and `judge(request)`,
+each taking the request dict the session builds (`query` or `results`, `question`,
+`looking_for`, `known`, `seen`) and returning the judgements the judge set (`{"result",
+"keep", "reason"}` dicts). `JudgeSearchResults` is one `LLMPrompt` call per item whose
+system prompt asks for a `Judgements` JSON object, read by `parse_judgements` — bare,
+fenced or inside prose, a bare list, or one `<id> <keep|ignore|true|false> <reason>` line
+per result (not talkpipe's guided generation: `gpt-oss:120b-cloud` ignores Ollama's
+format schema and answers in prose, which failed every judgement). Hits are labelled
+`r1…rN` (ids written as `1`, `R1` or `[r1]` match too), prompt sections Question / This
+search is looking for / Already known / Results; `seen` hits are skipped, a model failure
+or a missing decision keeps the hit with a one-line `not judged: …` reason, and it never
+raises mid-pipeline. Its model calls are taken under
+a lock because Strands runs one turn's tool calls in threads and a prompt adapter holds
+the message it is sending. The judge decides — deciding costs the agent no turn and cannot
+be skipped — so the agent's job is what to search for: `vector_search(query, looking_for)`
+/ `keyword_search(query, looking_for)` / `read_document(chunk_id, start, looking_for)`,
+and `RETRIEVAL_SYSTEM_PROMPT` says so (and to read the question's terms in their ordinary
+sense). The session (`question`, `kept_notes`) builds `known` as `title — note` per kept
+chunk and `seen` as the decided chunks' keys, applies judgements in rank order through
+`_apply` (the same `agent · keep c3 (title) — reason` trace lines as a hand decision),
+registers nothing judged worth keeping once `max_chunks` is full (it is "passed over" and
+the agent told), and replies with the kept chunks in full, one line per ignored chunk, the
+known notes and the status. With no judged callable the session falls back to the plain
+`SearchFn` path (hits shown undecided, the agent decides), so the module works with no
+model. The default pack (`DEFAULT_TOOL_NAMES`, `default_tool_names()`) is
+`vector_search`, `keyword_search`, `extract_keywords`, `read_document`,
+`enough_information`; `keep_chunk` / `ignore_chunk` stay registered as opt-ins
+(`vault_agent_tool_names()` lists all seven). `make_session(question)` takes the question;
+the construction-time tool-name check passes `""`.
 
 `AgentVaultSearch.__init__` does everything pure first (parse tools, defaults, validate
 tool names) and then calls `_bind_vault()`, the one step that touches the outside world
@@ -323,11 +360,15 @@ The Ask route and `VaultService.ask` share `query._answer_with_agent` and the
 `agent_tools.py` — seven tools, all needing per-query state, so each is a **factory**
 returning a tool bound to one `AgentSearchSession` (the pattern talkpipe-agents documents
 for stateful packs): `vector_search`, `keyword_search`, `extract_keywords`,
-`read_document`, `keep_chunk`, `ignore_chunk`, `enough_information`. `read_document` takes
-a chunk id, never a path: it reads the `source` that chunk records (through the session's
-injected `read_document` callable; `AgentVaultSearch.read_document` uses talkpipe's
-`ReadFile`, i.e. the indexing extractors) and registers the part read as a new chunk to
-keep or ignore. `@vault_agent_tool("name")` registers a factory in
+`read_document`, `enough_information`, and the opt-in `keep_chunk`, `ignore_chunk`.
+`read_document` takes a chunk id, never a path: it reads the `source` that chunk records
+(through the session's injected `read_document` callable; `AgentVaultSearch.read_document`
+uses talkpipe's `ReadFile`, i.e. the indexing extractors) and registers the part read as a
+new chunk, judged like a hit. They do not use talkpipe-agents' `make_script_tool`, which
+takes one string and compiles a fresh, stateless pipeline per call: the session state
+(chunk ids, dedup, kept notes) is per question. The Developer Guide shows the stateless
+version for ChatterLang users (`scriptTool[...]` wrapping `vaultSearch |
+judgeSearchResults[drop_ignored=True]`). `@vault_agent_tool("name")` registers a factory in
 `TOOL_FACTORIES`, mirroring talkpipe-agents' own name registry; `build_tools(session,
 names)` resolves a name list against it and **falls through to `resolve_agent_tools` for
 anything it does not own**, so a pipeline can mix in generic tools (`think`, `calculator`,
@@ -371,25 +412,26 @@ segment): the agent hands it a plain-language question and gets back a Whoosh qu
 pass to `keyword_search`, rather than having to write Whoosh syntax itself. The agent
 never builds the full-text index — when a vault has none, `keyword_search` says so and
 the agent falls back to `vector_search`; building the index stays a user action on the
-Keyword Search page. `AgentVaultSearch.vector_search` / `keyword_search` /
+Keyword Search page.
 `vaultAgentChat` (`AgentVaultChat`) subclasses it for Ask: it calls `select_chunks` and
 feeds the kept chunks to the same `ConstructRAGPrompt` → `LLMPrompt` → `AppendRAGSources`
 stages `vaultChat` ends with, so an agent-gathered answer is worded and cited exactly like
 a plain one — only the retrieval in front differs. It emits an `AgentChatOutcome` (an
-`AgentSearchOutcome` plus `response`); when the agent kept nothing, no prompt is sent and
+`AgentSearchOutcome` plus `response`); when nothing was kept, no prompt is sent and
 `NO_CONTEXT_ANSWER` is returned instead of asking a model to answer from an empty context
-(`AGENT_ERROR_ANSWER` when the run failed before keeping anything — the vault was never
-searched, so the answer must not blame it; `UNDECIDED_ANSWER` when the agent left chunks it
-found undecided — counted in the outcome's `undecided` and the note's `left N undecided` —
-since it never judged them). `_bind_vault` refuses a vault path that does not
+— accurate, since every hit was judged (`AGENT_ERROR_ANSWER` when the run failed before
+keeping anything — the vault was never searched, so the answer must not blame it). The
+outcome's `undecided` (and the note's `left N undecided`) only counts chunks shown but
+never decided, which the hand tools or a judge-less session can leave; the former
+`UNDECIDED_ANSWER` is gone. `_bind_vault` refuses a vault path that does not
 exist, so a typo fails at construction instead of creating an empty folder. Strands runs one
 turn's tool calls concurrently in threads, so `AgentSearchSession._register` assigns chunk ids
 under a lock; an unknown chunk id passed to keep/ignore is refused *and* traced.
 
 **Both pages are driven by one segment.** `_refresh_agent_pipelines` builds a single
 `AgentVaultChat` per refresh and sets `_state.agent_search_pipeline = segment.select_chunks`
-and `_state.agent_chat_pipeline = segment.as_function(...)` — one embedder and one agent
-model, not two. The model is resolved eagerly, so a bad chat configuration leaves *both*
+and `_state.agent_chat_pipeline = segment.as_function(...)` — one embedder, one judge and
+one agent model, not two. The model is resolved eagerly, so a bad chat configuration leaves *both*
 unset and both checkboxes hidden (Search: **Let an agent select the results**; Ask:
 **Use Agent**) — the web pages show `_state.agent_unavailable_reason` (the build error)
 in the checkbox's place — in the web interface and in the TUI (`#search-agent` / `#ask-agent`, shown

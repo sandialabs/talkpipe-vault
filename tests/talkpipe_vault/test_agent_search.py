@@ -4,7 +4,10 @@
 
 The session and its tools are exercised with injected search callables and a
 scripted stand-in for the agent loop, so nothing here needs a vault, an
-embedder, or an LLM.
+embedder, or an LLM. The judged searches are scripted callables that return
+judgements (result, keep, reason) the way the judgeSearchResults segment
+sets them; a session built without them is the unjudged path, where the
+agent keeps and ignores by hand.
 """
 
 from __future__ import annotations
@@ -26,7 +29,10 @@ def _hit(doc_id: str, content: str, **doc: Any) -> SearchResult:
 
 
 def _tools(session: AgentSearchSession, names: Any = None) -> dict[str, Any]:
-    """The session's tools, by tool name (the whole vault pack by default)."""
+    """The session's tools, by tool name (every vault tool by default, so
+    the unjudged tests can keep and ignore by hand)."""
+    if names is None:
+        names = agent_tools.vault_agent_tool_names()
     resolved = build_tools(session, agent_tools.parse_tool_names(names))
     return {t.tool_name: t for t in resolved}
 
@@ -55,7 +61,27 @@ def _make_session(
     return session, told
 
 
+Verdicts = dict[str, bool | tuple[bool, str]]
+
+
+def _judge_hits(hits: list[Any], request: dict[str, Any], verdicts: Verdicts) -> list:
+    """What a judged search returns for *hits*: one judgement per hit not
+    already seen, deciding by doc_id (kept, "on topic", when unlisted)."""
+    seen = set(request.get("seen") or [])
+    judged = []
+    for hit in hits:
+        if hit.doc_id in seen:
+            continue
+        verdict = verdicts.get(hit.doc_id, (True, "on topic"))
+        keep, reason = (verdict, "") if isinstance(verdict, bool) else verdict
+        judged.append({"result": hit, "keep": keep, "reason": reason})
+    return judged
+
+
 class TestSessionTools:
+    """The unjudged path: no judged callables, so hits are shown undecided
+    and the agent keeps or ignores them by hand."""
+
     def test_search_assigns_ids_and_dedupes_across_searches(self):
         session, _ = _make_session(
             vector={"q": [_hit("a", "alpha text", title="A"), _hit("b", "beta")]},
@@ -64,6 +90,7 @@ class TestSessionTools:
         tools = _tools(session)
 
         out = tools["vector_search"](query="q")
+        assert "Decide on each undecided chunk" in out
         assert "[c1] A\nalpha text" in out
         assert "[c2]\nbeta" in out
 
@@ -103,6 +130,18 @@ class TestSessionTools:
         assert "No vector results" in tools["vector_search"](query="nothing")
         assert "index unreadable" in tools["keyword_search"](query="x")
 
+    def test_a_search_with_no_callable_at_all_says_so(self):
+        session = AgentSearchSession(
+            keyword_index_exists=lambda: True,
+            extract_keywords=None,
+            max_chunks=1,
+            tell=lambda _m: None,
+        )
+        tools = _tools(session)
+        assert "unavailable" in tools["vector_search"](query="q")
+        assert "unavailable" in tools["keyword_search"](query="q")
+        assert session.queries_run == []
+
     def test_keep_and_ignore_drive_results_and_the_chunk_ceiling(self):
         session, told = _make_session(
             vector={"q": [_hit("a", "one"), _hit("b", "two"), _hit("c", "three")]},
@@ -128,6 +167,7 @@ class TestSessionTools:
         assert not session.enough  # the ceiling stopped it, not its judgement
         assert [r.doc_id for r in session.results] == ["b", "c"]
         assert session.ignored == {"c1"}
+        assert session.kept_notes == {"c2": "on topic", "c3": ""}
         assert any("keep c2 — on topic" in line for line in told)
         assert any("ignore c1 — off topic" in line for line in told)
 
@@ -297,9 +337,266 @@ class TestSessionTools:
         assert "…" not in out
 
 
+def _make_judged_session(
+    *,
+    vector: dict[str, list[Any]] | None = None,
+    keyword: dict[str, list[Any]] | None = None,
+    verdicts: Verdicts | None = None,
+    max_chunks: int = 5,
+    question: str = "what is one?",
+    read_document: Any = None,
+    judge_fails: bool = False,
+) -> tuple[AgentSearchSession, list[str], list[dict[str, Any]]]:
+    """A session whose searches come back judged by *verdicts* (doc_id →
+    keep, or (keep, reason)); every request the judged callables receive is
+    collected so a test can see what the judge was told."""
+    told: list[str] = []
+    requests: list[dict[str, Any]] = []
+    vector = vector or {}
+    keyword = keyword or {}
+    verdicts = verdicts or {}
+
+    def judged(hits_for: Any) -> Any:
+        def run(request: dict[str, Any]) -> list[Any]:
+            requests.append(request)
+            if judge_fails:
+                raise RuntimeError("judge down")
+            return _judge_hits(hits_for(request), request, verdicts)
+
+        return run
+
+    session = AgentSearchSession(
+        question=question,
+        judged_vector_search=judged(lambda r: vector.get(r["query"], [])),
+        judged_keyword_search=judged(lambda r: keyword.get(r["query"], [])),
+        judge=judged(lambda r: r["results"]),
+        keyword_index_exists=lambda: True,
+        extract_keywords=None,
+        max_chunks=max_chunks,
+        tell=told.append,
+        read_document=read_document,
+    )
+    return session, told, requests
+
+
+THREE = [
+    _hit("a", "one", title="A.md"),
+    _hit("b", "two", title="B.md"),
+    _hit("c", "three", title="C.md"),
+]
+
+
+class TestJudgedSearches:
+    """The default path: a search's hits come back judged, so every hit
+    carries a decision and the agent only decides what to search for."""
+
+    def test_a_search_applies_the_judgements_and_leaves_nothing_undecided(self):
+        session, told, _ = _make_judged_session(
+            vector={"q": THREE},
+            verdicts={"a": (True, "says what one is"), "b": (False, "about two")},
+        )
+        out = _tools(session)["vector_search"](query="q")
+
+        assert session.kept == ["c1", "c3"]
+        assert session.ignored == {"c2"}
+        assert session.undecided == []
+        assert session.kept_notes == {"c1": "says what one is", "c3": "on topic"}
+        # The reply: kept chunks in full, one line per ignored one, what is
+        # known, and the status.
+        assert out.startswith("3 result(s) for 'q': kept 2, ignored 1.")
+        assert "Kept:\n\n[c1] A.md\none\n\n[c3] C.md\nthree" in out
+        assert "Ignored:\n\n[c2] B.md — about two" in out
+        assert "Already known:\n- A.md — says what one is\n- C.md — on topic" in out
+        assert "Kept 2 chunk(s), at most 5." in out
+        assert "enough_information" in out
+        assert "keep_chunk" not in out
+        # The trace lines are the ones a person reads for a hand decision.
+        assert (
+            "agent · keep c1 (A.md) — says what one is. Kept 1 chunk(s), at most 5."
+            in told
+        )
+        assert (
+            "agent · ignore c2 (B.md) — about two. Kept 1 chunk(s), at most 5." in told
+        )
+        assert told[-1] == (
+            "agent ← vector_search: 3 hit(s), kept 2, ignored 1. "
+            "Kept 2 chunk(s), at most 5."
+        )
+
+    def test_the_request_carries_the_question_and_looking_for(self):
+        session, _, requests = _make_judged_session(vector={"q": THREE})
+        _tools(session)["vector_search"](query="q", looking_for="the other side")
+        [request] = requests
+        assert request == {
+            "query": "q",
+            "question": "what is one?",
+            "looking_for": "the other side",
+            "known": [],
+            "seen": [],
+        }
+
+    def test_the_second_search_is_told_what_is_known_and_seen(self):
+        session, _, requests = _make_judged_session(
+            vector={"q": THREE, "r": [THREE[0], _hit("d", "four", title="D.md")]},
+            verdicts={"a": (True, "one"), "b": False, "c": (True, "three")},
+        )
+        tools = _tools(session)
+        tools["vector_search"](query="q")
+        out = tools["vector_search"](query="r")
+
+        assert requests[1]["known"] == ["A.md — one", "C.md — three"]
+        assert requests[1]["seen"] == ["a", "b", "c"]
+        # The judge skipped "a" (seen), so the search reports the new hit only.
+        assert out.startswith("1 result(s) for 'r': kept 1, ignored 0.")
+        assert session.kept == ["c1", "c3", "c4"]
+        assert session.undecided == []
+
+    def test_a_judgement_on_an_already_decided_hit_is_not_applied_twice(self):
+        """A judge that ignores `seen` must not re-decide or re-trace a chunk."""
+        session, told, _ = _make_judged_session(
+            vector={"q": THREE[:1]}, verdicts={"a": (True, "one")}
+        )
+        tools = _tools(session)
+        tools["vector_search"](query="q")
+        session._judged_vector_search = lambda request: [
+            {"result": THREE[0], "keep": False, "reason": "changed my mind"}
+        ]
+        out = tools["vector_search"](query="again")
+        assert session.kept == ["c1"]
+        assert not session.ignored
+        assert "No new vector results" in out
+        assert not any("changed my mind" in line for line in told)
+
+    def test_keyword_search_is_judged_too(self):
+        session, _, requests = _make_judged_session(
+            keyword={"one": THREE[:2]}, verdicts={"b": False}
+        )
+        out = _tools(session)["keyword_search"](query="one", looking_for="two")
+        assert requests[0]["query"] == "one"
+        assert requests[0]["looking_for"] == "two"
+        assert session.kept == ["c1"]
+        assert session.ignored == {"c2"}
+        assert "kept 1, ignored 1" in out
+
+    def test_the_chunk_maximum_is_respected_in_rank_order(self):
+        session, told, _ = _make_judged_session(vector={"q": THREE}, max_chunks=2)
+        out = _tools(session)["vector_search"](query="q")
+
+        assert session.kept == ["c1", "c2"]
+        assert session.at_capacity
+        # The third was judged worth keeping but not registered, so it is
+        # neither kept nor left undecided -- and the agent is told.
+        assert session.undecided == []
+        assert "c3" not in session._chunks
+        assert "1 more relevant result(s) were not kept: the 2-chunk maximum" in out
+        assert "Stop calling tools and reply: done" in out
+        assert "3 hit(s), kept 2, ignored 0, 1 passed over." in told[-1]
+
+    def test_everything_ignored_keeps_nothing_and_says_so(self):
+        session, _, _ = _make_judged_session(
+            vector={"q": THREE}, verdicts={"a": False, "b": False, "c": False}
+        )
+        out = _tools(session)["vector_search"](query="q")
+        assert session.kept == []
+        assert session.ignored == {"c1", "c2", "c3"}
+        assert "kept 0, ignored 3" in out
+        assert "Already known: nothing yet." in out
+        assert "Kept:" not in out
+
+    def test_a_search_with_no_hits_says_so(self):
+        session, told, _ = _make_judged_session(vector={})
+        assert "No new vector results for 'q'" in _tools(session)["vector_search"](
+            query="q"
+        )
+        assert "0 hit(s), kept 0, ignored 0" in told[-1]
+
+    def test_a_failed_judged_search_is_reported(self):
+        session, told, _ = _make_judged_session(vector={"q": THREE}, judge_fails=True)
+        out = _tools(session)["vector_search"](query="q")
+        assert "judge down" in out
+        assert told[-1] == "agent ← vector_search failed: judge down"
+        assert session.kept == []
+
+    def test_a_search_with_a_judge_needs_no_plain_callable(self):
+        """Judged callables alone are enough: the plain search is optional."""
+        session, _, _ = _make_judged_session(vector={"q": THREE[:1]})
+        assert session._vector_search is None
+        assert "kept 1" in _tools(session)["vector_search"](query="q")
+
+    def test_read_document_parts_are_judged(self):
+        hits = {"q": [_hit("row1", "a chunk", title="guide.md", source="/d/guide.md")]}
+        session, told, requests = _make_judged_session(
+            vector=hits,
+            verdicts={"/d/guide.md": (True, "the full procedure")},
+            read_document=lambda source: "The whole document.",
+        )
+        tools = _tools(session)
+        tools["vector_search"](query="q")
+        out = tools["read_document"](chunk_id="c1", looking_for="the steps")
+
+        assert out.startswith("[c2] guide.md — the document, characters 0-19 of 19.")
+        assert "Kept: the full procedure. Kept 2 chunk(s), at most 5." in out
+        assert "keep_chunk" not in out
+        assert session.kept == ["c1", "c2"]
+        request = requests[-1]
+        assert [r.doc_id for r in request["results"]] == ["/d/guide.md"]
+        assert request["looking_for"] == "the steps"
+        assert request["known"] == ["guide.md — on topic"]
+        assert "agent · keep c2 (guide.md) — the full procedure" in " ".join(told)
+
+    def test_a_document_part_judged_irrelevant_is_ignored(self):
+        hits = {"q": [_hit("row1", "a chunk", title="guide.md", source="/d/guide.md")]}
+        session, _, _ = _make_judged_session(
+            vector=hits,
+            verdicts={"/d/guide.md": (False, "nothing new")},
+            read_document=lambda source: "The whole document.",
+        )
+        tools = _tools(session)
+        tools["vector_search"](query="q")
+        out = tools["read_document"](chunk_id="c1")
+        assert "Ignored: nothing new." in out
+        assert session.ignored == {"c2"}
+        # Reading the same part again does not judge it again.
+        assert "Already ignored." in tools["read_document"](chunk_id="c1")
+
+    def test_a_document_part_judged_relevant_at_capacity_is_not_kept(self):
+        hits = {"q": [_hit("row1", "a chunk", title="g.md", source="/d/g.md")]}
+        session, _, _ = _make_judged_session(
+            vector=hits, max_chunks=1, read_document=lambda s: "More."
+        )
+        tools = _tools(session)
+        tools["vector_search"](query="q")
+        assert session.at_capacity
+        # The guard refuses the tool once the maximum is reached, so drive
+        # the session directly to exercise the judgement itself.
+        out = session.read_document("c1")
+        assert "maximum is reached, so it was not kept" in out
+        assert session.kept == ["c1"]
+        assert session.undecided == ["c2"]
+
+    def test_a_failed_judgement_of_a_part_falls_back_to_the_agent(self):
+        hits = {"q": [_hit("row1", "a chunk", title="g.md", source="/d/g.md")]}
+        session, told, _ = _make_judged_session(
+            vector=hits, read_document=lambda s: "More."
+        )
+        tools = _tools(session)
+        tools["vector_search"](query="q")
+
+        def fail(_request: dict[str, Any]) -> list[Any]:
+            raise RuntimeError("judge down")
+
+        session._judge = fail
+        out = tools["read_document"](chunk_id="c1")
+        assert "could not be judged" in out
+        assert "keep_chunk" in out
+        assert "agent ← judging c2 failed: judge down" in told
+        assert session.undecided == ["c2"]
+
+
 class TestReadDocument:
     """read_document loads the document behind a chunk the agent has seen,
-    as a new chunk that is kept or ignored like a search hit."""
+    as a new chunk that is kept or ignored like a search hit (by the agent,
+    when the session has no judge)."""
 
     def _session(self, text: str = "The whole document.", **kwargs: Any):
         hits = {"q": [_hit("row1", "a chunk", title="guide.md", source="/d/guide.md")]}
@@ -319,6 +616,7 @@ class TestReadDocument:
         out = tools["read_document"](chunk_id="c1")
         assert read == ["/d/guide.md"]
         assert out.startswith("[c2] guide.md")
+        assert "Keep or ignore c2 like any chunk." in out
         assert "The whole document." in out
         assert any("read_document c1 (guide.md)" in line for line in told)
 
@@ -383,16 +681,23 @@ class TestReadDocument:
 
 
 class _ScriptedSearch(AgentVaultSearch):
-    """AgentVaultSearch with the vault, embedder, and model replaced: the
-    agent loop is a script that calls the tools directly.
+    """AgentVaultSearch with the vault, embedder, judge and model replaced:
+    the agent loop is a script that calls the tools directly, and the judged
+    searches decide by ``verdicts`` (doc_id → keep, or (keep, reason);
+    unlisted hits are kept "on topic").
 
     It runs the real constructor; only ``_bind_vault`` (the one step that
-    touches disk and models) and the agent loop are replaced, so a new
-    attribute on the segment cannot silently go missing here."""
+    touches disk and models), the judged bindings and the agent loop are
+    replaced, so a new attribute on the segment cannot silently go missing
+    here."""
 
-    def __init__(self, script, **kwargs):  # type: ignore[no-untyped-def]
+    HITS = THREE
+
+    def __init__(self, script, verdicts=None, **kwargs):  # type: ignore[no-untyped-def]
         self.told: list[str] = []
+        self.requests: list[dict[str, Any]] = []
         self._script = script
+        self.verdicts: Verdicts = verdicts or {}
         self._stop_reason = kwargs.pop("stop_reason", "end_turn")
         kwargs.setdefault("max_chunks", 2)
         kwargs.setdefault("max_iterations", 3)
@@ -408,17 +713,24 @@ class _ScriptedSearch(AgentVaultSearch):
     def _bind_vault(self) -> None:
         self._extract_keywords = lambda question: f'"{question}"'
 
-    def vector_search(self, query: str) -> list[Any]:
-        return [_hit("a", "one"), _hit("b", "two"), _hit("c", "three")]
+    def _judged(self, hits: list[Any], request: dict[str, Any]) -> list[Any]:  # type: ignore[override]
+        self.requests.append(request)
+        return _judge_hits(hits, request, self.verdicts)
+
+    def judged_vector_search(self, request: dict[str, Any]) -> list[Any]:
+        return self._judged(self.HITS, request)
 
     def keyword_index_exists(self) -> bool:
         return False
 
-    def keyword_search(self, query: str) -> list[Any]:
-        return []
+    def judged_keyword_search(self, request: dict[str, Any]) -> list[Any]:
+        return self._judged([], request)
+
+    def judge(self, request: dict[str, Any]) -> list[Any]:
+        return self._judged(request["results"], request)
 
     def run_agent(self, session: AgentSearchSession, query: str) -> str:
-        self._script(_tools(session))
+        self._script(_tools(session, agent_tools.default_tool_names()))
         return self._stop_reason
 
 
@@ -439,7 +751,7 @@ class TestAgentIsAnLLMAgent:
         # The iteration cap is the library's turn limit, not a second loop.
         assert agent.max_turns == 5
         assert {t.tool_name for t in agent.tools} == set(
-            agent_tools.vault_agent_tool_names()
+            agent_tools.default_tool_names()
         )
 
     def test_with_max_iterations_raises_the_cap_on_a_copy(self):
@@ -463,6 +775,15 @@ class TestAgentIsAnLLMAgent:
         segment.system_prompt = "Be brief."
         assert segment.make_agent(segment.make_session()).system_prompt == "Be brief."
 
+    def test_the_default_prompt_describes_the_judged_tools(self):
+        prompt = agent_search.RETRIEVAL_SYSTEM_PROMPT
+        for name in agent_tools.default_tool_names():
+            assert name in prompt
+        assert "looking_for" in prompt
+        assert "keep_chunk" not in prompt
+        assert "ignore_chunk" not in prompt
+        assert "ordinary sense" in prompt
+
     def test_progress_reaches_the_session_trace(self):
         """llmAgent's own progress lines land in the trace the pages show."""
         segment = _ScriptedSearch(lambda _tools: None)
@@ -471,18 +792,26 @@ class TestAgentIsAnLLMAgent:
         assert session.trace == ["agent → vector_search({'query': 'q'})"]
         assert segment.told == ["agent → vector_search({'query': 'q'})"]
 
+    def test_the_session_is_built_for_the_question(self):
+        segment = _ScriptedSearch(lambda _tools: None)
+        assert segment.make_session().question == ""
+        session = segment.make_session("what is one?")
+        assert session.question == "what is one?"
+        assert session._judged_vector_search == segment.judged_vector_search
+        assert session._judge == segment.judge
+
 
 class TestAgentVaultSearch:
     def test_outcome_reports_the_agents_own_judgement(self):
-        """The intended ending: the agent said it could answer, after one chunk."""
+        """The intended ending: the agent said it could answer, after one search."""
 
         def script(tools: dict[str, Any]) -> None:
             tools["vector_search"](query="what is one?")
-            tools["keep_chunk"](chunk_id="c1")
-            tools["ignore_chunk"](chunk_id="c2")
             tools["enough_information"](reason="c1 answers it")
 
-        segment = _ScriptedSearch(script, max_chunks=5)
+        segment = _ScriptedSearch(
+            script, verdicts={"a": (True, "one"), "b": False, "c": False}, max_chunks=5
+        )
         outcome = segment.process_value("what is one?")
         assert isinstance(outcome, AgentSearchOutcome)
         assert [r.doc_id for r in outcome.results] == ["a"]
@@ -490,36 +819,33 @@ class TestAgentVaultSearch:
         # The reason it gave is carried into the note the pages display.
         assert "(c1 answers it)" in outcome.note
         assert "kept 1 chunk after 1 search" in outcome.note
-        # c3 was shown but never decided on; the note and outcome count it.
-        assert "ignored 1, left 1 undecided." in outcome.note
-        assert outcome.undecided == 1
+        # The judge decided on every hit, so nothing is undecided.
+        assert outcome.note.endswith("ignored 2.")
+        assert outcome.undecided == 0
         assert outcome.trace[0].startswith("agent search: 'what is one?'")
         assert outcome.trace == segment.told
+        # The judge was asked about the user's question.
+        assert segment.requests[0]["question"] == "what is one?"
 
     def test_outcome_reports_the_chunk_ceiling(self):
         def script(tools: dict[str, Any]) -> None:
             tools["vector_search"](query="what is one?")
-            tools["keep_chunk"](chunk_id="c1")
-            tools["ignore_chunk"](chunk_id="c2")
-            tools["keep_chunk"](chunk_id="c3")
 
-        segment = _ScriptedSearch(script, max_chunks=2)
+        segment = _ScriptedSearch(script, verdicts={"b": False}, max_chunks=2)
         outcome = segment.process_value("what is one?")
         assert [r.doc_id for r in outcome.results] == ["a", "c"]
         assert outcome.note.startswith("Agent filled its 2-chunk maximum")
         assert "kept 2 chunks after 1 search" in outcome.note
-        # Every chunk carries a decision, so nothing is reported undecided.
         assert outcome.note.endswith("ignored 1.")
         assert outcome.undecided == 0
 
     def test_outcome_reports_iteration_cap(self):
         def script(tools: dict[str, Any]) -> None:
             tools["vector_search"](query="q")
-            tools["keep_chunk"](chunk_id="c1")
 
         segment = _ScriptedSearch(script, max_chunks=5, stop_reason="limit_turns")
         outcome = segment.process_value("q")
-        assert [r.doc_id for r in outcome.results] == ["a"]
+        assert [r.doc_id for r in outcome.results] == ["a", "b", "c"]
         assert "hit the 3-iteration cap" in outcome.note
 
     def test_outcome_distinguishes_stopping_without_deciding(self):
@@ -527,20 +853,38 @@ class TestAgentVaultSearch:
 
         def script(tools: dict[str, Any]) -> None:
             tools["vector_search"](query="q")
-            tools["keep_chunk"](chunk_id="c1")
 
         outcome = _ScriptedSearch(script, max_chunks=5).process_value("q")
         assert outcome.note.startswith("Agent stopped without saying it had enough")
         # ...and says that the model is the likely cause.
         assert agent_search.WEAK_TOOL_CALLING_HINT in outcome.note
 
+    def test_a_second_search_builds_on_the_first(self):
+        """What the first search kept is `known` and `seen` to the second."""
+
+        def script(tools: dict[str, Any]) -> None:
+            tools["vector_search"](query="q")
+            tools["vector_search"](query="r", looking_for="the other side")
+            tools["enough_information"]()
+
+        segment = _ScriptedSearch(
+            script, verdicts={"a": (True, "one side"), "b": False}, max_chunks=5
+        )
+        segment.process_value("q")
+        first, second = segment.requests
+        assert first["looking_for"] == ""
+        assert second["looking_for"] == "the other side"
+        assert second["known"] == ["A.md — one side", "C.md — on topic"]
+        assert second["seen"] == ["a", "b", "c"]
+
     def test_agent_failure_keeps_what_was_selected(self):
         def script(tools: dict[str, Any]) -> None:
             tools["vector_search"](query="q")
-            tools["keep_chunk"](chunk_id="c2")
             raise RuntimeError("model unreachable")
 
-        outcome = _ScriptedSearch(script).process_value("q")
+        outcome = _ScriptedSearch(
+            script, verdicts={"a": False, "c": False}
+        ).process_value("q")
         assert [r.doc_id for r in outcome.results] == ["b"]
         assert "model unreachable" in outcome.note
         assert outcome.note.endswith("showing what it kept.")
@@ -584,7 +928,6 @@ class TestAgentVaultSearch:
     def test_as_function_yields_the_outcome(self):
         def script(tools: dict[str, Any]) -> None:
             tools["vector_search"](query="q")
-            tools["keep_chunk"](chunk_id="c1")
 
         fn = _ScriptedSearch(script, max_chunks=1).as_function(
             single_in=True, single_out=True
@@ -596,8 +939,8 @@ class _ScriptedChat(_ScriptedSearch, agent_search.AgentVaultChat):
     """The scripted agent loop with the RAG answering stage stubbed out, so
     the Ask variant is exercised without a vault, an embedder, or an LLM."""
 
-    def __init__(self, script, **kwargs):  # type: ignore[no-untyped-def]
-        _ScriptedSearch.__init__(self, script, **kwargs)
+    def __init__(self, script, verdicts=None, **kwargs):  # type: ignore[no-untyped-def]
+        _ScriptedSearch.__init__(self, script, verdicts, **kwargs)
         self.answered: list[tuple[str, list[Any]]] = []
 
     def answer(self, question: str, background: list[Any]) -> str:
@@ -609,12 +952,9 @@ class TestAgentVaultChat:
     def test_answer_is_built_from_the_chunks_the_agent_kept(self):
         def script(tools: dict[str, Any]) -> None:
             tools["vector_search"](query="what is one?")
-            tools["keep_chunk"](chunk_id="c1")
-            tools["ignore_chunk"](chunk_id="c2")
-            tools["keep_chunk"](chunk_id="c3")
             tools["enough_information"](reason="both sides covered")
 
-        segment = _ScriptedChat(script, max_chunks=5)
+        segment = _ScriptedChat(script, verdicts={"b": False}, max_chunks=5)
         outcome = segment.process_value("what is one?")
 
         assert isinstance(outcome, agent_search.AgentChatOutcome)
@@ -628,13 +968,20 @@ class TestAgentVaultChat:
         assert question == "what is one?"
         assert [r.doc_id for r in background] == ["a", "c"]
 
-    def test_nothing_kept_means_no_prompt_is_sent(self):
+    def test_everything_judged_irrelevant_means_no_prompt_is_sent(self):
+        """With every hit judged, "nothing relevant" is accurate: the answer
+        says the notes do not cover the question, not that the agent never
+        decided."""
+
         def script(tools: dict[str, Any]) -> None:
             tools["vector_search"](query="q")
-            for chunk_id in ("c1", "c2", "c3"):
-                tools["ignore_chunk"](chunk_id=chunk_id)
+            tools["vector_search"](query="q again")
 
-        segment = _ScriptedChat(script)
+        segment = _ScriptedChat(
+            script,
+            verdicts={"a": False, "b": False, "c": False},
+            stop_reason="limit_turns",
+        )
         outcome = segment.process_value("q")
 
         assert segment.answered == []
@@ -642,23 +989,9 @@ class TestAgentVaultChat:
         assert outcome.response == agent_search.NO_CONTEXT_ANSWER
         assert outcome.error == ""
         assert outcome.undecided == 0
-
-    def test_chunks_left_undecided_are_not_answered_as_irrelevant(self):
-        """A model that searches until the cap without deciding never judged
-        what it found; the answer must not say the notes lack it."""
-
-        def script(tools: dict[str, Any]) -> None:
-            tools["vector_search"](query="q")
-            tools["vector_search"](query="q again")
-
-        segment = _ScriptedChat(script, stop_reason="limit_turns")
-        outcome = segment.process_value("q")
-
-        assert segment.answered == []
-        assert outcome.response == agent_search.UNDECIDED_ANSWER
-        assert outcome.undecided == 3
         assert outcome.note.startswith("Agent hit the 3-iteration cap")
-        assert "ignored 0, left 3 undecided." in outcome.note
+        assert outcome.note.endswith("ignored 3.")
+        assert not hasattr(agent_search, "UNDECIDED_ANSWER")
 
     def test_a_failed_run_is_not_answered_as_an_empty_vault(self):
         """An agent that errored before searching never looked at the vault;
@@ -678,7 +1011,6 @@ class TestAgentVaultChat:
     def test_as_function_yields_the_outcome(self):
         def script(tools: dict[str, Any]) -> None:
             tools["vector_search"](query="q")
-            tools["keep_chunk"](chunk_id="c1")
 
         fn = _ScriptedChat(script, max_chunks=1).as_function(
             single_in=True, single_out=True
@@ -692,7 +1024,6 @@ class TestAgentVaultChat:
 
         def script(tools: dict[str, Any]) -> None:
             tools["vector_search"](query="q")
-            tools["keep_chunk"](chunk_id="c1")
 
         segment = _ScriptedChat(script, max_chunks=1)
         outcome = segment.select_chunks("q")
@@ -723,11 +1054,10 @@ class TestToolsRefuseOnceTheRunIsOver:
         assert session.queries_run == [("vector", "q")]
 
     def test_tools_refuse_once_the_chunk_ceiling_is_full(self):
-        session, told = _make_session(vector={"q": [_hit("a", "one")]}, max_chunks=1)
+        session, told, _ = _make_judged_session(vector={"q": THREE}, max_chunks=1)
         tools = _tools(session)
 
         tools["vector_search"](query="q")
-        tools["keep_chunk"](chunk_id="c1")
 
         out = tools["vector_search"](query="more")
         assert "1-chunk maximum is reached" in out
@@ -739,20 +1069,29 @@ class TestToolSelection:
     """Tools are picked by name, so a pipeline can add or drop one without
     touching the tool pack or the segment."""
 
-    def test_the_default_pack_is_the_seven_vault_tools(self):
+    def test_the_default_pack_is_the_five_judged_search_tools(self):
         session, _ = _make_session()
-        assert set(_tools(session)) == {
+        assert agent_tools.default_tool_names() == [
             "vector_search",
             "keyword_search",
             "extract_keywords",
             "read_document",
+            "enough_information",
+        ]
+        assert set(_tools(session, agent_tools.parse_tool_names(None))) == set(
+            agent_tools.default_tool_names()
+        )
+        assert agent_tools.parse_tool_names(None) == agent_tools.default_tool_names()
+
+    def test_keep_and_ignore_stay_registered_as_opt_ins(self):
+        session, _ = _make_session()
+        assert set(agent_tools.vault_agent_tool_names()) == {
+            *agent_tools.default_tool_names(),
             "keep_chunk",
             "ignore_chunk",
-            "enough_information",
         }
-        assert (
-            agent_tools.parse_tool_names(None) == agent_tools.vault_agent_tool_names()
-        )
+        tools = _tools(session, "vector_search,keep_chunk,ignore_chunk")
+        assert set(tools) == {"vector_search", "keep_chunk", "ignore_chunk"}
 
     @pytest.mark.parametrize(
         "spec", ["vector_search,keep_chunk", ["vector_search", "keep_chunk"]]
@@ -775,10 +1114,11 @@ class TestToolSelection:
         assert "no_such_tool" in message
         assert "vault retrieval tools" in message
         assert "enough_information" in message
+        assert "keep_chunk" in message
 
-    def test_a_blank_spec_falls_back_to_the_full_pack(self):
-        assert agent_tools.parse_tool_names("") == agent_tools.vault_agent_tool_names()
-        assert agent_tools.parse_tool_names([]) == agent_tools.vault_agent_tool_names()
+    def test_a_blank_spec_falls_back_to_the_default_pack(self):
+        assert agent_tools.parse_tool_names("") == agent_tools.default_tool_names()
+        assert agent_tools.parse_tool_names([]) == agent_tools.default_tool_names()
 
 
 @pytest.mark.parametrize("bad", [0, -3])

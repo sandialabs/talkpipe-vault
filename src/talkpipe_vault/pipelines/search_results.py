@@ -53,6 +53,11 @@ def normalize_search_result(
     return SearchResult(score=score, doc_id=doc_id, document=document)
 
 
+def search_result_key(result: SearchResult) -> str:
+    """The identity results are deduplicated by: the doc_id, else the document."""
+    return result.doc_id or json.dumps(result.document, sort_keys=True, default=str)
+
+
 def search_result_to_dict(
     entry: Any, rename_fields: dict[str, str] | None = None
 ) -> dict[str, Any] | None:

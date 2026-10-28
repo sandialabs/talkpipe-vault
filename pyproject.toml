@@ -246,6 +246,7 @@ buildVectorDBFromPaths = "talkpipe_vault.pipelines.building_and_watching:build_v
 extractSearchKeywords = "talkpipe_vault.pipelines.keyword_search:ExtractSearchKeywords"
 filterSearchResults = "talkpipe_vault.pipelines.search_results:SearchResultFilter"
 indexFolder = "talkpipe_vault.pipelines.folder_index:index_folder"
+judgeSearchResults = "talkpipe_vault.pipelines.judge_results:JudgeSearchResults"
 mergeSearchResults = "talkpipe_vault.pipelines.search_results:MergeSearchResults"
 searchLance = "talkpipe_vault.pipelines.keyword_search:searchLance"
 vaultChat = "talkpipe_vault.pipelines.vault_chat:VaultChat"

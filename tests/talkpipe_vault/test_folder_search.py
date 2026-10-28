@@ -379,15 +379,19 @@ def test_the_agent_segment_searches_a_folder_indexed_after_it_was_built(
     tmp_path, vault_home, fake_embedder
 ):
     from talkpipe_vault.pipelines.agent_search import AgentVaultSearch
+    from talkpipe_vault.pipelines.judge_results import JudgeSearchResults
 
     class _Unbound(AgentVaultSearch):
         def _bind_vault(self) -> None:  # the model and embedder are not needed
-            pass
+            # The keyword pipeline ends in the judge; eliza stands in for a
+            # model (its replies are not judgements, so every hit is kept).
+            self._judge = JudgeSearchResults(chat_source="eliza", chat_model="eliza")
 
     root = _folder(tmp_path, "docs", {"log.txt": "The lighthouse lamp failed.\n"})
     agent = _Unbound(vault_path=str(root), chat_model="m", chat_source="ollama")
     assert not agent.keyword_index_exists()
     _index(root, vectors=False)
     assert agent.keyword_index_exists()
-    hits = agent.keyword_search("lighthouse")
-    assert [hit["document"]["folder"] for hit in hits] == ["docs"]
+    hits = agent.judged_keyword_search({"query": "lighthouse", "question": "q"})
+    assert [hit["result"].document["folder"] for hit in hits] == ["docs"]
+    assert [hit["keep"] for hit in hits] == [True]
