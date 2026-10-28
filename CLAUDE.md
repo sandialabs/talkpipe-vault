@@ -104,7 +104,8 @@ State lives in the module-level `_state: AppState` singleton (`apps/state.py`); 
 are rebuilt by `apps/pipelines.py`'s `_refresh_pipelines()` (throttled to every 5s unless
 forced). `query.py` holds only the routes, page rendering and `run_app`; the helpers
 live in `state.py`, `pipelines.py`, `folders.py`, `vaults.py`, `results.py` and
-`vault_store.py`, and `query.py` re-exports them (its `__all__`) for existing imports.
+`vault_store.py`; `query.py` re-exports the public ones (its `__all__`) for code written
+against it, while the terminal interface and the tests import the modules directly.
 The process globals rebound at run time — `state._folder_scheduler`, `vaults._index_job`,
 `vaults._fulltext_index_job` — are deliberately not re-exported: read them from their
 module, and monkeypatch a helper in the module that *calls* it.
@@ -114,7 +115,8 @@ module, and monkeypatch a helper in the module that *calls* it.
 `vault-tui [vault_path] [--resume] [--show-source-paths]` (`talkpipe_vault/tui/`) is a
 Textual application with the web interface's functionality for terminals (tmux, SSH,
 headless machines). It runs **in-process**: `tui/service.py` (`VaultService`) calls the
-same module-level helpers the routes in `apps/query.py` call (`init_pipelines`,
+same helpers the routes in `apps/query.py` call, imported from the apps modules
+(`state`, `pipelines`, `folders`, `vaults`, `results`, `vault_store`; `init_pipelines`,
 `_refresh_pipelines`, `start_index_job`, `_process_semantic_results`, `_collect_config_status`,
 `_resolve_vault_request`, …) on the same `_state` singleton, so both interfaces share one
 implementation and the web application is not modified. Keep it that way: a TUI feature

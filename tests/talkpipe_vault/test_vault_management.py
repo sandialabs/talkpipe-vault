@@ -1,9 +1,12 @@
 """Tests for vault management, document indexing, and model settings pages."""
 
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 
 from talkpipe_vault.apps import pipelines, query, user_settings, vaults
+from talkpipe_vault.apps import state as app_state
 from talkpipe_vault.pipelines.config import WHOOSH_INDEX_FIELDS
 
 
@@ -30,22 +33,22 @@ def isolated_app(tmp_path, monkeypatch):
         vaults._fulltext_index_job.docs_done = 0
         vaults._fulltext_index_job.message = ""
         vaults._fulltext_index_job.error = None
-    query._state.vault_path = ""
-    query._state.search_pipeline = None
-    query._state.chat_pipeline = None
-    query._state.keyword_search_pipeline = None
-    query._state.shingled_chunks_count = 0
-    query._state.keyword_search_enabled = False
-    query._state.show_source_paths = False
-    query._state.last_refresh_time = 0.0
-    query._state.embedding_model = None
-    query._state.embedding_source = None
-    query._state.chat_model = None
-    query._state.chat_source = None
-    query._state.chunk_size = None
-    query._state.shingle_size = None
-    query._state.shingle_overlap = None
-    query._state.rag_result_limit = None
+    app_state._state.vault_path = ""
+    app_state._state.search_pipeline = None
+    app_state._state.chat_pipeline = None
+    app_state._state.keyword_search_pipeline = None
+    app_state._state.shingled_chunks_count = 0
+    app_state._state.keyword_search_enabled = False
+    app_state._state.show_source_paths = False
+    app_state._state.last_refresh_time = 0.0
+    app_state._state.embedding_model = None
+    app_state._state.embedding_source = None
+    app_state._state.chat_model = None
+    app_state._state.chat_source = None
+    app_state._state.chunk_size = None
+    app_state._state.shingle_size = None
+    app_state._state.shingle_overlap = None
+    app_state._state.rag_result_limit = None
     return
 
 
@@ -145,7 +148,7 @@ class TestVaultSelection:
         assert response.status_code == 303
         assert response.headers["location"].startswith("/documents")
         assert new_vault.is_dir()
-        assert query._state.vault_path == str(new_vault)
+        assert app_state._state.vault_path == str(new_vault)
         assert user_settings.get_recent_vaults() == [str(new_vault)]
 
     def test_open_new_vault_drops_previous_vault_keyword_search(self, client, tmp_path):
@@ -167,14 +170,14 @@ class TestVaultSelection:
             ix.add_document({"content": "hello", "path": "/x", "filename": "x"})
 
         client.post("/vaults/open", data={"new_vault_path": str(vault_a)})
-        assert query._state.keyword_search_enabled
+        assert app_state._state.keyword_search_enabled
 
         vault_b = tmp_path / "fresh-vault"
         client.post("/vaults/open", data={"new_vault_path": str(vault_b)})
 
-        assert query._state.vault_path == str(vault_b)
-        assert not query._state.keyword_search_enabled
-        assert query._state.keyword_search_pipeline is None
+        assert app_state._state.vault_path == str(vault_b)
+        assert not app_state._state.keyword_search_enabled
+        assert app_state._state.keyword_search_pipeline is None
 
         page = client.get("/keyword-search", follow_redirects=True)
         assert "Create Full-Text Index" in page.text
@@ -188,7 +191,7 @@ class TestVaultSelection:
 
         assert response.status_code == 303
         assert response.headers["location"].startswith("/?")
-        assert query._state.vault_path == str(existing)
+        assert app_state._state.vault_path == str(existing)
 
     def test_open_non_empty_non_vault_folder_requires_confirmation(
         self, client, tmp_path
@@ -210,7 +213,7 @@ class TestVaultSelection:
 
         assert response.status_code == 303
         assert response.headers["location"].startswith("/documents?confirm_path=")
-        assert query._state.vault_path == ""
+        assert app_state._state.vault_path == ""
         assert user_settings.get_recent_vaults() == []
         assert sorted(p.name for p in docs_folder.iterdir()) == ["notes.txt"]
 
@@ -277,7 +280,7 @@ class TestVaultSelection:
         location = response.headers["location"]
         assert location.startswith("/documents")
         assert "not+vault+data" in location
-        assert query._state.vault_path == str(docs_folder)
+        assert app_state._state.vault_path == str(docs_folder)
         assert user_settings.get_recent_vaults() == [str(docs_folder)]
 
     def test_open_existing_vault_folder_gets_no_warning(self, client, tmp_path):
@@ -298,7 +301,7 @@ class TestVaultSelection:
 
         assert response.status_code == 303
         assert "error=" in response.headers["location"]
-        assert query._state.vault_path == ""
+        assert app_state._state.vault_path == ""
 
     def test_open_rejects_legacy_layout(self, client, tmp_path):
         legacy = tmp_path / "legacy-vault"
@@ -308,7 +311,7 @@ class TestVaultSelection:
 
         assert response.status_code == 303
         assert "error=" in response.headers["location"]
-        assert query._state.vault_path == ""
+        assert app_state._state.vault_path == ""
 
     def test_open_rejects_blank_path(self, client):
         response = client.post("/vaults/open", data={"new_vault_path": "   "})
@@ -384,7 +387,7 @@ class TestVaultDeletion:
 
     def test_cannot_delete_currently_open_vault(self, client, tmp_path):
         vault = self._remember_dir(tmp_path, "open-one")
-        query._state.vault_path = str(vault)
+        app_state._state.vault_path = str(vault)
 
         response = client.post(
             "/vaults/delete",
@@ -411,7 +414,7 @@ class TestVaultDeletion:
         # A home directory forced into recents must still be refused.
         home = tmp_path / "home"
         home.mkdir()
-        monkeypatch.setattr(query.Path, "home", staticmethod(lambda: home))
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
         user_settings.remember_vault(str(home))
 
         response = client.post(
@@ -547,16 +550,16 @@ class TestModelSettings:
         )
 
         assert response.status_code == 303
-        assert query._state.agent_search_result_count == 4
-        assert query._state.agent_search_iterations == 6
-        assert query._state.embedding_source == "openai"
-        assert query._state.embedding_model == "text-embedding-3-large"
-        assert query._state.chat_source == "openai"
-        assert query._state.chat_model == "gpt-4o"
-        assert query._state.chunk_size == 400
-        assert query._state.shingle_size == 4
-        assert query._state.shingle_overlap == 2
-        assert query._state.rag_result_limit == 7
+        assert app_state._state.agent_search_result_count == 4
+        assert app_state._state.agent_search_iterations == 6
+        assert app_state._state.embedding_source == "openai"
+        assert app_state._state.embedding_model == "text-embedding-3-large"
+        assert app_state._state.chat_source == "openai"
+        assert app_state._state.chat_model == "gpt-4o"
+        assert app_state._state.chunk_size == 400
+        assert app_state._state.shingle_size == 4
+        assert app_state._state.shingle_overlap == 2
+        assert app_state._state.rag_result_limit == 7
         overrides = user_settings.get_model_overrides()
         assert overrides["chat_model"] == "gpt-4o"
 
@@ -590,10 +593,10 @@ class TestModelSettings:
         monkeypatch.setattr(
             pipelines, "_keyword_search_enabled", lambda _vault_path: False
         )
-        query._state.vault_path = str(tmp_path)
-        query._state.rag_result_limit = 7
+        app_state._state.vault_path = str(tmp_path)
+        app_state._state.rag_result_limit = 7
 
-        query._refresh_pipelines(force=True)
+        pipelines._refresh_pipelines(force=True)
 
         assert captured["limit"] == 7
 
@@ -639,18 +642,18 @@ class TestVaultSuggestion:
     ):
         home = tmp_path / "home"
         home.mkdir()
-        monkeypatch.setattr(query.Path, "home", staticmethod(lambda: home))
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
         docs = tmp_path / "field-notes"
         docs.mkdir()
 
-        assert query.suggest_vault_path(str(docs)) == str(home / "field-notes-vault")
+        assert vaults.suggest_vault_path(str(docs)) == str(home / "field-notes-vault")
 
     def test_suggestion_uses_the_folder_a_glob_walks(self, monkeypatch, tmp_path):
         home = tmp_path / "home"
         home.mkdir()
-        monkeypatch.setattr(query.Path, "home", staticmethod(lambda: home))
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
 
-        suggestion = query.suggest_vault_path(str(tmp_path / "notes") + "/**/*.md")
+        suggestion = vaults.suggest_vault_path(str(tmp_path / "notes") + "/**/*.md")
 
         assert suggestion == str(home / "notes-vault")
 
@@ -658,26 +661,26 @@ class TestVaultSuggestion:
         """Never propose writing index files into someone's own folder."""
         home = tmp_path / "home"
         home.mkdir()
-        monkeypatch.setattr(query.Path, "home", staticmethod(lambda: home))
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
         taken = home / "notes-vault"
         taken.mkdir()
         (taken / "unrelated.txt").write_text("x")
         docs = tmp_path / "notes"
         docs.mkdir()
 
-        assert query.suggest_vault_path(str(docs)) == str(home / "notes-vault-2")
+        assert vaults.suggest_vault_path(str(docs)) == str(home / "notes-vault-2")
 
     def test_suggestion_reuses_an_existing_vault_of_the_same_name(
         self, monkeypatch, tmp_path
     ):
         home = tmp_path / "home"
         home.mkdir()
-        monkeypatch.setattr(query.Path, "home", staticmethod(lambda: home))
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
         (home / "notes-vault" / "docs.lance").mkdir(parents=True)
         docs = tmp_path / "notes"
         docs.mkdir()
 
-        assert query.suggest_vault_path(str(docs)) == str(home / "notes-vault")
+        assert vaults.suggest_vault_path(str(docs)) == str(home / "notes-vault")
 
     def test_suggestion_lands_under_the_configured_vault_root(
         self, monkeypatch, tmp_path
@@ -688,7 +691,7 @@ class TestVaultSuggestion:
         docs = tmp_path / "notes"
         docs.mkdir()
 
-        assert query.suggest_vault_path(str(docs)) == str(root / "notes-vault")
+        assert vaults.suggest_vault_path(str(docs)) == str(root / "notes-vault")
 
     def test_suggest_endpoint_returns_a_path(self, client, tmp_path):
         docs = tmp_path / "papers"
@@ -722,7 +725,7 @@ class TestCombinedVaultAndIndexing:
         assert "Created+vault" in location
         assert "Indexing+started" in location
         assert vault.is_dir()
-        assert query._state.vault_path == str(vault)
+        assert app_state._state.vault_path == str(vault)
         assert user_settings.get_recent_vaults() == [str(vault)]
 
     def test_switches_to_another_vault_for_this_run(self, client, tmp_path):
@@ -739,7 +742,7 @@ class TestCombinedVaultAndIndexing:
             data={"source_path": str(docs), "new_vault_path": str(second)},
         )
 
-        assert query._state.vault_path == str(second)
+        assert app_state._state.vault_path == str(second)
 
     def test_blank_vault_field_keeps_the_open_vault(self, client, tmp_path):
         docs = tmp_path / "docs"
@@ -753,7 +756,7 @@ class TestCombinedVaultAndIndexing:
         )
 
         assert "Indexing+started" in response.headers["location"]
-        assert query._state.vault_path == str(vault)
+        assert app_state._state.vault_path == str(vault)
 
     def test_a_vault_with_no_documents_just_opens_it(self, client, tmp_path):
         """The same form opens an existing vault when no documents are given."""
@@ -766,7 +769,7 @@ class TestCombinedVaultAndIndexing:
 
         assert response.status_code == 303
         assert "Opened+vault" in response.headers["location"]
-        assert query._state.vault_path == str(vault)
+        assert app_state._state.vault_path == str(vault)
         assert client.get("/api/index-status").json()["running"] is False
 
     def test_indexing_without_any_vault_asks_for_one(self, client, tmp_path):
@@ -781,7 +784,7 @@ class TestCombinedVaultAndIndexing:
         assert "Choose+a+vault" in location
         # The chosen documents come back with the form so nothing is retyped.
         assert "source_path=" in location
-        assert query._state.vault_path == ""
+        assert app_state._state.vault_path == ""
 
     def test_rejects_a_vault_inside_the_documents_folder_itself(self, client, tmp_path):
         docs = tmp_path / "docs"
@@ -795,7 +798,7 @@ class TestCombinedVaultAndIndexing:
 
         assert response.status_code == 303
         assert "error=" in response.headers["location"]
-        assert query._state.vault_path == ""
+        assert app_state._state.vault_path == ""
         assert sorted(p.name for p in docs.iterdir()) == ["a.txt"]
 
     def test_bad_source_never_creates_the_vault(self, client, tmp_path):
@@ -829,7 +832,7 @@ class TestCombinedVaultAndIndexing:
         assert response.headers["location"].startswith("/documents?confirm_path=")
         # The pending documents ride along so the confirm panel can resume.
         assert "source_path=" in response.headers["location"]
-        assert query._state.vault_path == ""
+        assert app_state._state.vault_path == ""
 
         page = client.get(f"/documents?confirm_path={crowded}&source_path={docs}").text
         assert 'action="/documents/index"' in page
@@ -845,7 +848,7 @@ class TestCombinedVaultAndIndexing:
         )
 
         assert "Indexing+started" in confirmed.headers["location"]
-        assert query._state.vault_path == str(crowded)
+        assert app_state._state.vault_path == str(crowded)
 
 
 class TestDocumentIndexing:
@@ -871,7 +874,7 @@ class TestDocumentIndexing:
 
         monkeypatch.setattr(vaults, "build_rag_database", fake_build)
 
-        indexed, skipped = query.index_documents_into_vault(
+        indexed, skipped = vaults.index_documents_into_vault(
             vault_path=str(tmp_path),
             source_pattern="/tmp/*.txt",
             embedding_model="test-model",
@@ -924,12 +927,12 @@ class TestDocumentIndexing:
         subdir = tmp_path / "docs"
         subdir.mkdir()
 
-        pattern = query._resolve_source_pattern(str(subdir))
+        pattern = vaults._resolve_source_pattern(str(subdir))
 
         assert pattern.endswith(("**/*", "**\\*"))
 
     def test_resolve_source_pattern_keeps_globs(self):
-        assert query._resolve_source_pattern("/x/**/*.md") == "/x/**/*.md"
+        assert vaults._resolve_source_pattern("/x/**/*.md") == "/x/**/*.md"
 
     def _wait_for_index_job(self, client, timeout_seconds=120):
         """Poll the status endpoint until the background job finishes."""

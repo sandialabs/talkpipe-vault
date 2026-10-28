@@ -13,13 +13,8 @@ from talkpipe.util.config import configure_logger
 
 from talkpipe_vault import memtune
 from talkpipe_vault.apps import access_control, user_settings
-from talkpipe_vault.apps.query import (
-    _port_in_use,
-    _running_instance_url,
-    is_documents_folder,
-    run_app,
-    startup_folders,
-)
+from talkpipe_vault.apps.folders import is_documents_folder, startup_folders
+from talkpipe_vault.apps.query import _port_in_use, _running_instance_url, run_app
 from talkpipe_vault.pipelines.config import ensure_supported_vault_layout
 
 configure_logger("root:ERROR")

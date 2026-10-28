@@ -8,14 +8,16 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
+from talkpipe_vault.apps import folders as folder_mode
 from talkpipe_vault.apps import (
-    folders,
     pipelines,
     query,
     user_settings,
     vault_store,
     vaults,
 )
+from talkpipe_vault.apps import results as result_views
+from talkpipe_vault.apps import state as app_state
 from talkpipe_vault.pipelines import (
     agent_search,
     retrieval_filter,
@@ -31,7 +33,7 @@ def _wait_for_fulltext_job(timeout: float = 10.0) -> dict:
     """Block until the background full-text index build finishes."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        snapshot = query._fulltext_index_job_snapshot()
+        snapshot = vaults._fulltext_index_job_snapshot()
         if not snapshot["running"] and (snapshot["message"] or snapshot["error"]):
             return snapshot
         time.sleep(0.02)
@@ -66,36 +68,36 @@ def reset_app_state(tmp_path, monkeypatch):
     from talkpipe_vault.apps import user_settings
 
     monkeypatch.setenv(user_settings.VAULT_HOME_ENV, str(tmp_path / "vault-home"))
-    query._state.vault_path = str(tmp_path)
-    query._state.search_pipeline = None
-    query._state.chat_pipeline = None
-    query._state.keyword_chat_pipeline = None
-    query._state.keyword_search_pipeline = None
-    query._state.shingled_chunks_count = 0
-    query._state.keyword_search_enabled = False
-    query._state.show_source_paths = False
-    query._state.last_refresh_time = 0.0
-    query._state.embedding_model = None
-    query._state.embedding_source = None
-    query._state.chat_model = None
-    query._state.chat_source = None
-    query._state.chunk_size = None
-    query._state.shingle_size = None
-    query._state.shingle_overlap = None
-    query._state.rag_result_limit = None
-    query._state.result_filter_script = None
-    query._state.result_filter_active = False
-    query._state.result_filter_strict = False
-    query._state.result_filter_error = None
-    query._state.filtered_search_pipeline = None
-    query._state.filtered_keyword_search_pipeline = None
-    query._state.agent_search_pipeline = None
-    query._state.agent_chat_pipeline = None
-    query._state.agent_search_extra_pipeline = None
-    query._state.agent_chat_extra_pipeline = None
-    query._state.agent_unavailable_reason = ""
-    query._state.agent_search_iterations = None
-    query._state.agent_search_result_count = None
+    app_state._state.vault_path = str(tmp_path)
+    app_state._state.search_pipeline = None
+    app_state._state.chat_pipeline = None
+    app_state._state.keyword_chat_pipeline = None
+    app_state._state.keyword_search_pipeline = None
+    app_state._state.shingled_chunks_count = 0
+    app_state._state.keyword_search_enabled = False
+    app_state._state.show_source_paths = False
+    app_state._state.last_refresh_time = 0.0
+    app_state._state.embedding_model = None
+    app_state._state.embedding_source = None
+    app_state._state.chat_model = None
+    app_state._state.chat_source = None
+    app_state._state.chunk_size = None
+    app_state._state.shingle_size = None
+    app_state._state.shingle_overlap = None
+    app_state._state.rag_result_limit = None
+    app_state._state.result_filter_script = None
+    app_state._state.result_filter_active = False
+    app_state._state.result_filter_strict = False
+    app_state._state.result_filter_error = None
+    app_state._state.filtered_search_pipeline = None
+    app_state._state.filtered_keyword_search_pipeline = None
+    app_state._state.agent_search_pipeline = None
+    app_state._state.agent_chat_pipeline = None
+    app_state._state.agent_search_extra_pipeline = None
+    app_state._state.agent_chat_extra_pipeline = None
+    app_state._state.agent_unavailable_reason = ""
+    app_state._state.agent_search_iterations = None
+    app_state._state.agent_search_result_count = None
     yield
     # The state is a module-level singleton shared with the TUI service tests,
     # whose own fixture starts from "no vault open". Setting up without also
@@ -129,7 +131,7 @@ def test_search_page_offers_agent_option_only_when_pipeline_exists(monkeypatch):
 
     assert 'name="use_agent"' not in client.get("/search").text
 
-    query._state.agent_search_pipeline = _agent_outcome
+    app_state._state.agent_search_pipeline = _agent_outcome
     assert 'name="use_agent"' in client.get("/search").text
 
 
@@ -144,8 +146,8 @@ def test_search_post_uses_agent_and_shows_trace(monkeypatch):
         plain_calls.append(query_text)
         return []
 
-    query._state.search_pipeline = plain
-    query._state.agent_search_pipeline = _agent_outcome
+    app_state._state.search_pipeline = plain
+    app_state._state.agent_search_pipeline = _agent_outcome
     client = TestClient(query.app)
 
     response = client.post("/search", data={"query": "podman", "use_agent": "1"})
@@ -162,7 +164,7 @@ def test_search_post_uses_agent_and_shows_trace(monkeypatch):
     assert "Ranked by vector similarity" not in response.text
 
     # An agent run that kept nothing points at the agent, not at the query.
-    query._state.agent_search_pipeline = lambda q: AgentSearchOutcome(
+    app_state._state.agent_search_pipeline = lambda q: AgentSearchOutcome(
         results=[], note="Agent hit the 8-iteration cap.", trace=["agent search"]
     )
     response = client.post("/search", data={"query": "podman", "use_agent": "1"})
@@ -201,7 +203,7 @@ def test_chat_page_offers_agent_option_only_when_pipeline_exists(monkeypatch):
 
     assert 'id="use-agent"' not in client.get("/chat").text
 
-    query._state.agent_chat_pipeline = _agent_chat_outcome
+    app_state._state.agent_chat_pipeline = _agent_chat_outcome
     response = client.get("/chat")
     assert 'id="use-agent"' in response.text
     assert "Use Agent" in response.text
@@ -217,9 +219,9 @@ def test_chat_uses_agent_pipeline_when_requested(monkeypatch):
         plain_calls.append(message)
         return "Plain answer."
 
-    query._state.chat_pipeline = plain
-    query._state.search_pipeline = lambda _message: []
-    query._state.agent_chat_pipeline = _agent_chat_outcome
+    app_state._state.chat_pipeline = plain
+    app_state._state.search_pipeline = lambda _message: []
+    app_state._state.agent_chat_pipeline = _agent_chat_outcome
     client = TestClient(query.app)
 
     response = client.post("/chat", data={"message": "podman", "use_agent": "on"})
@@ -243,14 +245,14 @@ def test_chat_agent_takes_precedence_over_the_keyword_boost(monkeypatch):
     """The agent already searches keywords as a tool; it must not run both."""
     monkeypatch.setattr(query, "_refresh_pipelines", lambda force=False: None)
     monkeypatch.setattr(query, "_update_document_counts", lambda vault_path: None)
-    query._state.chat_pipeline = lambda _message: "Plain answer."
-    query._state.keyword_chat_pipeline = lambda _message: {
+    app_state._state.chat_pipeline = lambda _message: "Plain answer."
+    app_state._state.keyword_chat_pipeline = lambda _message: {
         "response": "Keyword-augmented answer.",
         "background": [],
         "keyword_hits": 2,
     }
-    query._state.keyword_search_enabled = True
-    query._state.agent_chat_pipeline = _agent_chat_outcome
+    app_state._state.keyword_search_enabled = True
+    app_state._state.agent_chat_pipeline = _agent_chat_outcome
     client = TestClient(query.app)
 
     response = client.post(
@@ -266,9 +268,9 @@ def test_chat_falls_back_to_plain_pipeline_without_agent_pipeline(monkeypatch):
     """Requesting the agent must degrade gracefully — and say so."""
     monkeypatch.setattr(query, "_refresh_pipelines", lambda force=False: None)
     monkeypatch.setattr(query, "_update_document_counts", lambda vault_path: None)
-    query._state.chat_pipeline = lambda _message: "Plain answer."
-    query._state.search_pipeline = lambda _message: []
-    query._state.agent_chat_pipeline = None
+    app_state._state.chat_pipeline = lambda _message: "Plain answer."
+    app_state._state.search_pipeline = lambda _message: []
+    app_state._state.agent_chat_pipeline = None
     client = TestClient(query.app)
 
     response = client.post("/chat", data={"message": "podman", "use_agent": "on"})
@@ -282,9 +284,9 @@ def test_chat_agent_answer_says_the_retrieval_filter_did_not_run(monkeypatch):
     """An active filter never sees the agent's own searches; say so (issue #22)."""
     monkeypatch.setattr(query, "_refresh_pipelines", lambda force=False: None)
     monkeypatch.setattr(query, "_update_document_counts", lambda vault_path: None)
-    query._state.chat_pipeline = lambda _message: "Plain answer."
-    query._state.agent_chat_pipeline = _agent_chat_outcome
-    query._state.result_filter_active = True
+    app_state._state.chat_pipeline = lambda _message: "Plain answer."
+    app_state._state.agent_chat_pipeline = _agent_chat_outcome
+    app_state._state.result_filter_active = True
     client = TestClient(query.app)
 
     response = client.post("/chat", data={"message": "podman", "use_agent": "on"})
@@ -297,10 +299,10 @@ def test_search_agent_says_the_custom_transform_did_not_run(monkeypatch):
     """Both boxes checked: the ignored one must not be ignored silently."""
     monkeypatch.setattr(query, "_refresh_pipelines", lambda force=False: None)
     monkeypatch.setattr(query, "_update_document_counts", lambda vault_path: None)
-    query._state.search_pipeline = lambda _query: []
-    query._state.agent_search_pipeline = _agent_outcome
-    query._state.result_filter_active = True
-    query._state.filtered_search_pipeline = lambda _query: ([], None)
+    app_state._state.search_pipeline = lambda _query: []
+    app_state._state.agent_search_pipeline = _agent_outcome
+    app_state._state.result_filter_active = True
+    app_state._state.filtered_search_pipeline = lambda _query: ([], None)
     client = TestClient(query.app)
 
     response = client.post(
@@ -334,22 +336,22 @@ def test_refresh_agent_pipelines_builds_both_from_one_segment(monkeypatch):
             return lambda value: value
 
     monkeypatch.setattr(agent_search, "AgentVaultChat", _FakeAgentChat)
-    query._state.agent_search_result_count = 3
-    query._state.agent_search_iterations = 4
+    app_state._state.agent_search_result_count = 3
+    app_state._state.agent_search_iterations = 4
 
-    query._refresh_agent_pipelines("/tmp/vault")
+    pipelines._refresh_agent_pipelines("/tmp/vault")
 
     assert len(built) == 1
     assert built[0]["max_chunks"] == 3
     assert built[0]["max_iterations"] == 4
-    assert query._state.agent_search_pipeline is not None
-    assert query._state.agent_chat_pipeline is not None
+    assert app_state._state.agent_search_pipeline is not None
+    assert app_state._state.agent_chat_pipeline is not None
     # Extra Effort is a copy of the same segment with twice the turns, not a
     # second segment with its own embedder.
-    assert query._state.agent_search_extra_pipeline is not None
-    assert query._state.agent_chat_extra_pipeline is not None
-    assert query._state.agent_search_extra_pipeline.__self__.max_iterations == 8
-    assert query._state.agent_unavailable_reason == ""
+    assert app_state._state.agent_search_extra_pipeline is not None
+    assert app_state._state.agent_chat_extra_pipeline is not None
+    assert app_state._state.agent_search_extra_pipeline.__self__.max_iterations == 8
+    assert app_state._state.agent_unavailable_reason == ""
 
 
 def test_refresh_agent_pipelines_clears_both_on_a_bad_model(monkeypatch):
@@ -359,19 +361,19 @@ def test_refresh_agent_pipelines_clears_both_on_a_bad_model(monkeypatch):
         raise RuntimeError("no such model")
 
     monkeypatch.setattr(agent_search, "AgentVaultChat", _boom)
-    query._state.agent_search_pipeline = lambda _q: None
-    query._state.agent_chat_pipeline = lambda _q: None
-    query._state.agent_search_extra_pipeline = lambda _q: None
-    query._state.agent_chat_extra_pipeline = lambda _q: None
+    app_state._state.agent_search_pipeline = lambda _q: None
+    app_state._state.agent_chat_pipeline = lambda _q: None
+    app_state._state.agent_search_extra_pipeline = lambda _q: None
+    app_state._state.agent_chat_extra_pipeline = lambda _q: None
 
-    query._refresh_agent_pipelines("/tmp/vault")
+    pipelines._refresh_agent_pipelines("/tmp/vault")
 
-    assert query._state.agent_search_pipeline is None
-    assert query._state.agent_chat_pipeline is None
-    assert query._state.agent_search_extra_pipeline is None
-    assert query._state.agent_chat_extra_pipeline is None
+    assert app_state._state.agent_search_pipeline is None
+    assert app_state._state.agent_chat_pipeline is None
+    assert app_state._state.agent_search_extra_pipeline is None
+    assert app_state._state.agent_chat_extra_pipeline is None
     # ...and the pages say why, instead of dropping the option without a word.
-    assert query._state.agent_unavailable_reason == "no such model"
+    assert app_state._state.agent_unavailable_reason == "no such model"
     monkeypatch.setattr(query, "_refresh_pipelines", lambda force=False: None)
     monkeypatch.setattr(query, "_update_document_counts", lambda vault_path: None)
     client = TestClient(query.app)
@@ -426,9 +428,9 @@ def test_refresh_pipelines_applies_result_limit_to_keyword_search(monkeypatch):
     monkeypatch.setattr(pipelines, "VaultChat", _fake_segment("chat"))
     monkeypatch.setattr(pipelines, "VaultTextSearch", _fake_segment("text_search"))
     monkeypatch.setattr(pipelines, "_keyword_search_enabled", lambda _vault_path: True)
-    query._state.rag_result_limit = 3
+    app_state._state.rag_result_limit = 3
 
-    query._refresh_pipelines(force=True)
+    pipelines._refresh_pipelines(force=True)
 
     assert captured["text_search"]["limit"] == 3
     assert captured["chat"]["limit"] == 3
@@ -436,9 +438,9 @@ def test_refresh_pipelines_applies_result_limit_to_keyword_search(monkeypatch):
 
 def test_default_rag_result_limit_is_eight():
     """Without a saved setting, Ask retrieves 8 chunks."""
-    query._state.rag_result_limit = None
+    app_state._state.rag_result_limit = None
 
-    assert query._effective_models(query._state)["rag_result_limit"] == 8
+    assert app_state._effective_models(app_state._state)["rag_result_limit"] == 8
 
 
 def test_refresh_pipelines_keyword_search_defaults_result_limit(monkeypatch):
@@ -459,22 +461,22 @@ def test_refresh_pipelines_keyword_search_defaults_result_limit(monkeypatch):
     monkeypatch.setattr(pipelines, "VaultChat", _fake_segment("chat"))
     monkeypatch.setattr(pipelines, "VaultTextSearch", _fake_segment("text_search"))
     monkeypatch.setattr(pipelines, "_keyword_search_enabled", lambda _vault_path: True)
-    query._state.rag_result_limit = None
+    app_state._state.rag_result_limit = None
 
-    query._refresh_pipelines(force=True)
+    pipelines._refresh_pipelines(force=True)
 
-    assert captured["text_search"]["limit"] == query.DEFAULT_RAG_RESULT_LIMIT
+    assert captured["text_search"]["limit"] == app_state.DEFAULT_RAG_RESULT_LIMIT
 
 
 def test_keyword_search_probe_does_not_create_fulltext_dir(tmp_path):
     """Probing for keyword search must not leave an empty fulltext_vault/."""
-    assert query._keyword_search_enabled(str(tmp_path)) is False
+    assert vault_store._keyword_search_enabled(str(tmp_path)) is False
     assert not (tmp_path / "fulltext_vault").exists()
 
 
 def test_keyword_search_probe_detects_built_index(tmp_path):
     """The probe should still detect a real Whoosh index once one is built."""
-    query._build_whoosh_index(
+    vault_store._build_whoosh_index(
         str(tmp_path),
         [
             {
@@ -486,14 +488,14 @@ def test_keyword_search_probe_detects_built_index(tmp_path):
         ],
     )
 
-    assert query._keyword_search_enabled(str(tmp_path)) is True
+    assert vault_store._keyword_search_enabled(str(tmp_path)) is True
 
 
 def test_keyword_search_page_can_rebuild_existing_whoosh_index(monkeypatch):
     """Keyword search UI should expose index rebuild when Whoosh is available."""
     # The page refreshes the pipelines itself, so the index check decides.
     monkeypatch.setattr(pipelines, "_keyword_search_enabled", lambda _vault_path: True)
-    query._state.keyword_search_enabled = True
+    app_state._state.keyword_search_enabled = True
     client = TestClient(query.app)
 
     response = client.get("/keyword-search")
@@ -540,10 +542,10 @@ def test_config_status_does_not_echo_filter_compile_error(monkeypatch):
         diagnostics, "_functional_probe", lambda role, key, model, timeout: (True, 384)
     )
     monkeypatch.setattr(
-        query.retrieval_filter, "load_script", lambda vault_path: "| bogusSegmentXYZ"
+        retrieval_filter, "load_script", lambda vault_path: "| bogusSegmentXYZ"
     )
     monkeypatch.setattr(
-        query.retrieval_filter,
+        retrieval_filter,
         "validate_script",
         lambda script: "Segment 'bogusSegmentXYZ' not found at /secret/site-packages",
     )
@@ -794,7 +796,7 @@ def test_init_pipelines_rejects_legacy_nested_vector_layout(tmp_path):
     (tmp_path / "vector_vault").mkdir(parents=True, exist_ok=True)
 
     with pytest.raises(ValueError, match="Unsupported legacy vault layout"):
-        query.init_pipelines(str(tmp_path))
+        pipelines.init_pipelines(str(tmp_path))
 
 
 def test_refresh_redirects_back_to_current_page(monkeypatch):
@@ -841,12 +843,12 @@ def test_refresh_rejects_offsite_and_unknown_return_targets(monkeypatch, evil):
 
 def test_chunk_content_error_does_not_echo_exception(monkeypatch):
     """A failure detail belongs in the server log, not the HTTP response."""
-    query._state.vault_path = "/tmp/test-vault"
+    app_state._state.vault_path = "/tmp/test-vault"
 
     def boom(vault_path, path, snippet):
         raise RuntimeError("secret detail /home/user/.credentials")
 
-    monkeypatch.setattr(folders, "_get_chunk_text_for_path_and_snippet", boom)
+    monkeypatch.setattr(folder_mode, "_get_chunk_text_for_path_and_snippet", boom)
     client = TestClient(query.app)
 
     response = client.get("/chunk-content", params={"path": "x"})
@@ -859,12 +861,12 @@ def test_chunk_content_error_does_not_echo_exception(monkeypatch):
 
 
 def test_open_file_error_does_not_echo_exception(monkeypatch):
-    query._state.vault_path = "/tmp/test-vault"
+    app_state._state.vault_path = "/tmp/test-vault"
 
     def boom(vault_path, key):
         raise RuntimeError("secret detail /home/user/.credentials")
 
-    monkeypatch.setattr(folders, "_resolve_indexed_source_file", boom)
+    monkeypatch.setattr(folder_mode, "_resolve_indexed_source_file", boom)
     client = TestClient(query.app)
 
     response = client.get("/open-file", params={"path": "x"})
@@ -876,8 +878,8 @@ def test_open_file_error_does_not_echo_exception(monkeypatch):
 
 
 def test_source_file_error_does_not_echo_exception(monkeypatch):
-    query._state.vault_path = "/tmp/test-vault"
-    query._state.show_source_paths = True
+    app_state._state.vault_path = "/tmp/test-vault"
+    app_state._state.show_source_paths = True
 
     def boom(vault_path):
         raise RuntimeError("secret detail /home/user/.credentials")
@@ -887,7 +889,7 @@ def test_source_file_error_does_not_echo_exception(monkeypatch):
     try:
         response = client.get("/source-file", params={"path": "x"})
     finally:
-        query._state.show_source_paths = False
+        app_state._state.show_source_paths = False
 
     assert response.status_code == 500
     body = response.json()["error"]
@@ -899,7 +901,7 @@ def test_keyword_search_post_does_not_run_without_whoosh(monkeypatch):
     """Keyword search POST should not call the pipeline without a Whoosh index."""
     monkeypatch.setattr(query, "_refresh_pipelines", lambda: None)
     monkeypatch.setattr(query, "_update_document_counts", lambda vault_path: None)
-    query._state.keyword_search_pipeline = pytest.fail
+    app_state._state.keyword_search_pipeline = pytest.fail
     client = TestClient(query.app)
 
     response = client.post("/keyword-search", data={"query": "FastAPI"})
@@ -918,7 +920,7 @@ def test_create_whoosh_index_route_builds_searchable_index(
     The index is built for real (not mocked) because talkpipe reserves the
     doc_id schema field; a mocked builder previously hid an incompatibility.
     """
-    query._state.vault_path = str(tmp_path)
+    app_state._state.vault_path = str(tmp_path)
     monkeypatch.setattr(
         vaults,
         "_iter_lancedb_docs_for_whoosh",
@@ -961,7 +963,7 @@ def test_create_whoosh_index_route_builds_searchable_index(
 
 def test_create_whoosh_index_route_replaces_existing_index(monkeypatch, tmp_path):
     """Rebuilding the index should replace prior contents, not append."""
-    query._state.vault_path = str(tmp_path)
+    app_state._state.vault_path = str(tmp_path)
     documents = [
         {"doc_id": "old", "content": "stale text", "path": "old.txt", "filename": ""}
     ]
@@ -1009,7 +1011,7 @@ def test_iter_lancedb_docs_for_whoosh_preserves_source_path(monkeypatch):
         vault_store, "ensure_supported_vault_layout", lambda _vault_path: None
     )
 
-    documents = query._iter_lancedb_docs_for_whoosh("/tmp/test-vault")
+    documents = vault_store._iter_lancedb_docs_for_whoosh("/tmp/test-vault")
 
     assert documents == [
         {
@@ -1023,8 +1025,8 @@ def test_iter_lancedb_docs_for_whoosh_preserves_source_path(monkeypatch):
 
 def test_keyword_search_results_hide_source_path_by_default(monkeypatch):
     """Keyword results should not show source paths unless explicitly enabled."""
-    query._state.keyword_search_enabled = True
-    query._state.keyword_search_pipeline = lambda _query: [
+    app_state._state.keyword_search_enabled = True
+    app_state._state.keyword_search_pipeline = lambda _query: [
         {
             "doc_id": "row-uuid",
             "score": 1.0,
@@ -1048,9 +1050,9 @@ def test_keyword_search_results_hide_source_path_by_default(monkeypatch):
 
 def test_keyword_search_results_display_source_path_as_server_link(monkeypatch):
     """Keyword results should show the indexed source path as a hyperlink."""
-    query._state.show_source_paths = True
-    query._state.keyword_search_enabled = True
-    query._state.keyword_search_pipeline = lambda _query: [
+    app_state._state.show_source_paths = True
+    app_state._state.keyword_search_enabled = True
+    app_state._state.keyword_search_pipeline = lambda _query: [
         {
             "doc_id": "row-uuid",
             "score": 1.0,
@@ -1074,8 +1076,8 @@ def test_keyword_search_results_display_source_path_as_server_link(monkeypatch):
 
 def test_keyword_search_results_copy_button_targets_full_chunk(monkeypatch):
     """Keyword results should expose lookup metadata for full chunk copy."""
-    query._state.keyword_search_enabled = True
-    query._state.keyword_search_pipeline = lambda _query: [
+    app_state._state.keyword_search_enabled = True
+    app_state._state.keyword_search_pipeline = lambda _query: [
         {
             "doc_id": "row-uuid",
             "score": 1.0,
@@ -1122,7 +1124,7 @@ def test_process_keyword_results_keeps_multiple_hits_for_same_source_path():
         },
     ]
 
-    results = query._process_keyword_results(raw_results)
+    results = result_views._process_keyword_results(raw_results)
 
     assert len(results) == 2
     assert [result["snippet"] for result in results] == [
@@ -1143,7 +1145,7 @@ def test_process_keyword_results_uses_source_path_for_flat_whoosh_hits():
         }
     ]
 
-    results = query._process_keyword_results(raw_results)
+    results = result_views._process_keyword_results(raw_results)
 
     assert results == [
         {
@@ -1173,7 +1175,7 @@ def test_process_semantic_results_keeps_multiple_hits_for_same_source_path():
         },
     ]
 
-    results = query._process_semantic_results(raw_results)
+    results = result_views._process_semantic_results(raw_results)
 
     assert len(results) == 2
     assert [result["snippet"] for result in results] == [
@@ -1203,7 +1205,7 @@ def test_process_semantic_results_hides_unavailable_zero_score():
         )
     ]
 
-    results = query._process_semantic_results(raw_results)
+    results = result_views._process_semantic_results(raw_results)
 
     assert len(results) == 1
     assert results[0]["snippet"] == "semantic result text"
@@ -1212,7 +1214,7 @@ def test_process_semantic_results_hides_unavailable_zero_score():
 
 def test_semantic_search_omits_zero_score_badge(monkeypatch):
     """A zero/unavailable semantic score must not render a "Score:" badge in the page."""
-    query._state.search_pipeline = lambda _query: [
+    app_state._state.search_pipeline = lambda _query: [
         SimpleNamespace(
             score=0.0,
             doc_id="row-uuid",
@@ -1242,15 +1244,15 @@ def test_semantic_search_page_shows_its_own_result_limit(monkeypatch):
     configurable Ask/keyword count, so a page that renders more rows than the
     constant means the limit slipped out of this application's hands again.
     """
-    query._state.rag_result_limit = 3
-    query._state.search_pipeline = lambda _query: [
+    app_state._state.rag_result_limit = 3
+    app_state._state.search_pipeline = lambda _query: [
         {
             "_doc_id": f"row-{index}",
             "source": f"/docs/note-{index}.txt",
             "title": f"note-{index}.txt",
             "content": f"semantic result {index}",
         }
-        for index in range(query.DEFAULT_SEARCH_RESULT_LIMIT + 5)
+        for index in range(app_state.DEFAULT_SEARCH_RESULT_LIMIT + 5)
     ]
     monkeypatch.setattr(query, "_refresh_pipelines", lambda: None)
     monkeypatch.setattr(query, "_update_document_counts", lambda vault_path: None)
@@ -1259,9 +1261,13 @@ def test_semantic_search_page_shows_its_own_result_limit(monkeypatch):
     response = client.post("/search", data={"query": "semantic"})
 
     assert response.status_code == 200
-    assert f"Found {query.DEFAULT_SEARCH_RESULT_LIMIT} result(s)" in response.text
-    assert f"semantic result {query.DEFAULT_SEARCH_RESULT_LIMIT - 1}" in response.text
-    assert f"semantic result {query.DEFAULT_SEARCH_RESULT_LIMIT}" not in response.text
+    assert f"Found {app_state.DEFAULT_SEARCH_RESULT_LIMIT} result(s)" in response.text
+    assert (
+        f"semantic result {app_state.DEFAULT_SEARCH_RESULT_LIMIT - 1}" in response.text
+    )
+    assert (
+        f"semantic result {app_state.DEFAULT_SEARCH_RESULT_LIMIT}" not in response.text
+    )
 
 
 def test_settings_result_count_hint_does_not_claim_semantic_search(monkeypatch):
@@ -1273,13 +1279,13 @@ def test_settings_result_count_hint_does_not_claim_semantic_search(monkeypatch):
     assert response.status_code == 200
     assert "Ask &amp; Keyword Result Count" in response.text
     assert "Semantic Search is not affected" in response.text
-    assert f"top {query.DEFAULT_SEARCH_RESULT_LIMIT} matches" in response.text
+    assert f"top {app_state.DEFAULT_SEARCH_RESULT_LIMIT} matches" in response.text
 
 
 def test_semantic_search_results_match_keyword_result_display(monkeypatch):
     """Semantic results should render source path, snippet, and score like keyword results."""
-    query._state.show_source_paths = True
-    query._state.search_pipeline = lambda _query: [
+    app_state._state.show_source_paths = True
+    app_state._state.search_pipeline = lambda _query: [
         {
             "_distance": 0.25,
             "_doc_id": "row-uuid",
@@ -1304,7 +1310,7 @@ def test_semantic_search_results_match_keyword_result_display(monkeypatch):
 
 def test_semantic_search_results_hide_source_path_by_default(monkeypatch):
     """Semantic results should not show source paths unless explicitly enabled."""
-    query._state.search_pipeline = lambda _query: [
+    app_state._state.search_pipeline = lambda _query: [
         {
             "_distance": 0.25,
             "_doc_id": "row-uuid",
@@ -1326,8 +1332,8 @@ def test_semantic_search_results_hide_source_path_by_default(monkeypatch):
 
 def test_chat_response_includes_source_citations(monkeypatch):
     """Ask responses should include display-ready source chunks for trust."""
-    query._state.chat_pipeline = lambda _message: "Answer from the vault."
-    query._state.search_pipeline = lambda _message: [
+    app_state._state.chat_pipeline = lambda _message: "Answer from the vault."
+    app_state._state.search_pipeline = lambda _message: [
         {
             "_distance": 0.2,
             "_doc_id": "row-uuid",
@@ -1354,8 +1360,8 @@ def test_chat_response_includes_source_citations(monkeypatch):
 
 def test_chat_citations_hide_source_paths_by_default(monkeypatch):
     """The embedded citations JSON must not leak absolute paths when hidden."""
-    query._state.chat_pipeline = lambda _message: "Answer from the vault."
-    query._state.search_pipeline = lambda _message: [
+    app_state._state.chat_pipeline = lambda _message: "Answer from the vault."
+    app_state._state.search_pipeline = lambda _message: [
         {
             "_distance": 0.2,
             "_doc_id": "row-uuid",
@@ -1384,7 +1390,7 @@ def test_chat_page_offers_keyword_toggle_only_with_whoosh_index():
     assert response.status_code == 200
     assert 'id="use-keyword-search"' not in response.text
 
-    query._state.keyword_search_enabled = True
+    app_state._state.keyword_search_enabled = True
     response = client.get("/chat")
     assert response.status_code == 200
     assert 'id="use-keyword-search"' in response.text
@@ -1393,14 +1399,14 @@ def test_chat_page_offers_keyword_toggle_only_with_whoosh_index():
 
 def test_chat_uses_keyword_pipeline_when_requested(monkeypatch):
     """Checking the keyword option must route the question to the keyword-augmented pipeline."""
-    query._state.chat_pipeline = lambda _message: "Plain answer."
-    query._state.keyword_chat_pipeline = lambda _message: {
+    app_state._state.chat_pipeline = lambda _message: "Plain answer."
+    app_state._state.keyword_chat_pipeline = lambda _message: {
         "response": "Keyword-augmented answer.",
         "background": [],
         "keyword_hits": 2,
     }
-    query._state.search_pipeline = lambda _message: []
-    query._state.keyword_search_enabled = True
+    app_state._state.search_pipeline = lambda _message: []
+    app_state._state.keyword_search_enabled = True
     monkeypatch.setattr(query, "_refresh_pipelines", lambda: None)
     monkeypatch.setattr(query, "_update_document_counts", lambda vault_path: None)
     client = TestClient(query.app)
@@ -1418,14 +1424,14 @@ def test_chat_uses_keyword_pipeline_when_requested(monkeypatch):
 
 def test_chat_keyword_note_reports_zero_hits(monkeypatch):
     """A boost that found nothing extra must say so instead of looking ignored."""
-    query._state.chat_pipeline = lambda _message: "Plain answer."
-    query._state.keyword_chat_pipeline = lambda _message: {
+    app_state._state.chat_pipeline = lambda _message: "Plain answer."
+    app_state._state.keyword_chat_pipeline = lambda _message: {
         "response": "Keyword-augmented answer.",
         "background": [],
         "keyword_hits": 0,
     }
-    query._state.search_pipeline = lambda _message: []
-    query._state.keyword_search_enabled = True
+    app_state._state.search_pipeline = lambda _message: []
+    app_state._state.keyword_search_enabled = True
     monkeypatch.setattr(query, "_refresh_pipelines", lambda: None)
     monkeypatch.setattr(query, "_update_document_counts", lambda vault_path: None)
     client = TestClient(query.app)
@@ -1442,8 +1448,8 @@ def test_chat_without_keyword_option_has_no_keyword_note(monkeypatch):
     """A plain ask must not mention keyword search in the meta line."""
     import re
 
-    query._state.chat_pipeline = lambda _message: "Plain answer."
-    query._state.search_pipeline = lambda _message: []
+    app_state._state.chat_pipeline = lambda _message: "Plain answer."
+    app_state._state.search_pipeline = lambda _message: []
     monkeypatch.setattr(query, "_refresh_pipelines", lambda: None)
     monkeypatch.setattr(query, "_update_document_counts", lambda vault_path: None)
     client = TestClient(query.app)
@@ -1464,8 +1470,8 @@ def test_chat_keyword_citations_show_the_merged_retrieval(monkeypatch):
     """
     from talkpipe.search.abstract import SearchResult
 
-    query._state.chat_pipeline = lambda _message: "Plain answer."
-    query._state.keyword_chat_pipeline = lambda _message: {
+    app_state._state.chat_pipeline = lambda _message: "Plain answer."
+    app_state._state.keyword_chat_pipeline = lambda _message: {
         "response": "Keyword-augmented answer.",
         "background": [
             SearchResult(
@@ -1488,7 +1494,7 @@ def test_chat_keyword_citations_show_the_merged_retrieval(monkeypatch):
             ),
         ],
     }
-    query._state.search_pipeline = lambda _message: [
+    app_state._state.search_pipeline = lambda _message: [
         {
             "_distance": 0.1,
             "_doc_id": "vector-row",
@@ -1497,7 +1503,7 @@ def test_chat_keyword_citations_show_the_merged_retrieval(monkeypatch):
             "content": "Chunk found by vector search",
         }
     ]
-    query._state.keyword_search_enabled = True
+    app_state._state.keyword_search_enabled = True
     monkeypatch.setattr(query, "_refresh_pipelines", lambda: None)
     monkeypatch.setattr(query, "_update_document_counts", lambda vault_path: None)
     client = TestClient(query.app)
@@ -1514,9 +1520,9 @@ def test_chat_keyword_citations_show_the_merged_retrieval(monkeypatch):
 
 def test_chat_falls_back_to_plain_pipeline_without_keyword_pipeline(monkeypatch):
     """Requesting keyword search must degrade gracefully — and say so."""
-    query._state.chat_pipeline = lambda _message: "Plain answer."
-    query._state.keyword_chat_pipeline = None
-    query._state.search_pipeline = lambda _message: []
+    app_state._state.chat_pipeline = lambda _message: "Plain answer."
+    app_state._state.keyword_chat_pipeline = None
+    app_state._state.search_pipeline = lambda _message: []
     monkeypatch.setattr(query, "_refresh_pipelines", lambda: None)
     monkeypatch.setattr(query, "_update_document_counts", lambda vault_path: None)
     client = TestClient(query.app)
@@ -1583,8 +1589,8 @@ def _chat_error_response(monkeypatch, exc: Exception) -> str:
     def failing_pipeline(_message):
         raise exc
 
-    query._state.chat_pipeline = failing_pipeline
-    query._state.search_pipeline = lambda _message: []
+    app_state._state.chat_pipeline = failing_pipeline
+    app_state._state.search_pipeline = lambda _message: []
     monkeypatch.setattr(query, "_refresh_pipelines", lambda: None)
     monkeypatch.setattr(query, "_update_document_counts", lambda vault_path: None)
     client = TestClient(query.app)
@@ -1664,7 +1670,7 @@ def test_vault_text_search_default_limit_returns_all_whoosh_results(
 
 def test_chunk_content_route_finds_lancedb_row_by_id_and_middle_snippet(monkeypatch):
     """Chunk content route should resolve keyword results sent with LanceDB row ids."""
-    query._state.vault_path = "/tmp/test-vault"
+    app_state._state.vault_path = "/tmp/test-vault"
     full_text = "Introductory text. The matching passage appears in the middle."
     monkeypatch.setattr(
         vault_store,
@@ -1692,7 +1698,7 @@ def test_chunk_content_route_finds_lancedb_row_by_id_and_middle_snippet(monkeypa
 
 def test_chunk_content_route_finds_lancedb_row_by_source_path(monkeypatch):
     """Chunk content route should resolve flat Whoosh results sent by source path."""
-    query._state.vault_path = "/tmp/test-vault"
+    app_state._state.vault_path = "/tmp/test-vault"
     full_text = "Introductory text. The matching passage appears in the middle."
     monkeypatch.setattr(
         vault_store,
@@ -1720,7 +1726,7 @@ def test_chunk_content_route_finds_lancedb_row_by_source_path(monkeypatch):
 
 def test_chunk_content_route_falls_back_to_snippet_for_stale_whoosh_id(monkeypatch):
     """Chunk content route should tolerate stale Whoosh ids when snippet matches."""
-    query._state.vault_path = "/tmp/test-vault"
+    app_state._state.vault_path = "/tmp/test-vault"
     full_text = "Introductory text. The matching passage appears in the middle."
     monkeypatch.setattr(
         vault_store,
@@ -1760,7 +1766,7 @@ def test_source_file_route_is_disabled_by_default(tmp_path):
 
 def test_source_file_route_blocks_unreferenced_file_when_enabled(tmp_path, monkeypatch):
     """Source-file endpoint should not serve files absent from the vault index."""
-    query._state.show_source_paths = True
+    app_state._state.show_source_paths = True
     source_file = tmp_path / "source.txt"
     source_file.write_text("source text")
     monkeypatch.setattr(query, "_indexed_source_paths", lambda _vault_path: set())
@@ -1774,7 +1780,7 @@ def test_source_file_route_blocks_unreferenced_file_when_enabled(tmp_path, monke
 
 def test_source_file_route_serves_referenced_file_when_enabled(tmp_path, monkeypatch):
     """Source-file endpoint should serve only files referenced by the vault index."""
-    query._state.show_source_paths = True
+    app_state._state.show_source_paths = True
     source_file = tmp_path / "source.txt"
     source_file.write_text("source text")
     monkeypatch.setattr(
@@ -1792,7 +1798,7 @@ def test_source_file_route_serves_referenced_file_when_enabled(tmp_path, monkeyp
 
 def test_search_results_include_open_file_link(monkeypatch):
     """Semantic results should offer an Open link keyed by lookup path."""
-    query._state.search_pipeline = lambda _query: [
+    app_state._state.search_pipeline = lambda _query: [
         {
             "_distance": 0.25,
             "_doc_id": "row-uuid",
@@ -1815,8 +1821,8 @@ def test_search_results_include_open_file_link(monkeypatch):
 
 def test_keyword_search_results_include_open_file_link(monkeypatch):
     """Keyword results should offer an Open link keyed by lookup path."""
-    query._state.keyword_search_enabled = True
-    query._state.keyword_search_pipeline = lambda _query: [
+    app_state._state.keyword_search_enabled = True
+    app_state._state.keyword_search_pipeline = lambda _query: [
         {
             "doc_id": "row-uuid",
             "score": 1.0,
@@ -1985,7 +1991,7 @@ def test_open_file_route_reports_missing_file(tmp_path, monkeypatch):
 
 def test_open_file_route_requires_vault():
     """Open-file should fail cleanly when no vault is selected."""
-    query._state.vault_path = ""
+    app_state._state.vault_path = ""
     client = TestClient(query.app)
 
     response = client.get("/open-file", params={"path": "row-uuid"})
@@ -1999,7 +2005,7 @@ def test_first_run_redirect_is_not_an_error():
     It is the first thing a new user sees and nothing has failed, so it must
     not arrive as error= (which renders in the danger style, role="alert").
     """
-    query._state.vault_path = ""
+    app_state._state.vault_path = ""
     client = TestClient(query.app)
 
     for path in ("/", "/search", "/keyword-search", "/chat"):
@@ -2030,7 +2036,7 @@ def test_indexed_source_paths_reads_references_from_docs_rows(monkeypatch):
         ],
     )
 
-    assert query._indexed_source_paths("/tmp/test-vault") == {
+    assert vault_store._indexed_source_paths("/tmp/test-vault") == {
         "/indexed/source.pdf",
         "/indexed/other.txt",
     }
@@ -2046,13 +2052,13 @@ def test_apply_vault_embedding_config_restores_recorded(tmp_path):
         model="text-embedding-3-large",
         dimension=3072,
     )
-    query._state.embedding_source = "leftover"
-    query._state.embedding_model = "leftover"
+    app_state._state.embedding_source = "leftover"
+    app_state._state.embedding_model = "leftover"
 
-    query._apply_vault_embedding_config(str(tmp_path))
+    app_state._apply_vault_embedding_config(str(tmp_path))
 
-    assert query._state.embedding_source == "openai"
-    assert query._state.embedding_model == "text-embedding-3-large"
+    assert app_state._state.embedding_source == "openai"
+    assert app_state._state.embedding_model == "text-embedding-3-large"
 
 
 def test_apply_vault_embedding_config_legacy_uses_saved_override(tmp_path):
@@ -2063,24 +2069,24 @@ def test_apply_vault_embedding_config_legacy_uses_saved_override(tmp_path):
         embedding_source="ollama", embedding_model="nomic-embed-text"
     )
     # Simulate a different vault having been opened just before.
-    query._state.embedding_source = "openai"
-    query._state.embedding_model = "text-embedding-3-large"
+    app_state._state.embedding_source = "openai"
+    app_state._state.embedding_model = "text-embedding-3-large"
 
-    query._apply_vault_embedding_config(str(tmp_path))
+    app_state._apply_vault_embedding_config(str(tmp_path))
 
-    assert query._state.embedding_source == "ollama"
-    assert query._state.embedding_model == "nomic-embed-text"
+    assert app_state._state.embedding_source == "ollama"
+    assert app_state._state.embedding_model == "nomic-embed-text"
 
 
 def test_apply_vault_embedding_config_legacy_without_override_is_none(tmp_path):
     """A legacy vault with no saved override leaves the embedder unset (default)."""
-    query._state.embedding_source = "openai"
-    query._state.embedding_model = "text-embedding-3-large"
+    app_state._state.embedding_source = "openai"
+    app_state._state.embedding_model = "text-embedding-3-large"
 
-    query._apply_vault_embedding_config(str(tmp_path))
+    app_state._apply_vault_embedding_config(str(tmp_path))
 
-    assert query._state.embedding_source is None
-    assert query._state.embedding_model is None
+    assert app_state._state.embedding_source is None
+    assert app_state._state.embedding_model is None
 
 
 def test_load_saved_model_overrides_drops_unavailable_source():
@@ -2098,13 +2104,13 @@ def test_load_saved_model_overrides_drops_unavailable_source():
         chat_model="mistral-small",
     )
 
-    query.load_saved_model_overrides()
+    app_state.load_saved_model_overrides()
 
-    assert query._state.embedding_source is None
-    assert query._state.embedding_model is None
+    assert app_state._state.embedding_source is None
+    assert app_state._state.embedding_model is None
     # The valid chat override is untouched.
-    assert query._state.chat_source == "ollama"
-    assert query._state.chat_model == "mistral-small"
+    assert app_state._state.chat_source == "ollama"
+    assert app_state._state.chat_model == "mistral-small"
 
 
 def test_load_saved_model_overrides_keeps_available_source():
@@ -2116,10 +2122,10 @@ def test_load_saved_model_overrides_keeps_available_source():
         embedding_model="minishlab/potion-retrieval-32M",
     )
 
-    query.load_saved_model_overrides()
+    app_state.load_saved_model_overrides()
 
-    assert query._state.embedding_source == "model2vec"
-    assert query._state.embedding_model == "minishlab/potion-retrieval-32M"
+    assert app_state._state.embedding_source == "model2vec"
+    assert app_state._state.embedding_model == "minishlab/potion-retrieval-32M"
 
 
 def test_apply_vault_embedding_config_ignores_unavailable_recorded_source(
@@ -2131,13 +2137,13 @@ def test_apply_vault_embedding_config_ignores_unavailable_recorded_source(
         "load_embedding_config",
         lambda path: {"source": "uninstalled-plugin-source", "model": "some-model"},
     )
-    query._state.embedding_source = "leftover"
-    query._state.embedding_model = "leftover"
+    app_state._state.embedding_source = "leftover"
+    app_state._state.embedding_model = "leftover"
 
-    query._apply_vault_embedding_config(str(tmp_path))
+    app_state._apply_vault_embedding_config(str(tmp_path))
 
-    assert query._state.embedding_source is None
-    assert query._state.embedding_model is None
+    assert app_state._state.embedding_source is None
+    assert app_state._state.embedding_model is None
 
 
 def test_record_vault_embedding_config_writes_sidecar(tmp_path, monkeypatch):
@@ -2147,7 +2153,7 @@ def test_record_vault_embedding_config_writes_sidecar(tmp_path, monkeypatch):
     monkeypatch.setattr(
         vault_metadata, "probe_embedding_dimension", lambda source, model: 256
     )
-    query._record_vault_embedding_config(
+    vaults._record_vault_embedding_config(
         str(tmp_path), "model2vec", "minishlab/potion-retrieval-32M"
     )
     embedding = vault_metadata.load_embedding_config(str(tmp_path))
@@ -2163,10 +2169,10 @@ def test_config_status_reports_embedding_mismatch(tmp_path, monkeypatch):
     vault_metadata.record_embedding_config(
         str(tmp_path), source="openai", model="text-embedding-3-large"
     )
-    query._state.vault_path = str(tmp_path)
+    app_state._state.vault_path = str(tmp_path)
     # Current embedder differs from what the vault was indexed with.
-    query._state.embedding_source = "model2vec"
-    query._state.embedding_model = "minishlab/potion-retrieval-32M"
+    app_state._state.embedding_source = "model2vec"
+    app_state._state.embedding_model = "minishlab/potion-retrieval-32M"
     monkeypatch.setattr(
         diagnostics,
         "_functional_probe",
@@ -2285,7 +2291,7 @@ class TestRetrievalFilter:
         )
 
     def test_configuring_without_an_open_vault_is_refused(self):
-        query._state.vault_path = ""
+        app_state._state.vault_path = ""
         client = TestClient(query.app)
 
         response = self._save(client, enabled="1")
@@ -2335,7 +2341,7 @@ class TestRetrievalFilterSection:
         assert "isIn[field=" in body
 
     def test_section_is_absent_without_an_open_vault(self):
-        query._state.vault_path = ""
+        app_state._state.vault_path = ""
 
         response = TestClient(query.app).get("/documents")
 
@@ -2353,16 +2359,16 @@ class TestLoadActiveFilter:
             str(tmp_path), enabled=True, strict=False
         )
 
-        assert query._load_active_filter(str(tmp_path)) == self.DROP_DRAFTS
-        assert query._state.result_filter_active is True
+        assert pipelines._load_active_filter(str(tmp_path)) == self.DROP_DRAFTS
+        assert app_state._state.result_filter_active is True
 
     def test_script_that_is_not_enabled_does_not_run(self, tmp_path):
         """A vault copied from elsewhere must not execute its bundled script."""
         retrieval_filter.save_script(str(tmp_path), self.DROP_DRAFTS)
 
-        assert query._load_active_filter(str(tmp_path)) is None
-        assert query._state.result_filter_active is False
-        assert query._state.result_filter_error is None
+        assert pipelines._load_active_filter(str(tmp_path)) is None
+        assert app_state._state.result_filter_active is False
+        assert app_state._state.result_filter_error is None
 
     def test_broken_script_is_recorded_and_not_applied(self, tmp_path):
         retrieval_filter.save_script(str(tmp_path), "| noSuchSegmentExists")
@@ -2370,13 +2376,13 @@ class TestLoadActiveFilter:
             str(tmp_path), enabled=True, strict=False
         )
 
-        assert query._load_active_filter(str(tmp_path)) is None
-        assert query._state.result_filter_active is False
-        assert "noSuchSegmentExists" in query._state.result_filter_error
+        assert pipelines._load_active_filter(str(tmp_path)) is None
+        assert app_state._state.result_filter_active is False
+        assert "noSuchSegmentExists" in app_state._state.result_filter_error
 
     def test_vault_without_a_script_is_unfiltered(self, tmp_path):
-        assert query._load_active_filter(str(tmp_path)) is None
-        assert query._state.result_filter_active is False
+        assert pipelines._load_active_filter(str(tmp_path)) is None
+        assert app_state._state.result_filter_active is False
 
 
 def _extra_effort_chat_outcome(message):
@@ -2392,8 +2398,8 @@ def test_chat_extra_effort_is_greyed_out_until_use_agent_is_checked(monkeypatch)
 
     assert 'id="use-extra-effort"' not in client.get("/chat").text
 
-    query._state.agent_chat_pipeline = _agent_chat_outcome
-    query._state.agent_chat_extra_pipeline = _extra_effort_chat_outcome
+    app_state._state.agent_chat_pipeline = _agent_chat_outcome
+    app_state._state.agent_chat_extra_pipeline = _extra_effort_chat_outcome
     text = client.get("/chat").text
     assert "Extra Effort" in text
     assert re.search(r'id="use-extra-effort"[^>]*disabled', text)
@@ -2404,10 +2410,10 @@ def test_chat_extra_effort_is_greyed_out_until_use_agent_is_checked(monkeypatch)
 def test_chat_extra_effort_runs_the_raised_cap_agent_only_with_use_agent(monkeypatch):
     monkeypatch.setattr(query, "_refresh_pipelines", lambda force=False: None)
     monkeypatch.setattr(query, "_update_document_counts", lambda vault_path: None)
-    query._state.chat_pipeline = lambda _message: "Plain answer."
-    query._state.search_pipeline = lambda _message: []
-    query._state.agent_chat_pipeline = _agent_chat_outcome
-    query._state.agent_chat_extra_pipeline = _extra_effort_chat_outcome
+    app_state._state.chat_pipeline = lambda _message: "Plain answer."
+    app_state._state.search_pipeline = lambda _message: []
+    app_state._state.agent_chat_pipeline = _agent_chat_outcome
+    app_state._state.agent_chat_extra_pipeline = _extra_effort_chat_outcome
     client = TestClient(query.app)
 
     response = client.post(
@@ -2433,9 +2439,9 @@ def test_search_extra_effort_runs_the_raised_cap_agent(monkeypatch):
 
     monkeypatch.setattr(query, "_refresh_pipelines", lambda force=False: None)
     monkeypatch.setattr(query, "_update_document_counts", lambda vault_path: None)
-    query._state.search_pipeline = lambda _query: []
-    query._state.agent_search_pipeline = _agent_outcome
-    query._state.agent_search_extra_pipeline = lambda text: AgentSearchOutcome(
+    app_state._state.search_pipeline = lambda _query: []
+    app_state._state.agent_search_pipeline = _agent_outcome
+    app_state._state.agent_search_extra_pipeline = lambda text: AgentSearchOutcome(
         results=[], note="Agent hit the 16-iteration cap: kept 0 chunks."
     )
     client = TestClient(query.app)

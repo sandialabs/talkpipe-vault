@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from talkpipe_vault.apps import folders as folder_mode
 from talkpipe_vault.apps import query, user_settings
 from talkpipe_vault.apps import state as app_state
 from talkpipe_vault.tui.service import VaultService
@@ -442,8 +443,8 @@ def test_service_never_touches_the_web_app_module_state_shape():
         "chat_pipeline",
         "keyword_search_enabled",
     ):
-        assert hasattr(query._state, attr)
-    assert service.state is query._state
+        assert hasattr(app_state._state, attr)
+    assert service.state is app_state._state
 
 
 def test_startup_resume_names_the_missing_vault_it_skipped(sample_vault, tmp_path):
@@ -718,10 +719,10 @@ def test_ask_says_indexing_just_started(tmp_path, monkeypatch):
     (docs / "a.md").write_text("# Lighthouse\n\nThe keeper logged a storm.\n")
     service = VaultService()
     assert service.startup(str(docs))["ok"]
-    monkeypatch.setattr(query, "ask_waiting", lambda state: query.ASK_WAITING)
+    monkeypatch.setattr(query, "ask_waiting", lambda state: folder_mode.ASK_WAITING)
     outcome = service.ask("What did the keeper log?")
     assert outcome["ok"]
-    assert outcome["answer"] == query.ASK_WAITING
+    assert outcome["answer"] == folder_mode.ASK_WAITING
     assert outcome["answered_by"] == ""
 
 
@@ -753,7 +754,7 @@ def test_close_and_open_a_folder_from_the_service(tmp_path):
     assert service.state.folders == []
     [entry] = service.folders()
     assert entry["closed"]
-    assert entry["progress"] == query.FOLDER_CLOSED_PROGRESS
+    assert entry["progress"] == folder_mode.FOLDER_CLOSED_PROGRESS
     assert root not in service.recent_folders()
     assert not service.status()["folder_mode"]
 

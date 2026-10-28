@@ -25,7 +25,16 @@ from typing import Any
 
 from talkpipe.llm.config import getEmbeddingSources, getPromptSources
 
-from talkpipe_vault.apps import access_control, credentials, query, user_settings
+from talkpipe_vault.apps import (
+    access_control,
+    credentials,
+    pipelines,
+    query,
+    user_settings,
+    vaults,
+)
+from talkpipe_vault.apps import folders as folder_mode
+from talkpipe_vault.apps import results as result_views
 from talkpipe_vault.apps import state as app_state
 from talkpipe_vault.pipelines import (
     config,
@@ -117,7 +126,7 @@ def _mkdir_failure(path: Path, exc: OSError) -> str:
 
 
 # The web page's notice, in this interface's names.
-SEMANTIC_SEARCH_WAITING = query.SEMANTIC_SEARCH_WAITING_TEMPLATE.format(
+SEMANTIC_SEARCH_WAITING = folder_mode.SEMANTIC_SEARCH_WAITING_TEMPLATE.format(
     progress="the Vault tab", others="Keywords and Ask"
 )
 
@@ -126,7 +135,7 @@ class VaultService:
     """Everything the TUI can do, expressed as plain-data operations."""
 
     def __init__(self, *, show_source_paths: bool = False) -> None:
-        self.state = query._state
+        self.state = app_state._state
         self.state.show_source_paths = show_source_paths
 
     # -- startup ----------------------------------------------------------------
@@ -165,8 +174,8 @@ class VaultService:
         if problems:
             return _fail(" ".join(problems))
         credentials.apply()
-        query.load_saved_model_overrides()
-        vault_path, folders, resumed_folders, error = query.startup_folders(
+        app_state.load_saved_model_overrides()
+        vault_path, folders, resumed_folders, error = folder_mode.startup_folders(
             vault_path, folders or [], resume=resume, as_vault=as_vault
         )
         if error:
@@ -174,7 +183,7 @@ class VaultService:
         if folders:
             if progress is not None:
                 progress(self.opening_note(", ".join(folders)))
-            problems = query.open_saved_folders(self.state, folders)
+            problems = folder_mode.open_saved_folders(self.state, folders)
             if not self.state.folders:
                 return _fail(" ".join(problems))
             note = " (last session)" if resumed_folders else ""
@@ -203,7 +212,7 @@ class VaultService:
                 f"({access_control.vault_root()})."
             )
         if not resumed and not confirm_non_vault:
-            entries = query._existing_non_vault_entries(Path(chosen))
+            entries = app_state._existing_non_vault_entries(Path(chosen))
             if entries > 0:
                 return _fail(
                     f"{chosen} already contains {entries} item(s) that are not "
@@ -221,7 +230,7 @@ class VaultService:
                 f"Error opening vault at {chosen}: {_mkdir_failure(Path(chosen), exc)}"
             )
         try:
-            query.init_pipelines(chosen)
+            pipelines.init_pipelines(chosen)
         except (OSError, ValueError) as exc:
             return _fail(f"Error opening vault at {chosen}: {exc}")
         except Exception as exc:
@@ -250,7 +259,7 @@ class VaultService:
         a first run. The toast that announces the open expires long before a
         slow download finishes, so this line stays on screen instead.
         """
-        models = query._effective_models(self.state)
+        models = app_state._effective_models(self.state)
         source = str(models["embedding_source"])
         model = str(models["embedding_model"])
         note = f"Opening {vault_path}… loading the embedding model {source}/{model}"
@@ -293,7 +302,7 @@ class VaultService:
 
     def _clear_vault(self) -> None:
         state = self.state
-        query._leave_folder_mode(state)
+        folder_mode._leave_folder_mode(state)
         state.vault_path = ""
         state.search_pipeline = None
         state.chat_pipeline = None
@@ -322,13 +331,13 @@ class VaultService:
         if state.folders:
             # Read from the folders' status files, so the header follows
             # background indexing rather than the last search.
-            query._update_document_counts(state.vault_path)
+            pipelines._update_document_counts(state.vault_path)
         return {
             "vault_path": state.vault_path,
             "folder_mode": bool(state.folders),
             "folder_names": [Path(root).name or root for root in state.folders],
-            "folder_banner": query._folder_banner(state),
-            "semantic_search_waiting": query.semantic_search_waiting(state),
+            "folder_banner": folder_mode._folder_banner(state),
+            "semantic_search_waiting": folder_mode.semantic_search_waiting(state),
             "chunks": state.shingled_chunks_count,
             "keyword_search_enabled": state.keyword_search_enabled,
             "keyword_index_stale": self.keyword_index_stale(),
@@ -337,7 +346,7 @@ class VaultService:
             "show_source_paths": state.show_source_paths,
             "agent_search_available": state.agent_search_pipeline is not None,
             "agent_chat_available": state.agent_chat_pipeline is not None,
-            "models": query._effective_models(state),
+            "models": app_state._effective_models(state),
         }
 
     def keyword_index_stale(self) -> bool:
@@ -385,8 +394,8 @@ class VaultService:
             return _fail("No vault is open.")
         gone = self.vault_gone_note()
         try:
-            query._refresh_pipelines(force=True)
-            query._update_document_counts(self.state.vault_path)
+            pipelines._refresh_pipelines(force=True)
+            pipelines._update_document_counts(self.state.vault_path)
         except Exception as exc:
             return _fail(f"Refresh failed: {exc}")
         if gone:
@@ -414,13 +423,13 @@ class VaultService:
         return str(root / "my-vault") if root else "~/my-vault"
 
     def suggest_vault_path(self, source: str) -> str:
-        return query.suggest_vault_path(source) if source.strip() else ""
+        return vaults.suggest_vault_path(source) if source.strip() else ""
 
     # -- folders ------------------------------------------------------------------
 
     def folders(self) -> list[dict[str, Any]]:
         """The open folders' progress, as the Vaults & Documents page lists it."""
-        return query.folders_status(self.state)
+        return folder_mode.folders_status(self.state)
 
     def recent_folders(self) -> list[str]:
         """Folders searched before that are neither open nor closed now."""
@@ -429,29 +438,29 @@ class VaultService:
 
     def close_folder(self, root: str) -> dict[str, Any]:
         """Stop searching a folder but keep it listed (``/folders/close``)."""
-        message, error = query.close_folder(self.state, root)
+        message, error = folder_mode.close_folder(self.state, root)
         return _fail(error) if error else _ok(message)
 
     def open_folder(self, root: str) -> dict[str, Any]:
         """Search a closed folder again (``/folders/open``)."""
-        message, error = query.open_closed_folder(self.state, root)
+        message, error = folder_mode.open_closed_folder(self.state, root)
         return _fail(error) if error else _ok(message)
 
     def add_folder(self, raw_path: str) -> dict[str, Any]:
         """Start searching a folder (``/folders/add``)."""
-        message, error = query.add_folder(self.state, raw_path)
+        message, error = folder_mode.add_folder(self.state, raw_path)
         return _fail(error) if error else _ok(message)
 
     def remove_folder(self, root: str, *, delete_index: bool = False) -> dict[str, Any]:
         """Stop searching a folder (``/folders/remove``)."""
-        message, error = query.remove_folder(
+        message, error = folder_mode.remove_folder(
             self.state, root, delete_index=delete_index
         )
         return _fail(f"{message} {error}".strip()) if error else _ok(message)
 
     def reembed_folder(self, root: str) -> dict[str, Any]:
         """Re-embed a folder with the Settings embedder (``/folders/reembed``)."""
-        message, error = query.reembed_folder(self.state, root)
+        message, error = folder_mode.reembed_folder(self.state, root)
         return _fail(error) if error else _ok(message)
 
     def shutdown(self) -> None:
@@ -467,14 +476,14 @@ class VaultService:
         Returns ``needs_confirm`` with ``confirm_path``/``entry_count`` when
         the target is a non-empty folder that holds no vault data.
         """
-        vault_path, placement_note, error = query._resolve_vault_request(raw_path)
+        vault_path, placement_note, error = vaults._resolve_vault_request(raw_path)
         if vault_path is None:
             return _fail(error)
         if (vault_path / FOLDER_INDEX_DIRNAME).is_dir():
             # A folder searched in folder mode: open the folder, not a vault.
             return self.add_folder(str(vault_path))
         created = not vault_path.is_dir()
-        entries = query._existing_non_vault_entries(vault_path)
+        entries = app_state._existing_non_vault_entries(vault_path)
         if entries > 0 and not confirm_non_vault:
             return _fail(
                 f"{vault_path} already contains {entries} item(s) that are not "
@@ -483,7 +492,7 @@ class VaultService:
                 confirm_path=str(vault_path),
                 entry_count=entries,
             )
-        error = query._activate_vault(vault_path)
+        error = vaults._activate_vault(vault_path)
         if error:
             return _fail(error)
         if created:
@@ -523,7 +532,7 @@ class VaultService:
                 f"Removed {resolved} from the list. It is outside "
                 f"{access_control.vault_root()}, so its files were left untouched."
             )
-        if query._is_dangerous_delete_target(real_path):
+        if vaults._is_dangerous_delete_target(real_path):
             return _fail(
                 f"Refusing to delete {resolved}: path is too broad to be a vault."
             )
@@ -565,12 +574,14 @@ class VaultService:
             return _fail("Enter a folder or glob pattern to index.")
         if self.state.folders and not vault.strip():
             return _fail(
-                query.FOLDERS_INDEX_THEMSELVES_TEMPLATE.format(how="enter the vault")
+                folder_mode.FOLDERS_INDEX_THEMSELVES_TEMPLATE.format(
+                    how="enter the vault"
+                )
             )
-        pattern = query._resolve_source_pattern(source)
+        pattern = vaults._resolve_source_pattern(source)
         doc_roots = access_control.document_roots()
         confined_prefix = access_control.confine(
-            query._nonglob_prefix(pattern), doc_roots
+            vaults._nonglob_prefix(pattern), doc_roots
         )
         if confined_prefix is None:
             return _fail(
@@ -583,11 +594,11 @@ class VaultService:
             )
         vault_note = ""
         if vault.strip():
-            vault_path, placement_note, error = query._resolve_vault_request(vault)
+            vault_path, placement_note, error = vaults._resolve_vault_request(vault)
             if vault_path is None:
                 return _fail(error)
             if os.path.realpath(vault_path) == os.path.realpath(
-                query._nonglob_prefix(pattern)
+                vaults._nonglob_prefix(pattern)
             ):
                 return _fail(
                     f"The vault cannot be the folder being indexed ({vault_path}). "
@@ -599,7 +610,7 @@ class VaultService:
             ) == os.path.realpath(vault_path)
             if not already_open:
                 created = not vault_path.is_dir()
-                entries = query._existing_non_vault_entries(vault_path)
+                entries = app_state._existing_non_vault_entries(vault_path)
                 if entries > 0 and not confirm_non_vault:
                     return _fail(
                         f"{vault_path} already contains {entries} item(s) that are "
@@ -608,7 +619,7 @@ class VaultService:
                         confirm_path=str(vault_path),
                         entry_count=entries,
                     )
-                error = query._activate_vault(vault_path)
+                error = vaults._activate_vault(vault_path)
                 if error:
                     return _fail(error)
                 vault_note = (
@@ -619,8 +630,8 @@ class VaultService:
         elif not self.state.vault_path:
             return _fail("Choose a vault to index these documents into.")
 
-        models = query._effective_models(self.state)
-        started = query.start_index_job(
+        models = app_state._effective_models(self.state)
+        started = vaults.start_index_job(
             vault_path=self.state.vault_path,
             source=source,
             pattern=pattern,
@@ -642,12 +653,12 @@ class VaultService:
 
     @staticmethod
     def index_status() -> dict[str, Any]:
-        return query._index_job_snapshot()
+        return vaults._index_job_snapshot()
 
     def start_fulltext_index(self) -> dict[str, Any]:
         if not self.state.vault_path:
             return _fail("No vault is open.")
-        if not query.start_fulltext_index_job(self.state.vault_path):
+        if not vaults.start_fulltext_index_job(self.state.vault_path):
             return _fail(
                 "A full-text index build is already in progress; wait for it to finish."
             )
@@ -655,7 +666,7 @@ class VaultService:
 
     @staticmethod
     def fulltext_status() -> dict[str, Any]:
-        return query._fulltext_index_job_snapshot()
+        return vaults._fulltext_index_job_snapshot()
 
     # -- search -------------------------------------------------------------------
 
@@ -676,32 +687,34 @@ class VaultService:
             return _fail("The search pipeline is not available; check Settings.")
         if gone := self.vault_gone_note():
             return _fail(gone)
-        if waiting := query.semantic_search_waiting(state, SEMANTIC_SEARCH_WAITING):
+        if waiting := folder_mode.semantic_search_waiting(
+            state, SEMANTIC_SEARCH_WAITING
+        ):
             return _fail(waiting)
         try:
-            query._refresh_pipelines()
-            query._update_document_counts(state.vault_path)
+            pipelines._refresh_pipelines()
+            pipelines._update_document_counts(state.vault_path)
             note = ""
             trace: list[str] = []
             if use_agent and state.agent_search_pipeline:
-                outcome = query._select_with_agent(
+                outcome = result_views._select_with_agent(
                     state, text, extra_effort=extra_effort
                 )
-                results = query._process_semantic_results(outcome.results)
+                results = result_views._process_semantic_results(outcome.results)
                 note = outcome.note
                 trace = outcome.trace
                 if apply_filter and state.filtered_search_pipeline:
-                    note += f" {query.AGENT_SEARCH_FILTER_NOTE}"
+                    note += f" {result_views.AGENT_SEARCH_FILTER_NOTE}"
             elif apply_filter and state.filtered_search_pipeline:
                 raw, filter_error = state.filtered_search_pipeline(text)
-                results = query._process_semantic_results(raw)
-                note = query._filter_outcome_note(len(results), filter_error)
+                results = result_views._process_semantic_results(raw)
+                note = result_views._filter_outcome_note(len(results), filter_error)
             else:
                 if use_agent:
                     note = "the agent is unavailable right now — plain search was run"
-                results = query._process_semantic_results(state.search_pipeline(text))[
-                    : query.DEFAULT_SEARCH_RESULT_LIMIT
-                ]
+                results = result_views._process_semantic_results(
+                    state.search_pipeline(text)
+                )[: app_state.DEFAULT_SEARCH_RESULT_LIMIT]
         except Exception as exc:
             return _fail(str(exc))
         return _ok(results=results, note=note, trace=trace)
@@ -715,8 +728,8 @@ class VaultService:
         if gone := self.vault_gone_note():
             return _fail(gone)
         try:
-            query._refresh_pipelines()
-            query._update_document_counts(state.vault_path)
+            pipelines._refresh_pipelines()
+            pipelines._update_document_counts(state.vault_path)
         except Exception as exc:
             return _fail(str(exc))
         if not text.strip():
@@ -724,7 +737,7 @@ class VaultService:
         if not state.keyword_search_enabled or not state.keyword_search_pipeline:
             if state.folders:
                 # As the web page says: folders build their own keyword index.
-                return _fail(query.KEYWORD_SEARCH_STARTING)
+                return _fail(folder_mode.KEYWORD_SEARCH_STARTING)
             return _fail(
                 "Keyword search needs a full-text index for this vault. Build "
                 "one with the Build full-text index button above."
@@ -733,10 +746,10 @@ class VaultService:
             note = ""
             if apply_filter and state.filtered_keyword_search_pipeline:
                 raw, filter_error = state.filtered_keyword_search_pipeline(text)
-                results = query._process_semantic_results(raw)
-                note = query._filter_outcome_note(len(results), filter_error)
+                results = result_views._process_semantic_results(raw)
+                note = result_views._filter_outcome_note(len(results), filter_error)
             else:
-                results = query._process_keyword_results(
+                results = result_views._process_keyword_results(
                     list(state.keyword_search_pipeline(text))
                 )
                 if len(state.folders) > 1 and results:
@@ -762,7 +775,7 @@ class VaultService:
         if not self.state.vault_path:
             return _fail("No vault is open.")
         try:
-            text = query.chunk_text(self.state, lookup_path, snippet)
+            text = folder_mode.chunk_text(self.state, lookup_path, snippet)
         except Exception as exc:
             return _fail(f"Could not load the chunk: {exc}")
         if not text:
@@ -774,7 +787,7 @@ class VaultService:
         if not self.state.vault_path:
             return _fail("No vault is open.")
         try:
-            path = query.resolve_source_file(self.state, lookup_path)
+            path = folder_mode.resolve_source_file(self.state, lookup_path)
         except Exception as exc:
             return _fail(f"Could not resolve the source document: {exc}")
         if path is None:
@@ -809,7 +822,7 @@ class VaultService:
             return _fail("The Ask pipeline is not available; check Settings.")
         if gone := self.vault_gone_note():
             return _fail(gone)
-        if waiting := query.ask_waiting(state):
+        if waiting := folder_mode.ask_waiting(state):
             return _ok(answer=waiting, citations=[], answered_by="", trace=[])
         citations: list[dict[str, Any]] = []
         retrieval_note = ""
@@ -817,18 +830,20 @@ class VaultService:
         trace: list[str] = []
         answered_by_agent = False
         try:
-            query._refresh_pipelines()
-            query._update_document_counts(state.vault_path)
+            pipelines._refresh_pipelines()
+            pipelines._update_document_counts(state.vault_path)
             result: str | dict[str, Any]
             if use_agent and state.agent_chat_pipeline:
-                response, citations, trace, retrieval_note = query._answer_with_agent(
-                    state, message, extra_effort=extra_effort
+                response, citations, trace, retrieval_note = (
+                    result_views._answer_with_agent(
+                        state, message, extra_effort=extra_effort
+                    )
                 )
                 answered_by_agent = True
             elif use_keyword_search and state.keyword_chat_pipeline:
                 result = state.keyword_chat_pipeline(message)
                 response = result["response"]
-                citations = query._process_semantic_results(result["background"])
+                citations = result_views._process_semantic_results(result["background"])
                 filter_error = result.get("filter_error")
                 hits = result.get("keyword_hits")
                 if hits:
@@ -850,21 +865,23 @@ class VaultService:
                 result = state.chat_pipeline(message)
                 if isinstance(result, dict):
                     response = result["response"]
-                    citations = query._process_semantic_results(result["background"])
+                    citations = result_views._process_semantic_results(
+                        result["background"]
+                    )
                     filter_error = result.get("filter_error")
                 else:
                     response = result
-                    citations = query._chat_citations(state, message)
+                    citations = result_views._chat_citations(state, message)
             if use_agent and not answered_by_agent:
-                retrieval_note = query._prefix_note(
-                    retrieval_note, query.AGENT_UNAVAILABLE_NOTE
+                retrieval_note = result_views._prefix_note(
+                    retrieval_note, result_views.AGENT_UNAVAILABLE_NOTE
                 )
             if not state.show_source_paths:
-                response = query._strip_answer_source_paths(response)
+                response = result_views._strip_answer_source_paths(response)
         except Exception as exc:
             error = str(exc)
             lowered = error.lower()
-            chat_source = str(query._effective_models(state).get("chat_source", ""))
+            chat_source = str(app_state._effective_models(state).get("chat_source", ""))
             if "ollama" in lowered and ("connect" in lowered or "refused" in lowered):
                 error = (
                     "Set the Ollama server URL on the Settings tab (F6), "
@@ -894,15 +911,15 @@ class VaultService:
             return _fail(error)
         if not state.show_source_paths:
             citations = [{k: v for k, v in c.items() if k != "path"} for c in citations]
-        answered_by = query._answered_by(state)
+        answered_by = result_views._answered_by(state)
         if retrieval_note:
             answered_by = f"{answered_by} · {retrieval_note}"
-        partial = query._partial_index_note(state)
+        partial = folder_mode._partial_index_note(state)
         if partial:
             answered_by = f"{answered_by} · {partial}"
         if state.result_filter_active:
             if answered_by_agent:
-                answered_by += f" · {query.AGENT_FILTER_NOTE}"
+                answered_by += f" · {result_views.AGENT_FILTER_NOTE}"
             else:
                 answered_by += (
                     f" · the vault's retrieval filter failed and was skipped ({filter_error})"
@@ -922,7 +939,7 @@ class VaultService:
     def settings_view(self) -> dict[str, Any]:
         state = self.state
         return {
-            "models": query._effective_models(state),
+            "models": app_state._effective_models(state),
             "overrides": {
                 "embedding_source": state.embedding_source or "",
                 "embedding_model": state.embedding_model or "",
@@ -957,27 +974,27 @@ class VaultService:
         agent_search_iterations: str = "",
     ) -> dict[str, Any]:
         state = self.state
-        previous = query._effective_models(state)
+        previous = app_state._effective_models(state)
         minimums = user_settings.INTEGER_SETTING_MINIMUMS
         try:
-            chunk = query._parse_int_setting(
+            chunk = app_state._parse_int_setting(
                 chunk_size, "Chunk size", minimums["chunk_size"]
             )
-            shingle = query._parse_int_setting(
+            shingle = app_state._parse_int_setting(
                 shingle_size, "Shingle size", minimums["shingle_size"]
             )
-            overlap = query._parse_int_setting(
+            overlap = app_state._parse_int_setting(
                 shingle_overlap, "Shingle overlap", minimums["shingle_overlap"]
             )
-            limit = query._parse_int_setting(
+            limit = app_state._parse_int_setting(
                 rag_result_limit, "Ask result count", minimums["rag_result_limit"]
             )
-            agent_count = query._parse_int_setting(
+            agent_count = app_state._parse_int_setting(
                 agent_search_result_count,
                 "Agent chunk limit",
                 minimums["agent_search_result_count"],
             )
-            agent_iterations = query._parse_int_setting(
+            agent_iterations = app_state._parse_int_setting(
                 agent_search_iterations,
                 "Agent search iterations",
                 minimums["agent_search_iterations"],
@@ -998,23 +1015,23 @@ class VaultService:
             agent_search_result_count=agent_count,
             agent_search_iterations=agent_iterations,
         )
-        query.load_saved_model_overrides()
+        app_state.load_saved_model_overrides()
         if state.vault_path:
             try:
-                query._refresh_pipelines(force=True)
+                pipelines._refresh_pipelines(force=True)
             except Exception as exc:
                 return _ok(
                     "Settings saved, but the pipelines could not be rebuilt with "
                     f"them: {exc}"
                 )
-        models = query._effective_models(state)
+        models = app_state._effective_models(state)
         message = "Settings saved."
         embedding_changed = (
             previous["embedding_source"],
             previous["embedding_model"],
         ) != (models["embedding_source"], models["embedding_model"])
         if embedding_changed and state.folders:
-            message += query.FOLDERS_KEEP_EMBEDDER_TEMPLATE.format(
+            message += folder_mode.FOLDERS_KEEP_EMBEDDER_TEMPLATE.format(
                 action="Re-embed selected, on the Vault tab"
             )
         elif embedding_changed:
@@ -1046,7 +1063,7 @@ class VaultService:
         message = " ".join(["Connection settings saved for this app.", *notes])
         if self.state.vault_path:
             try:
-                query._refresh_pipelines(force=True)
+                pipelines._refresh_pipelines(force=True)
             except Exception as exc:
                 return _ok(f"Connection settings saved; pipelines not rebuilt: {exc}")
         return _ok(message)
@@ -1055,7 +1072,7 @@ class VaultService:
         self, *, probe: bool = True, download: bool = False
     ) -> dict[str, Any]:
         try:
-            return query._collect_config_status(
+            return app_state._collect_config_status(
                 self.state, probe=probe, allow_download=download
             )
         except Exception as exc:
@@ -1074,22 +1091,22 @@ class VaultService:
     # -- retrieval filter ---------------------------------------------------------
 
     def filter_view(self) -> dict[str, Any]:
-        return query._retrieval_filter_context(self.state)
+        return vaults._retrieval_filter_context(self.state)
 
     def filter_blocker(self) -> str:
         """Why the filter cannot be edited now, or "" when it can."""
-        return query.retrieval_filter_blocker(self.state)
+        return vaults.retrieval_filter_blocker(self.state)
 
     def save_filter(
         self, *, action: str, script: str, enabled: bool, strict: bool
     ) -> dict[str, Any]:
         state = self.state
-        if blocker := query.retrieval_filter_blocker(state):
+        if blocker := vaults.retrieval_filter_blocker(state):
             return _fail(blocker)
         if action == "remove":
             retrieval_filter.remove_script(state.vault_path)
             user_settings.clear_retrieval_filter_flags(state.vault_path)
-            query._refresh_pipelines(force=True)
+            pipelines._refresh_pipelines(force=True)
             return _ok("Retrieval filter removed.")
         if not script.strip():
             return _fail("Enter a script, or use Remove to delete the saved one.")
@@ -1102,7 +1119,7 @@ class VaultService:
         user_settings.set_retrieval_filter_flags(
             state.vault_path, enabled=enabled, strict=strict
         )
-        query._refresh_pipelines(force=True)
+        pipelines._refresh_pipelines(force=True)
         if enabled:
             return _ok("Retrieval filter enabled.")
         return _ok(

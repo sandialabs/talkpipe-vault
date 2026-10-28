@@ -7,7 +7,8 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from talkpipe_vault.apps import access_control, query, user_settings
+from talkpipe_vault.apps import access_control, query, user_settings, vaults
+from talkpipe_vault.apps import state as app_state
 
 
 @pytest.fixture(autouse=True)
@@ -16,10 +17,10 @@ def isolated_env(tmp_path, monkeypatch):
     monkeypatch.setenv(user_settings.VAULT_HOME_ENV, str(tmp_path / "vault-home"))
     monkeypatch.delenv(access_control.VAULT_ROOT_ENV, raising=False)
     monkeypatch.delenv(access_control.DOCUMENT_ROOTS_ENV, raising=False)
-    query._state.vault_path = ""
-    query._state.search_pipeline = None
-    query._state.chat_pipeline = None
-    query._state.keyword_search_pipeline = None
+    app_state._state.vault_path = ""
+    app_state._state.search_pipeline = None
+    app_state._state.chat_pipeline = None
+    app_state._state.keyword_search_pipeline = None
 
 
 @pytest.fixture
@@ -241,7 +242,7 @@ class TestIndexRoute:
         outside.mkdir()
         (outside / "file.txt").write_text("text")
         monkeypatch.setenv(access_control.DOCUMENT_ROOTS_ENV, str(doc_root))
-        query._state.vault_path = str(tmp_path / "vault")
+        app_state._state.vault_path = str(tmp_path / "vault")
 
         response = client.post(
             "/documents/index",
@@ -253,13 +254,13 @@ class TestIndexRoute:
 
 class TestNonGlobPrefix:
     def test_plain_directory(self):
-        assert query._nonglob_prefix("/data/docs/**/*") == "/data/docs"
+        assert vaults._nonglob_prefix("/data/docs/**/*") == "/data/docs"
 
     def test_wildcard_midway(self):
-        assert query._nonglob_prefix("/data/*/notes/*.md") == "/data"
+        assert vaults._nonglob_prefix("/data/*/notes/*.md") == "/data"
 
     def test_relative_pattern_with_leading_wildcard(self):
-        assert query._nonglob_prefix("**/*.md") == "."
+        assert vaults._nonglob_prefix("**/*.md") == "."
 
 
 class TestVaultPathHint:
@@ -306,5 +307,5 @@ class TestRunAppStartup:
         )
         query.run_app(vault_path=str(tmp_path / "vault"), open_browser=False)
         assert served.get("started")
-        assert query._state.vault_path == ""
+        assert app_state._state.vault_path == ""
         assert "model download failed" in capsys.readouterr().err
