@@ -12,43 +12,47 @@ It is an ordinary segment, usable after any search in any pipeline::
     | judgeSearchResults[question_field="question", set_as="judged"]
 
 With ``drop_ignored`` it is a plain relevance filter that emits only the
-kept hits. The agent in ``agent_search`` runs its searches through it, so
-every hit the agent is shown already carries a decision.
+kept hits.
+
+The judging itself is talkpipe-agents' generic ``FindingsJudge`` (the judge
+behind its findings loop, and so behind the vault's agent): this segment
+turns the hits into findings (:func:`search_findings`), has them judged, and
+hands the hits back with the verdicts. What it adds is the vault's model
+configuration — the chat model is called through talkpipe's ``LLMPrompt``,
+so any prompt source talkpipe registers can judge — and the search-result
+shape on both sides.
 """
 
 from __future__ import annotations
 
 import logging
-import re
-import threading
 from collections.abc import Iterable, Iterator
 from typing import Annotated, Any
 
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import BaseModel
 from talkpipe.chatterlang import register_segment
 from talkpipe.llm.chat import LLMPrompt
 from talkpipe.pipe.core import AbstractSegment
 from talkpipe.search.abstract import SearchResult
 from talkpipe.util.config import parse_key_value_str
 from talkpipe.util.data_manipulation import assign_property, extract_property
+from talkpipe_agents import Finding, FindingsJudge
+from talkpipe_agents import parse_judgements as parse_decisions
+from talkpipe_agents.findings import DEFAULT_MAX_CHARS, JUDGE_SYSTEM_PROMPT
 
 from .config import get_chat_model, get_chat_source
-from .search_results import normalize_search_result, search_result_key
 
 logger = logging.getLogger(__name__)
 
-# How much of a hit the judge is shown. Enough for a whole chunk at the
-# default indexing settings (three 300-character pieces per shingle): the
-# judge decides on what it can see, so a shorter preview hides the part of a
-# chunk that would have made it worth keeping.
-DEFAULT_MAX_CHARS = 1000
-
-JUDGE_SYSTEM_PROMPT = """You judge search results for a system that answers questions from a personal document collection. You are shown a question; optionally what the search that found these results was meant to find, and what is already known from results kept earlier; then the results, each labelled r1, r2, and so on.
-
-Decide for every result whether to keep it or ignore it. Keep a result if it helps answer the question, even in part, or if it supplies what the search was looking for even when it does not address the whole question. In either case it must add something that is not already known: a new fact, a missing piece of the answer, or corroboration from a different document. Ignore a result that is about something else or only shares words with the question, and ignore a near-duplicate of what is already known. Read the question's terms in their ordinary sense: a word names what it usually names, not some other thing that happens to share the name. When unsure, keep.
-
-Reply with one decision per result, in order, giving the result's id, keep (true or false) and a short reason: for a kept result, what it contributes to the answer; for an ignored one, why it does not help. Reply with JSON only, in this shape and nothing else:
-{"decisions": [{"id": "r1", "keep": true, "reason": "..."}, {"id": "r2", "keep": false, "reason": "..."}]}"""
+__all__ = [
+    "DEFAULT_MAX_CHARS",
+    "JUDGE_SYSTEM_PROMPT",
+    "Decision",
+    "JudgeSearchResults",
+    "Judgements",
+    "parse_judgements",
+    "search_findings",
+]
 
 
 class Decision(BaseModel):
@@ -61,71 +65,40 @@ class Judgements(BaseModel):
     decisions: list[Decision]
 
 
-_DECISIONS = TypeAdapter(list[Decision])
-# A decision written as a line: "r1: true - reason", "[r2] ignore: reason",
-# "3 keep reason". For models that answer the prompt in prose rather than
-# the JSON it asks for (Ollama's cloud models ignore its format schema).
-_LINE_RE = re.compile(
-    r"^\W*(r?\d+)\b\W*(keep|ignore|true|false|yes|no)\b\W*(.*)$", re.IGNORECASE
-)
-_KEEP_WORDS = frozenset({"keep", "true", "yes"})
-
-
 def parse_judgements(text: str) -> Judgements:
     """The judge's decisions from its reply, however it wrote them.
 
-    The prompt asks for one JSON object; that is accepted bare, fenced, or
-    surrounded by prose, as is a bare JSON list of decisions. Failing that,
-    every line that reads as "<id> <keep|ignore|true|false> <reason>" is a
-    decision. Raises ValueError when no decision can be read.
+    talkpipe-agents' lenient reader (JSON bare, fenced or in prose, a bare
+    list, or one "<id> <keep|ignore|true|false> <reason>" line per result),
+    returned in this module's ``Judgements`` shape. Raises ValueError when
+    no decision can be read.
     """
-    text = text.strip()
-    start, end = text.find("{"), text.rfind("}")
-    if 0 <= start < end:
-        try:
-            return Judgements.model_validate_json(text[start : end + 1])
-        except ValidationError:
-            pass
-    if text.startswith("[") and text.endswith("]"):
-        try:
-            return Judgements(decisions=_DECISIONS.validate_json(text))
-        except ValidationError:
-            pass
-    decisions = []
-    for line in text.splitlines():
-        match = _LINE_RE.match(line)
-        if match is None:
-            continue
-        label, verdict, reason = match.groups()
-        decisions.append(
-            Decision(
-                id=label,
-                keep=verdict.lower() in _KEEP_WORDS,
-                # Hyphens and the en and em dashes models separate with.
-                reason=reason.strip(" \t:-–—.,"),  # noqa: RUF001 - the dashes are the point
-            )
-        )
-    if not decisions:
-        raise ValueError("the judge's reply held no decisions")
-    return Judgements(decisions=decisions)
+    return Judgements(
+        decisions=[
+            Decision(id=d.id, keep=d.keep, reason=d.reason)
+            for d in parse_decisions(text)
+        ]
+    )
 
 
-def _one_line(exc: Exception, limit: int = 160) -> str:
-    text = " ".join(str(exc).split()) or type(exc).__name__
-    return text if len(text) <= limit else text[: limit - 1] + "…"
+def search_findings(
+    hits: Iterable[Any], rename_fields: dict[str, str] | None = None
+) -> list[Finding]:
+    """Search hits as findings: the adapter between the vault's results and
+    talkpipe-agents' findings loop.
 
-
-def _label(result: SearchResult) -> str:
-    doc = result.document or {}
-    return str(doc.get("title") or doc.get("filename") or doc.get("source") or "")
-
-
-def _text(result: SearchResult, max_chars: int) -> str:
-    doc = result.document or {}
-    text = " ".join(str(doc.get("content") or doc.get("shingle") or "").split())
-    if len(text) > max_chars:
-        text = text[:max_chars] + "…"
-    return text
+    A hit is a talkpipe ``SearchResult`` or a dict with ``doc_id``, ``score``
+    and ``document``; anything else is skipped. A field in *rename_fields* is
+    renamed first, unless the new name is already present. The finding's key
+    is the hit's ``doc_id`` (else the document), so a chunk found twice is one
+    finding, and the hit itself is kept as ``meta["result"]``, which
+    ``Finding.to_search_result()`` gives back for the answer and its citations.
+    """
+    return [
+        Finding.from_search_result(hit, rename_fields)
+        for hit in hits
+        if isinstance(hit, (SearchResult, dict))
+    ]
 
 
 @register_segment("judgeSearchResults")
@@ -205,60 +178,27 @@ class JudgeSearchResults(AbstractSegment):
         )
         chat_model = chat_model if chat_model is not None else get_chat_model()
         chat_source = chat_source if chat_source is not None else get_chat_source()
-        # A plain prompt that asks for JSON, parsed by parse_judgements,
-        # rather than talkpipe's guided generation: a provider that ignores
-        # the output schema (Ollama's cloud models) would fail every
-        # judgement there, while its prose reply still parses here.
-        self._generate = LLMPrompt(
+        # A plain prompt that asks for JSON, read leniently by the generic
+        # judge, rather than talkpipe's guided generation: a provider that
+        # ignores the output schema (Ollama's cloud models) would fail every
+        # judgement there, while its prose reply still parses.
+        self._prompt = LLMPrompt(
             model=chat_model,
             source=chat_source,
             system_prompt=JUDGE_SYSTEM_PROMPT,
             multi_turn=False,
         ).as_function(single_in=True, single_out=True)
-        # A prompt adapter keeps the message it is sending until the reply
-        # comes back, so two judgements at once (an agent's searches in one
-        # turn run in threads) would be sent as one request; take turns.
-        self._lock = threading.Lock()
+        # The judge the agent's findings loop runs too: prompt, model call
+        # (one at a time — it holds a lock, since an agent's tool calls in
+        # one turn run in threads), lenient reading, "not judged" fallback.
+        self.findings_judge = FindingsJudge(
+            max_chars=self.max_chars, generate=self._generate
+        )
 
-    @staticmethod
-    def prompt(
-        question: str,
-        looking_for: str,
-        known: Iterable[str],
-        labelled: list[tuple[str, SearchResult]],
-        max_chars: int = DEFAULT_MAX_CHARS,
-    ) -> str:
-        """The prompt for one judgement: the question, what the search was
-        looking for, what is already known, and the labelled results."""
-        lines = [f"Question: {question.strip()}"]
-        if looking_for.strip():
-            lines.append(f"This search is looking for: {looking_for.strip()}")
-        notes = [str(note).strip() for note in known if str(note).strip()]
-        lines.append("Already known:")
-        lines.extend(f"- {note}" for note in notes)
-        if not notes:
-            lines.append("- nothing yet")
-        lines.append("Results:")
-        for label, result in labelled:
-            head = f"[{label}]"
-            if title := _label(result):
-                head += f" {title}"
-            lines.append(f"{head}\n{_text(result, max_chars)}")
-        return "\n".join(lines)
-
-    @staticmethod
-    def _label_of(decision_id: str) -> str:
-        # Models write the label as "r1", "R1", "[r1]" or just "1"; all
-        # mean the same result.
-        label = "".join(ch for ch in decision_id.lower() if ch.isalnum())
-        return f"r{label}" if label.isdigit() else label
-
-    def _decisions(self, prompt: str) -> dict[str, Decision]:
-        with self._lock:
-            raw = self._generate(prompt)
-        if not isinstance(raw, Judgements):
-            raw = parse_judgements(str(raw))
-        return {self._label_of(d.id): d for d in raw.decisions}
+    def _generate(self, prompt: str) -> str:
+        reply = self._prompt(prompt)
+        # A provider answering with structured output hands back a model.
+        return reply.model_dump_json() if isinstance(reply, BaseModel) else str(reply)
 
     def judge(
         self,
@@ -275,38 +215,17 @@ class JudgeSearchResults(AbstractSegment):
         decision for, or every result when the model failed, is kept with a
         reason that starts "not judged".
         """
-        skip = {str(key) for key in seen}
-        labelled: list[tuple[str, SearchResult]] = []
-        for entry in results or []:
-            result = normalize_search_result(entry, self.rename_fields)
-            if result is None or search_result_key(result) in skip:
-                continue
-            labelled.append((f"r{len(labelled) + 1}", result))
-        if not labelled:
-            return []
-        prompt = self.prompt(question, looking_for, known, labelled, self.max_chars)
-        try:
-            decisions = self._decisions(prompt)
-        except Exception as exc:
-            logger.warning("Judging search results failed; keeping them", exc_info=True)
-            decisions = {}
-            undecided = f"not judged: {_one_line(exc)}"
-        else:
-            undecided = "not judged: the model gave no decision for it"
-        judged = []
-        for label, result in labelled:
-            decision = decisions.get(label)
-            if decision is None:
-                judged.append({"result": result, "keep": True, "reason": undecided})
-            else:
-                judged.append(
-                    {
-                        "result": result,
-                        "keep": decision.keep,
-                        "reason": decision.reason.strip(),
-                    }
-                )
-        return judged
+        judgements = self.findings_judge.judge(
+            search_findings(results or [], self.rename_fields),
+            question,
+            looking_for,
+            known,
+            seen,
+        )
+        return [
+            {"result": j.finding.to_search_result(), "keep": j.keep, "reason": j.reason}
+            for j in judgements
+        ]
 
     def transform(self, input_iter: Iterable[Any]) -> Iterator[Any]:
         for item in input_iter:

@@ -5,31 +5,34 @@ searches the vault iteratively, each search keeping what is worth having.
 ``vaultAgentSearch`` shows the chunks kept; ``vaultAgentChat`` answers the
 question from them.
 
-**How it is put together.** The agent itself is talkpipe-agents' ``llmAgent``
-segment, driven with a tool list resolved by name from ``agent_tools``. The
-segments here own the *vault* concerns — opening the vault, wiring the
-searches the tools call, running the RAG prompt over what the agent kept —
-and nothing about running a model. Which tools an agent gets is a parameter,
-and so is its system prompt, so tools and agents mix and match without
-editing this file::
+**How it is put together.** The agent is talkpipe-agents' ``llmAgent``
+segment, running its *findings loop*: the vault's search tools
+(``agent_tools``) are finding tools, and talkpipe-agents' ``JudgeFindings``
+hook judges each call's findings with a ``FindingsSession`` per question.
+The segments here own the *vault* concerns — opening the vault, the searches
+the tools call, the retrieval prompt, running the RAG prompt over what the
+agent kept — and nothing about running a model or judging. Which tools an
+agent gets is a parameter, and so is its system prompt, so tools and agents
+mix and match without editing this file::
 
     vaultAgentChat[vault_path="~/notes-vault",
                    tools="vector_search,enough_information,think"]
 
-Names the vault does not own (``think`` above) come from talkpipe-agents'
-own registry. What each tool does lives in ``agent_tools``; see its
-docstring, and ``docs/AGENT_RETRIEVAL.md`` for using the tools elsewhere.
+Names the vault does not own (``enough_information``, ``think`` above) come
+from talkpipe-agents' own registry. What each tool does lives in
+``agent_tools``; see its docstring, and ``docs/AGENT_RETRIEVAL.md`` for
+using the tools elsewhere.
 
-**Each search is a TalkPipe pipeline: search → LLM judge.** The agent's
-search tools run ``vaultSearch`` / ``vaultTextSearch`` piped into
-``judgeSearchResults``, so every hit comes back decided — kept because it
-helps answer the question (or supplies what the agent said the search was
-``looking_for``) and adds to what is already known, or ignored — in one
-batched model call that costs the agent no turn. Deciding cannot be
-skipped, and the judge checks hits against the user's question, so an agent
-that drifts off it (reading a word in the question as some other thing with
-the same name) keeps nothing rather than the wrong thing. The agent's job
-is what to search for: what the answer still lacks.
+**Every search is judged inside the loop.** After a search tool returns its
+hits, and before the agent sees them, the judge (``judgeSearchResults``'
+``FindingsJudge``) decides on every hit — kept because it helps answer the
+question (or supplies what the agent said the search was ``looking_for``)
+and adds to what is already known, or ignored — in one batched model call
+that costs the agent no turn. Deciding cannot be skipped, and the judge
+checks hits against the user's question, so an agent that drifts off it
+(reading a word in the question as some other thing with the same name)
+keeps nothing rather than the wrong thing. The agent's job is what to search
+for: what the answer still lacks.
 
 **The stopping criterion is the agent's judgement, not a result count.** It
 searches, and asks itself after each search what the question still lacks;
@@ -38,7 +41,7 @@ it stops when it can answer, whether that took one chunk or eight.
 how much context one run may collect, not a goal, and ``max_iterations``
 (Settings → Agent Search Iterations) caps the agent turns — both exist only
 to bound a run that never reaches the judgement. The outcome's note says
-which of the four endings happened, because each means something different
+which of the endings happened, because each means something different
 about how complete the selection is.
 
 Every tool call and its outcome is reported through ``progress`` (stdout by
@@ -63,9 +66,15 @@ from talkpipe.pipe.basic import AbstractFieldSegment
 from talkpipe.pipelines.basic_rag import AppendRAGSources, ConstructRAGPrompt
 from talkpipe.search.abstract import SearchResult
 from talkpipe.util.config import parse_key_value_str
-from talkpipe_agents import LLMAgent, build_agent_model
+from talkpipe_agents import (
+    FindingsJudge,
+    FindingsSession,
+    JudgeFindings,
+    LLMAgent,
+    build_agent_model,
+)
 
-from .agent_tools import AgentSearchSession, build_tools, parse_tool_names
+from .agent_tools import SearchBackend, build_tools, parse_tool_names
 from .config import (
     RAG_PROMPT_DIRECTIVE,
     RAG_SYSTEM_PROMPT,
@@ -94,14 +103,19 @@ DEFAULT_MAX_KEYWORDS = 8
 
 RETRIEVAL_SYSTEM_PROMPT = """You gather the text chunks from a personal document vault that are needed to answer a user's question well. You do not answer the question yourself; you direct the searches the answer will be built from.
 
-Every search returns its results already judged against the question: the relevant ones are kept for the answer, the rest are ignored, and the reply tells you what each kept chunk contributes and what is already known. Your job is to decide what to search for.
-1. Search with vector_search (natural-language, conceptual queries) and keyword_search (exact terms, names, identifiers; Whoosh syntax: terms are ANDed, use OR for alternatives and double quotes for phrases). Read the question's terms in their ordinary sense: a word in it names what it usually names, not some other thing that happens to share the name, unless the kept chunks show otherwise.
+Every search returns its results already judged against the question: the relevant ones are kept as findings for the answer, the rest are ignored, and the reply tells you what each kept finding contributes and what is already known. Your job is to decide what to search for.
+1. Search with vector_search (natural-language, conceptual queries) and keyword_search (exact terms, names, identifiers; Whoosh syntax: terms are ANDed, use OR for alternatives and double quotes for phrases). Read the question's terms in their ordinary sense: a word in it names what it usually names, not some other thing that happens to share the name, unless the kept findings show otherwise.
 2. Each search takes looking_for: say in one phrase what this search should find that the answer still lacks - a fact, a date, a name, the other side of a comparison, a second document to corroborate the first - so a result that supplies just that is kept even if it is not the whole answer. For the first search, leave it empty: the question itself is what is looked for.
-3. After each search, ask yourself what the question still needs. Could it be answered completely and accurately from what is already known? If some part is still missing, search for that specific piece, using terms, names and phrasings from the kept chunks. Do not repeat a query you already ran. If a search kept nothing, search with different terms rather than the same ones again.
-4. Stop by calling enough_information as soon as the kept chunks would let you answer the question well, saying in one short phrase what they cover. That judgement is the reason to stop - not the number of chunks collected. More chunks that add nothing are not better than stopping. If repeated searches keep nothing new and the question still cannot be fully answered, call enough_information anyway and say what is missing. If nothing at all has been kept after searching with different terms, the notes do not cover the question: enough_information is refused with nothing kept, so reply with the single word done instead. You have a limited number of turns, and every tool reply says how many are left; when it says the next turn is your last, call enough_information at once instead of searching again, so the answer is built from what has been kept.
+3. After each search, ask yourself what the question still needs. Could it be answered completely and accurately from what is already known? If some part is still missing, search for that specific piece, using terms, names and phrasings from the kept findings. Do not repeat a query you already ran. If a search kept nothing, search with different terms rather than the same ones again.
+4. Stop by calling enough_information as soon as the kept findings would let you answer the question well, saying in one short phrase what they cover. That judgement is the reason to stop - not the number of findings collected. More findings that add nothing are not better than stopping. If repeated searches keep nothing new and the question still cannot be fully answered, call enough_information anyway and say what is missing. If nothing at all has been kept after searching with different terms, the notes do not cover the question: enough_information is refused with nothing kept, so reply with the single word done instead. You have a limited number of turns, and every tool reply says how many are left; when it says the next turn is your last, call enough_information at once instead of searching again, so the answer is built from what has been kept.
 Use extract_keywords when you want a keyword query built for you: give it the question or a topic in plain language and it returns a keyword query to pass to keyword_search. You may also write keyword queries yourself.
-Use read_document when a kept chunk suggests its document holds more of the answer - the chunk is cut off, it is one step of a procedure or one item of a list, or its document is plainly where the question's topic is covered. The part read is judged like a search result; say in looking_for what you hope it holds.
+Use read_document when a kept finding suggests its document holds more of the answer - the finding is cut off, it is one step of a procedure or one item of a list, or its document is plainly where the question's topic is covered. The part read is judged like a search result; say in looking_for what you hope it holds.
 After calling enough_information, or once you are told to stop, reply with the single word: done."""
+
+# What the session tells the agent once the run is over. The agent only
+# gathers; the answer is built afterwards from what it kept, so it should
+# not spend a reply on one.
+STOP_INSTRUCTION = "Stop calling tools and reply: done"
 
 # Shown instead of an answer when the agent kept nothing: the RAG prompt would
 # have no context at all, and a model asked to answer from nothing invents one.
@@ -158,6 +172,53 @@ class AgentChatOutcome(AgentSearchOutcome):
     response: str = ""
 
 
+def kept_results(session: FindingsSession) -> list[SearchResult]:
+    """The chunks a run kept, as SearchResult, in keep order: each finding's
+    original hit (a document part read whole is a hit of its own)."""
+    return [finding.to_search_result() for finding in session.kept]
+
+
+def outcome_note(
+    session: FindingsSession, stop_reason: str, max_iterations: int
+) -> str:
+    """One line on how a finished run ended, in the pages' terms.
+
+    The five ways, most to least satisfying. The first is the intended one;
+    the rest are worth telling apart, because each means the selection may
+    be incomplete for a different reason. The endings are the findings
+    loop's (``FindingsSession.outcome``), worded for chunks and searches,
+    with a hint for the one a weak tool-calling model causes.
+    """
+    kept = len(session.kept_ids)
+    undecided = len(session.undecided)
+    searches = session.calls
+    hint = ""
+    if session.enough:
+        how = "judged it had enough to answer"
+        if session.enough_reason:
+            how += f" ({session.enough_reason})"
+    elif session.at_capacity:
+        how = f"filled its {session.max_kept}-chunk maximum"
+    elif stop_reason.startswith("limit"):
+        how = f"hit the {max_iterations}-iteration cap"
+    elif searches and not kept and not undecided:
+        # It searched, every hit was judged, none was worth keeping, and it
+        # stopped: the right ending for a question the notes do not cover
+        # (enough_information is refused with nothing kept), so the model is
+        # not to blame for it.
+        how = "found nothing relevant to keep"
+    else:
+        how = "stopped without saying it had enough"
+        hint = f" {WEAK_TOOL_CALLING_HINT}"
+    return (
+        f"Agent {how}: kept {kept} chunk{'s' if kept != 1 else ''} after "
+        f"{searches} search{'es' if searches != 1 else ''}, "
+        f"ignored {len(session.ignored_ids)}"
+        + (f", left {undecided} undecided" if undecided else "")
+        + f".{hint}"
+    )
+
+
 # Reads a document for the read_document tool through the registry indexing
 # reads with, so whatever could be indexed can be read back whole.
 _read_file = ReadFile(skip_errors=False).as_function(single_in=True)
@@ -176,11 +237,11 @@ class AgentVaultSearch(AbstractFieldSegment):
     item or in a specified field). For each query an agent runs the vault's
     vector and keyword searches as tools — with an LLM keyword extractor it
     can call to build a keyword query — refining its queries from what it
-    finds. Each search's hits are judged inside the tool, against the
-    question and what the agent said the search was looking for, so every
-    hit is kept or ignored. It runs until it judges that what has been kept
-    would answer the question well and says so, or until the chunk ceiling
-    or the iteration cap stops it.
+    finds. Each search's hits are judged before the agent sees them, against
+    the question and what the agent said the search was looking for, so
+    every hit is kept or ignored. It runs until it judges that what has been
+    kept would answer the question well and says so, or until the chunk
+    ceiling or the iteration cap stops it.
 
     Emits an AgentSearchOutcome: the kept chunks as SearchResult objects (in
     keep order), a note describing how the run ended, and the trace of tool
@@ -274,7 +335,9 @@ class AgentVaultSearch(AbstractFieldSegment):
         self.tell = progress or _print_progress
         # Resolve the tool names when the segment is built, not mid-search, so
         # an unknown tool surfaces up front (compile time for ChatterLang).
-        build_tools(self.make_session(), self.tool_names)
+        # The tools hold no per-question state, so one set serves every run;
+        # they call the search bindings below, which _bind_vault backs.
+        self.agent_tools = build_tools(self.search_backend(), self.tool_names)
         self._bind_vault()
 
     def _bind_vault(self) -> None:
@@ -300,25 +363,16 @@ class AgentVaultSearch(AbstractFieldSegment):
                     "or the Vaults & Documents page)."
                 )
         build_agent_model(self.chat_source, self.chat_model)
-        # The judge every search runs through: the same chat model as the
-        # agent, so one configuration governs the run. It takes the request
-        # dict the session builds (question, looking_for, known, seen) and
-        # sets the judgements on it.
+        # The judge every search's hits go through: the same chat model as
+        # the agent, so one configuration governs the run.
         self._judge = JudgeSearchResults(
             chat_model=self.chat_model, chat_source=self.chat_source
         )
-        self._judge_fn = self._judge.as_function(single_in=True, single_out=True)
-        # Each agent search is a pipeline: the vault search, then the judge.
-        self._judged_vector_search = (
-            VaultSearch(
-                vault_path=self.vault_path,
-                embedding_model=self.embedding_model,
-                embedding_source=self.embedding_source,
-                limit=self.search_limit,
-                field="query",
-                set_as="results",
-            )
-            | self._judge
+        self._vector_search = VaultSearch(
+            vault_path=self.vault_path,
+            embedding_model=self.embedding_model,
+            embedding_source=self.embedding_source,
+            limit=self.search_limit,
         ).as_function(single_in=True, single_out=True)
         # Same LLM keyword distillation the Ask page's keyword boost uses.
         self._extract_keywords = ExtractSearchKeywords(
@@ -330,24 +384,35 @@ class AgentVaultSearch(AbstractFieldSegment):
     def with_max_iterations(self, max_iterations: int) -> Self:
         """A copy of this segment that may take *max_iterations* turns.
 
-        The copy shares the vault, embedder and model bindings, which hold no
-        per-query state, so the app can offer a longer run (Extra Effort)
-        next to the normal one without opening the vault twice.
+        The copy shares the vault, embedder and model bindings (and the
+        tools), which hold no per-query state, so the app can offer a longer
+        run (Extra Effort) next to the normal one without opening the vault
+        twice.
         """
         clone = copy.copy(self)
         clone.max_iterations = max(1, max_iterations)
         return clone
 
     # -- search bindings (overridable for tests) -----------------------------
-    # Each takes the request dict the session builds and returns the
-    # judgements the judge set on it: dicts with result, keep and reason.
+    # What the tools search with. Each is looked up when a tool calls it, so
+    # the tools pick up an override in a subclass or on the instance.
 
-    @staticmethod
-    def _judged(item: Any) -> list[Any]:
-        return list(item.get("judged") or []) if isinstance(item, dict) else []
+    def search_backend(self) -> SearchBackend:
+        """The bindings below, as the tools' backend."""
+        return SearchBackend(
+            vector_search=lambda query: self.vector_search(query),
+            keyword_search=lambda query: self.keyword_search(query),
+            keyword_index_exists=lambda: self.keyword_index_exists(),
+            extract_keywords=lambda question: self.extract_keywords(question),
+            read_document=lambda source: self.read_document(source),
+            rename_fields=self.rename_fields,
+        )
 
-    def judged_vector_search(self, request: dict[str, Any]) -> list[Any]:
-        return self._judged(self._judged_vector_search(request))
+    def vector_search(self, query: str) -> list[Any]:
+        raw = self._vector_search(query)
+        if isinstance(raw, dict):
+            raw = [raw]
+        return list(raw or [])
 
     def keyword_index_exists(self) -> bool:
         return any(
@@ -355,23 +420,11 @@ class AgentVaultSearch(AbstractFieldSegment):
             for path in resolve_vault_paths(self.vault_path)
         )
 
-    def judged_keyword_search(self, request: dict[str, Any]) -> list[Any]:
+    def keyword_search(self, query: str) -> list[Any]:
         # Built per call: the index may not have existed when the segment was
-        # constructed (it can be built between two questions). multi_emit is
-        # off so the hits land on the item as one list for the judge.
-        search = VaultTextSearch(
-            vault_path=self.vault_path,
-            limit=self.search_limit,
-            field="query",
-            set_as="results",
-            multi_emit=False,
-        )
-        pipeline = (search | self._judge).as_function(single_in=True, single_out=True)
-        return self._judged(pipeline(request))
-
-    def judge(self, request: dict[str, Any]) -> list[Any]:
-        # The judge alone, for the parts read_document reads.
-        return self._judged(self._judge_fn(request))
+        # constructed (it can be built between two questions).
+        search = VaultTextSearch(vault_path=self.vault_path, limit=self.search_limit)
+        return list(search.process_value(query))
 
     def extract_keywords(self, question: str) -> str:
         return str(self._extract_keywords(question))
@@ -386,48 +439,53 @@ class AgentVaultSearch(AbstractFieldSegment):
             )
         return "\n".join(item.content for item in _read_file(source))
 
-    def make_session(self, question: str = "") -> AgentSearchSession:
-        """The tool state for one run on *question* (what the judge judges
-        hits against; "" when the session only resolves the tool names)."""
-        return AgentSearchSession(
-            question=question,
-            judged_vector_search=self.judged_vector_search,
-            judged_keyword_search=self.judged_keyword_search,
-            judge=self.judge,
-            keyword_index_exists=self.keyword_index_exists,
-            extract_keywords=self.extract_keywords,
-            max_chunks=self.max_chunks,
+    @property
+    def findings_judge(self) -> FindingsJudge | None:
+        """The judge every finding is decided by; None runs the session
+        without one, the agent keeping and ignoring by hand."""
+        return self._judge.findings_judge
+
+    def make_session(self, question: str = "") -> FindingsSession:
+        """The findings session for one run on *question* (what the judge
+        judges findings against)."""
+        return FindingsSession(
+            question,
+            max_kept=self.max_chunks,
             max_turns=self.max_iterations,
             tell=self.tell,
-            rename_fields=self.rename_fields,
-            read_document=self.read_document,
+            stop_instruction=STOP_INSTRUCTION,
         )
 
-    def make_agent(self, session: AgentSearchSession) -> LLMAgent:
-        """The llmAgent for one query, with this segment's tools bound to
-        *session*. Built per query because the tools carry that query's
-        state; the model behind it is cheap to resolve."""
+    def make_agent(self, session: FindingsSession) -> LLMAgent:
+        """The llmAgent for one query, running the findings loop over
+        *session*. The vault installs the loop's hook itself, rather than
+        passing ``judge=True``, so that the session is its own: the agent is
+        told to reply "done" once the run is over (it does not answer), and
+        the vault reads the session to word the outcome. Built per query
+        because the hook holds that query's session; the model behind it is
+        cheap to resolve."""
         return LLMAgent(
             model=self.chat_model,
             source=self.chat_source,
             system_prompt=self.system_prompt,
-            tools=build_tools(session, self.tool_names),
+            tools=self.agent_tools,
             max_turns=self.max_iterations,
             progress=session.tell,
+            hooks=[JudgeFindings(session, self.findings_judge)],
         )
 
-    def run_agent(self, session: AgentSearchSession, query: str) -> str:
+    def run_agent(self, session: FindingsSession, query: str) -> str:
         """Drive the agent over *session* for *query*; returns the stop reason."""
         agent = self.make_agent(session)
         prompt = (
             f"Question: {query}\n"
             "Nothing has been searched yet. Search for what answers it; each "
             "search keeps its relevant results. Then search for what the answer "
-            "still lacks, and call enough_information once the kept chunks would "
-            f"answer this question well. At most {session.max_chunks} chunks are "
-            f"kept, and you have {self.max_iterations} turns: every tool reply "
-            "says how many are left, so call enough_information before they "
-            "run out."
+            "still lacks, and call enough_information once the kept findings "
+            f"would answer this question well. At most {session.max_kept} "
+            f"findings are kept, and you have {self.max_iterations} turns: every "
+            "tool reply says how many are left, so call enough_information "
+            "before they run out."
         )
         agent.as_function(single_in=True, single_out=True)(prompt)
         # The library keeps the Strands result of the last item; its stop
@@ -443,7 +501,7 @@ class AgentVaultSearch(AbstractFieldSegment):
         """
         session = self.make_session(value)
         session.tell(
-            f"agent search: {value!r} (at most {session.max_chunks} chunks, "
+            f"agent search: {value!r} (at most {session.max_kept} chunks, "
             f"{self.max_iterations} iterations)"
         )
         try:
@@ -452,49 +510,19 @@ class AgentVaultSearch(AbstractFieldSegment):
             logger.warning("Agent search failed", exc_info=True)
             session.tell(f"agent search failed: {exc}")
             note = f"The agent stopped with an error ({exc}); " + (
-                "showing what it kept." if session.kept else "it kept nothing."
+                "showing what it kept." if session.kept_ids else "it kept nothing."
             )
             return AgentSearchOutcome(
-                session.results,
+                kept_results(session),
                 note,
                 session.trace,
                 error=str(exc) or repr(exc),
                 undecided=len(session.undecided),
             )
-        kept = len(session.kept)
-        undecided = len(session.undecided)
-        searches = len(session.queries_run)
-        # The five ways a run can end, most to least satisfying. The first is
-        # the intended one; the rest are worth telling apart, because each
-        # means the selection may be incomplete for a different reason.
-        hint = ""
-        if session.enough:
-            how = "judged it had enough to answer"
-            if session.enough_reason:
-                how += f" ({session.enough_reason})"
-        elif session.at_capacity:
-            how = f"filled its {session.max_chunks}-chunk maximum"
-        elif stop_reason.startswith("limit"):
-            how = f"hit the {self.max_iterations}-iteration cap"
-        elif searches and not kept and not undecided:
-            # It searched, every hit was judged, none was worth keeping, and
-            # it stopped: the right ending for a question the notes do not
-            # cover (enough_information is refused with nothing kept), so
-            # the model is not to blame for it.
-            how = "found nothing relevant to keep"
-        else:
-            how = "stopped without saying it had enough"
-            hint = f" {WEAK_TOOL_CALLING_HINT}"
-        note = (
-            f"Agent {how}: kept {kept} chunk{'s' if kept != 1 else ''} after "
-            f"{searches} search{'es' if searches != 1 else ''}, "
-            f"ignored {len(session.ignored)}"
-            + (f", left {undecided} undecided" if undecided else "")
-            + f".{hint}"
-        )
+        note = outcome_note(session, stop_reason, self.max_iterations)
         session.tell(note)
         return AgentSearchOutcome(
-            session.results, note, session.trace, undecided=undecided
+            kept_results(session), note, session.trace, undecided=len(session.undecided)
         )
 
     def process_value(self, value: str) -> AgentSearchOutcome:
@@ -509,7 +537,7 @@ class AgentVaultChat(AgentVaultSearch):
     Expects input items containing a question string (either as the full item
     or in a specified field). The agent gathers the context exactly as
     vaultAgentSearch does — iterative vector and keyword search, every hit
-    judged inside the search, until it judges that what has been kept would
+    judged as it arrives, until it judges that what has been kept would
     answer the question well — and the chunks kept become the background of
     a RAG prompt answered by the chat model, with the cited sources
     appended. When nothing was kept, no prompt is sent.

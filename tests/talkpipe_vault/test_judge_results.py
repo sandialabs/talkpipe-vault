@@ -1,4 +1,5 @@
-"""Tests for the judgeSearchResults segment (pipelines/judge_results.py).
+"""Tests for the judgeSearchResults segment (pipelines/judge_results.py), a
+thin segment over talkpipe-agents' FindingsJudge.
 
 The model call is stubbed: a scripted judge decides by result label, and a
 throwaway prompt adapter stands in for a provider so the segment also runs
@@ -34,7 +35,7 @@ def _hit(doc_id: str, content: str, **doc: Any) -> SearchResult:
 def fake_judge():
     """Register a throwaway chat provider whose structured replies are scripted.
 
-    Yields a controller: ``decide`` maps a result label (``r1``, …) to a
+    Yields a controller: ``decide`` maps a result label (``f1``, …) to a
     ``(keep, reason)`` pair, or a callable taking the prompt and returning
     the ``Judgements`` to reply with (or raising); ``prompts`` collects what
     the judge was asked, ``system_prompts`` how it was configured.
@@ -82,9 +83,9 @@ HITS = [
 class TestJudge:
     def test_decisions_are_applied_in_rank_order(self, fake_judge):
         fake_judge["decide"] = {
-            "r3": (True, "more on verse attacks"),
-            "r1": (True, "poems as attacks"),
-            "r2": (False, "the package manager"),
+            "f3": (True, "more on verse attacks"),
+            "f1": (True, "poems as attacks"),
+            "f2": (False, "the package manager"),
         }
         judged = _segment().judge(HITS, "poetry and LLM security")
         assert [(j["result"].doc_id, j["keep"]) for j in judged] == [
@@ -101,6 +102,8 @@ class TestJudge:
         assert len(fake_judge["prompts"]) == 1
 
     def test_labels_written_differently_still_match(self, fake_judge):
+        # "r1" is how this segment labelled results before it used the
+        # generic judge's "f1"; models that write either are understood.
         fake_judge["decide"] = {
             "1": (False, "x"),
             "R2": (False, "y"),
@@ -111,7 +114,7 @@ class TestJudge:
         assert [j["reason"] for j in judged] == ["x", "y", "z"]
 
     def test_a_missing_or_unknown_id_keeps_the_result_as_not_judged(self, fake_judge):
-        fake_judge["decide"] = {"r1": (False, "no"), "r9": (True, "nonsense")}
+        fake_judge["decide"] = {"f1": (False, "no"), "f9": (True, "nonsense")}
         judged = _segment().judge(HITS, "q")
         assert [j["keep"] for j in judged] == [False, True, True]
         assert judged[1]["reason"].startswith("not judged")
@@ -172,14 +175,14 @@ class TestJudge:
         ]
 
     def test_seen_results_are_skipped(self, fake_judge):
-        fake_judge["decide"] = {"r1": (True, "x"), "r2": (True, "y")}
+        fake_judge["decide"] = {"f1": (True, "x"), "f2": (True, "y")}
         judged = _segment().judge(HITS, "q", seen=["b"])
         assert [j["result"].doc_id for j in judged] == ["a", "c"]
-        # They are not shown to the judge either: the labels run r1, r2.
         prompt = fake_judge["prompts"][0]
-        assert "[r1] poetry.md" in prompt
-        assert "[r2] poetry.md" in prompt
-        assert "r3" not in prompt
+        # They are not shown to the judge either: the labels run f1, f2.
+        assert "[f1] poetry.md" in prompt
+        assert "[f2] poetry.md" in prompt
+        assert "f3" not in prompt
         assert "package manager" not in prompt
 
     def test_nothing_to_judge_makes_no_call(self, fake_judge):
@@ -197,9 +200,9 @@ class TestJudge:
         )
         [prompt] = fake_judge["prompts"]
         assert prompt.startswith("Question: poetry and LLM security\n")
-        assert "This search is looking for: defences, not attacks\n" in prompt
-        assert "Already known:\n- poetry.md — poems as attacks\nResults:" in prompt
-        assert "[r1] poetry.md\nPoems as adversarial prompts." in prompt
+        assert "This call is looking for: defences, not attacks\n" in prompt
+        assert "Already known:\n- poetry.md — poems as attacks\nFindings:" in prompt
+        assert "[f1] poetry.md\nPoems as adversarial prompts." in prompt
         assert fake_judge["system_prompts"] == [JUDGE_SYSTEM_PROMPT]
 
     def test_the_prompt_without_looking_for_or_known(self, fake_judge):
@@ -216,7 +219,7 @@ class TestJudge:
         assert "x" * 11 not in fake_judge["prompts"][0]
 
     def test_dict_hits_are_normalized_and_renamed(self, fake_judge):
-        fake_judge["decide"] = {"r1": (True, "ok")}
+        fake_judge["decide"] = {"f1": (True, "ok")}
         hit = {
             "doc_id": "k",
             "score": 1.0,
@@ -232,7 +235,7 @@ class TestJudge:
 
 class TestSegment:
     def test_judgements_are_set_on_the_item(self, fake_judge):
-        fake_judge["decide"] = {"r1": (True, "yes"), "r2": (False, "no")}
+        fake_judge["decide"] = {"f1": (True, "yes"), "f2": (False, "no")}
         segment = _segment(set_as="verdicts")
         [item] = list(segment([{"results": HITS[:2], "question": "q"}]))
         assert [j["keep"] for j in item["verdicts"]] == [True, False]
@@ -240,9 +243,9 @@ class TestSegment:
 
     def test_drop_ignored_sets_only_the_kept_results(self, fake_judge):
         fake_judge["decide"] = {
-            "r1": (True, "yes"),
-            "r2": (False, "no"),
-            "r3": (True, "yes"),
+            "f1": (True, "yes"),
+            "f2": (False, "no"),
+            "f3": (True, "yes"),
         }
         [item] = list(
             _segment(drop_ignored=True, set_as="results")(
@@ -253,7 +256,7 @@ class TestSegment:
         assert all(isinstance(r, SearchResult) for r in item["results"])
 
     def test_the_fields_are_configurable_and_optional(self, fake_judge):
-        fake_judge["decide"] = {"r1": (True, "yes")}
+        fake_judge["decide"] = {"f1": (True, "yes")}
         segment = _segment(
             results_field="hits",
             question_field="q",
@@ -279,7 +282,7 @@ class TestSegment:
         assert [j["keep"] for j in out["judged"]] == [True]
 
     def test_runs_from_a_chatterlang_script(self, fake_judge):
-        fake_judge["decide"] = {"r1": (False, "off topic"), "r2": (True, "on it")}
+        fake_judge["decide"] = {"f1": (False, "off topic"), "f2": (True, "on it")}
         pipeline = talkpipe.compile(
             f'| judgeSearchResults[chat_source="{FAKE_CHAT_SOURCE}", chat_model="m", '
             'set_as="judged"]'
@@ -305,7 +308,7 @@ class TestSegment:
         )
         folder_index.index_folder_now(folder, vectors=True)
 
-        fake_judge["decide"] = {"r1": (True, "the poems"), "r2": (False, "garden")}
+        fake_judge["decide"] = {"f1": (True, "the poems"), "f2": (False, "garden")}
         search = VaultSearch(
             vault_path=str(root),
             embedding_source=FAKE_EMBEDDING_SOURCE,
