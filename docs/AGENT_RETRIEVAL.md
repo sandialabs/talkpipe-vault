@@ -35,7 +35,7 @@ from talkpipe_vault.pipelines.agent_search import AgentVaultChat
 ask = AgentVaultChat(
     vault_path="~/notes",  # a folder opened in vault-server, or a named vault
     chat_source="ollama",
-    chat_model="qwen3:8b",  # a model that handles tool calls well — see below
+    chat_model="gpt-oss:latest",  # a model that handles tool calls well — see below
 ).as_function(single_in=True, single_out=True)
 outcome = ask("How did the treasury handle inflation in the 1970s?")
 
@@ -50,7 +50,7 @@ In ChatterLang, as a segment like any other — run it with TalkPipe's
 
 ```
 INPUT FROM echo[data="How did the treasury handle inflation in the 1970s?"]
-| vaultAgentChat[vault_path="~/notes-vault", chat_source="ollama", chat_model="qwen3:8b"]
+| vaultAgentChat[vault_path="~/notes-vault", chat_source="ollama", chat_model="gpt-oss:latest"]
 | extractProperty[property="response"]
 | print
 ```
@@ -211,7 +211,7 @@ before keeping anything, since then the vault was never searched.
 
 The model matters, though less than it did when the agent kept chunks by
 hand: a search keeps what it finds whatever the agent does afterwards. In
-testing, `gpt-oss` and `qwen3:8b` run the loop cleanly. `mistral-small`
+testing, `gpt-oss:latest` and `qwen3:8b` run the loop cleanly. `mistral-small`
 (the vault's default chat model) tends to end without calling
 `enough_information` — the note says so — but its searches have kept the
 relevant chunks, so an answer is built. A model that makes no tool calls at
@@ -314,10 +314,10 @@ session = FindingsSession(
     tell=print,  # every tool call and verdict, one line each
     stop_instruction=STOP_INSTRUCTION,  # "reply: done" -- we answer later
 )
-judge = JudgeSearchResults(chat_source="ollama", chat_model="qwen3:8b").findings_judge
+judge = JudgeSearchResults(chat_source="ollama", chat_model="gpt-oss:latest").findings_judge
 
 agent = LLMAgent(
-    model="qwen3:8b",
+    model="gpt-oss:latest",
     source="ollama",
     system_prompt=RETRIEVAL_SYSTEM_PROMPT,
     tools=tools,
@@ -406,7 +406,7 @@ class MyAgentChat(MyAgentSearch, AgentVaultChat):
     pass
 
 
-ask = MyAgentChat(vault_path="my-backend", chat_source="ollama", chat_model="qwen3:8b")
+ask = MyAgentChat(vault_path="my-backend", chat_source="ollama", chat_model="gpt-oss:latest")
 print(ask.process_value("How did the treasury handle inflation in the 1970s?").response)
 ```
 
@@ -481,7 +481,7 @@ import my_vault_tools  # registers glossary
 
 search = AgentVaultSearch(
     vault_path="~/notes-vault",
-    chat_model="qwen3:8b",
+    chat_model="gpt-oss:latest",
     tools="vector_search,keyword_search,extract_keywords,read_document,"
     "enough_information,glossary",
     system_prompt=RETRIEVAL_SYSTEM_PROMPT
@@ -504,7 +504,7 @@ findingTool[name="search_papers",
             description="Semantic search over my papers. Pass a question or descriptive phrase.",
             script="| vaultSearch[vault_path='/path/to/papers', limit=5] | flatten"];
 INPUT FROM echo[data="What share of traffic does a canary release get first?"]
-| vaultAgentChat[vault_path="/path/to/notes", chat_source="ollama", chat_model="qwen3:8b",
+| vaultAgentChat[vault_path="/path/to/notes", chat_source="ollama", chat_model="gpt-oss:latest",
                  tools="vector_search,search_papers,enough_information",
                  system_prompt="You gather what answers the question; you do not answer it. vector_search searches my notes and search_papers my papers, and each reply keeps the relevant results. Search both. Call enough_information once the kept findings would answer the question, then reply: done"]
 | extractProperty[property="response"]

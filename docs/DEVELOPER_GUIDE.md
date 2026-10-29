@@ -551,7 +551,7 @@ from talkpipe_vault.pipelines.vault_search import VaultSearch
 
 judged_search = (
     VaultSearch(vault_path="/path/to/notes", field="query", set_as="results", limit=5)
-    | JudgeSearchResults(chat_source="ollama", chat_model="qwen3:8b")
+    | JudgeSearchResults(chat_source="ollama", chat_model="gpt-oss:latest")
 ).as_function(single_in=True, single_out=True)
 
 item = judged_search(
@@ -572,9 +572,9 @@ The same in ChatterLang, as a filter that passes only the kept hits on
 ```sh
 chatterlang_script --script '
   INPUT FROM echo[data="What is the rollback plan for the deployment?"]
-  | toDict[field_list="_:question,_:query"]
-  | vaultSearch[vault_path="/path/to/notes", field="query", set_as="results", limit=5]
-  | judgeSearchResults[chat_source="ollama", chat_model="qwen3:8b", drop_ignored=True, set_as="hits"]
+  | toDict[field_list="_:question"]
+  | vaultSearch[vault_path="/path/to/notes", field="question", set_as="results", limit=5]
+  | judgeSearchResults[chat_source="ollama", chat_model="gpt-oss:latest", drop_ignored=True, set_as="hits"]
   | extractProperty[property="hits"]
   | flatten
   | toDict[field_list="document.title:title"]
@@ -605,9 +605,9 @@ a file, which `--script` also accepts:
 cat > judged_agent.cl <<'EOF'
 scriptTool[name="judged_search",
            description="Search the notes for a question and return only the passages a judge found relevant to it. Pass the question in plain language.",
-           script="| toDict[field_list='_:question,_:query'] | vaultSearch[vault_path='/path/to/notes', field='query', set_as='results', limit=5] | judgeSearchResults[chat_source='ollama', chat_model='qwen3:8b', drop_ignored=True, set_as='hits'] | extractProperty[property='hits'] | flatten | toDict[field_list='document.title:title,document.content:content'] | dumpsJsonl"];
+           script="| toDict[field_list='_:question'] | vaultSearch[vault_path='/path/to/notes', field='question', set_as='results', limit=5] | judgeSearchResults[chat_source='ollama', chat_model='gpt-oss:latest', drop_ignored=True, set_as='hits'] | extractProperty[property='hits'] | flatten | toDict[field_list='document.title:title,document.content:content'] | dumpsJsonl"];
 INPUT FROM echo[data="What is the rollback plan for the deployment? Use judged_search and answer from what it returns."]
-| llmAgent[source="ollama", model="qwen3:8b", tools=["judged_search"]]
+| llmAgent[source="ollama", model="gpt-oss:latest", tools=["judged_search"]]
 | print
 EOF
 chatterlang_script --script judged_agent.cl
@@ -627,7 +627,7 @@ tool the agent gets.
 from talkpipe_vault.pipelines.keyword_search import ExtractSearchKeywords
 
 to_query = ExtractSearchKeywords(
-    chat_source="ollama", chat_model="qwen3:8b"
+    chat_source="ollama", chat_model="gpt-oss:latest"
 ).as_function(single_in=True, single_out=True)
 print(to_query("What is the rollback plan if the deployment fails?"))
 ```
@@ -652,7 +652,7 @@ import talkpipe
 
 ask = talkpipe.compile(
     '| vaultChat[vault_path=["/path/to/notes", "/path/to/papers"], '
-    'chat_source="ollama", chat_model="qwen3:8b"]'
+    'chat_source="ollama", chat_model="gpt-oss:latest"]'
 ).as_function(single_in=True, single_out=True)
 print(ask("What is the rollback plan for the deployment?"))
 ```
@@ -682,7 +682,7 @@ from talkpipe_vault.pipelines.vault_chat import VaultChat
 ask = VaultChat(
     vault_path="/path/to/notes",
     chat_source="ollama",
-    chat_model="qwen3:8b",
+    chat_model="gpt-oss:latest",
     result_filter_script='| isNotIn[field="document.content", value="CONFIDENTIAL"]',
     result_filter_strict=True,
     include_background=True,
@@ -706,7 +706,7 @@ note on how the run ended (`outcome.note`) and the tool-call trace;
 `vaultChat` plus `tools`, `system_prompt`, `max_chunks`, `max_iterations`,
 `search_limit` and `progress` (a callable for the trace lines; `None` prints
 them). They need a chat model that handles tool calls well, such as
-`qwen3:8b`; the same model judges.
+`gpt-oss:latest`; the same model judges.
 
 ```python
 from talkpipe_vault.pipelines.agent_search import AgentVaultChat
@@ -714,7 +714,7 @@ from talkpipe_vault.pipelines.agent_search import AgentVaultChat
 ask = AgentVaultChat(
     vault_path="/path/to/notes",
     chat_source="ollama",
-    chat_model="qwen3:8b",
+    chat_model="gpt-oss:latest",
     progress=lambda line: None,  # keep the trace off stdout
 ).as_function(single_in=True, single_out=True)
 outcome = ask("What is the rollback plan for the deployment?")
@@ -740,7 +740,7 @@ chatterlang_script --script '
   | isNotIn[field="event", value="deleted"]
   | readFile[field="path", set_as="extracted"]
   | toDict[field_list="path,extracted.content:content"]
-  | llmPrompt[field="content", set_as="summary", source="ollama", model="qwen3:8b",
+  | llmPrompt[field="content", set_as="summary", source="ollama", model="gpt-oss:latest",
               system_prompt="Summarize this document in one sentence."]
   | print'
 ```
@@ -776,7 +776,7 @@ chatterlang_script --script '
   INPUT FROM echo[data="What is the rollback plan for the deployment?|What grows in the garden?", delimiter="|"]
   | toDict[field_list="_:question"]
   | vaultChat[vault_path=["/path/to/notes", "/path/to/papers"], field="question", set_as="answer",
-              chat_source="ollama", chat_model="qwen3:8b"]
+              chat_source="ollama", chat_model="gpt-oss:latest"]
   | toDict[field_list="question,answer"]
   | dumpsJsonl
   | print'
