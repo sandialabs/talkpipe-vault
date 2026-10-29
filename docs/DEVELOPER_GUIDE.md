@@ -119,7 +119,7 @@ flowchart TB
 
     subgraph talkpipe["TalkPipe and talkpipe-agents"]
         direction LR
-        MODELS["Models<br/>LLMPrompt · LLMEmbed · llmAgent<br/>ConstructRAGPrompt · AppendRAGSources"]:::lib
+        MODELS["Models<br/>LLMPrompt · LLMEmbed · llmAgent · findings loop<br/>ConstructRAGPrompt · AppendRAGSources"]:::lib
         STORES["Stores<br/>LanceDBDocumentStore (docs table)<br/>WhooshFullTextIndex (fulltext_vault)"]:::lib
         INGEST["Ingest<br/>build_rag_database · ProcessDocumentsSegment"]:::lib
     end
@@ -128,7 +128,7 @@ flowchart TB
 
     CHAT --> VS & KW & SR
     AGENT --> TOOLS & VS & KW & JR
-    TOOLS --> SR
+    TOOLS --> JR & MODELS
     CHAT & AGENT --> VP
     CHAT & AGENT --> MODELS
 
@@ -136,7 +136,6 @@ flowchart TB
     VS -- words_query --> KW
     VS --> VP
     KW --> SR
-    JR --> SR
     SR --> RF
     VS -- vectors_started --> FI
     VS & KW & JR --> MODELS
@@ -542,8 +541,9 @@ SearchResult, "keep": bool, "reason": str}`, in rank order; with
 `drop_ignored=True` the segment sets only the kept `SearchResult` objects, a
 relevance filter. A model failure keeps every result with a reason starting
 `not judged`, so a pipeline degrades to the unjudged list rather than
-stopping. This is the judge behind each of the agent's searches
-([agent retrieval developer's guide](AGENT_RETRIEVAL.md)).
+stopping. The judging is talkpipe-agents' `FindingsJudge` (the judge of its
+findings loop) with the vault's chat model: this is the judge behind each of
+the agent's searches ([agent retrieval developer's guide](AGENT_RETRIEVAL.md)).
 
 ```python
 from talkpipe_vault.pipelines.judge_results import JudgeSearchResults
@@ -593,8 +593,11 @@ A judged search is also a ready-made **agent tool**. talkpipe-agents'
 the script's input, so an `llmAgent` can call the pipeline above by name
 with no Python at all. The script compiles afresh per call, so the tool is
 stateless: it judges against the text the agent passes, not a question held
-elsewhere. (The vault's own agent uses stateful tools bound to one
-question, as the agent retrieval guide explains.) The tool's script is a
+elsewhere. (The vault's own agent instead runs its searches as *finding
+tools* under talkpipe-agents' findings loop, where a session holds the
+question and what is already known; a script gets the same with
+`findingTool` and `llmAgent[judge=True]`, as the agent retrieval guide
+shows.) The tool's script is a
 string inside the script, so it uses single quotes; keep the whole thing in
 a file, which `--script` also accepts:
 
@@ -693,11 +696,11 @@ print(len(out["background"]), "chunks used; filter error:", out["filter_error"])
 ### Agent retrieval: `vaultAgentSearch` and `vaultAgentChat`
 
 An agent runs the searches as tools and stops when it judges it could
-answer. Each search is the pipeline above — `vaultSearch` or
-`vaultTextSearch` piped into `judgeSearchResults` — so its hits come back
-already kept or ignored, judged against the question and what the agent
-said the search was looking for; the agent's job is to decide what to search
-for next. `vaultAgentSearch` emits the kept chunks (`outcome.results`), a
+answer. Each search (`vaultSearch` or `vaultTextSearch`) is a finding tool
+in talkpipe-agents' findings loop, and its hits are judged by the judge
+above before the agent sees them — kept or ignored against the question and
+what the agent said the search was looking for — so the agent's job is to
+decide what to search for next. `vaultAgentSearch` emits the kept chunks (`outcome.results`), a
 note on how the run ended (`outcome.note`) and the tool-call trace;
 `vaultAgentChat` adds `outcome.response`. Both take the same parameters as
 `vaultChat` plus `tools`, `system_prompt`, `max_chunks`, `max_iterations`,
