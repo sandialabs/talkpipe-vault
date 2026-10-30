@@ -2,6 +2,10 @@
 
 ## In Development
 
+## 1.2.0 (2026-10-30)
+
+Agent retrieval rebuilt on talkpipe-agents' findings loop, which now requires talkpipe-agents 0.3.0 or later, and a web interface that stays responsive during a search or Ask. Existing vaults and folder indexes open as they are; nothing needs re-indexing.
+
 - **The Settings page no longer reports a downloaded embedding model as missing.** With huggingface_hub 2.x the Configuration status said the default model2vec model "has not been downloaded yet" even after indexing and searching with it, and the warning came back on every page load after **Re-test** had passed. huggingface_hub now treats a cached model as incomplete unless every file in its repository is there, and model2vec only downloads the files it loads. The check now asks only for those files.
 - **An empty named vault says so.** A vault with nothing indexed into it, such as the new empty vault that a mistyped `vault-server` path creates, looked like a working vault whose searches found nothing ("Use a broader phrase"). The home page and Semantic Search now say that the vault holds no indexed documents yet, and point to the Vaults & Documents page.
 - With the `eliza` chat source, the Search and Ask pages now explain the missing agent option as "eliza is a scripted responder and cannot call tools". They used to show the agent library's error, which was written for developers.
