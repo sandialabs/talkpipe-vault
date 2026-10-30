@@ -19,7 +19,7 @@
     {% if filter_note %}
     <p class="search-hint filter-note">{{ filter_note }}</p>
     {% endif %}
-    <p class="search-hint">Uses the existing Whoosh index. Supports AND, OR, NOT, and "exact phrase".</p>
+    <p class="search-hint">Uses the existing Whoosh index. Supports AND, OR, NOT, and "exact phrase". File paths are searched too; write <code>content:word</code> to search only the text.</p>
     {% if not folder_mode %}
     <form method="post" action="/keyword-search/create-index" id="create-index-form">
         <button type="submit" id="create-index-btn" class="btn-secondary">Rebuild Full-Text Index</button>

@@ -66,9 +66,12 @@ def summarize(status: dict[str, Any]) -> str:
     """One line per folder, like the interfaces' folder list."""
     root = status["root"]
     if status["role"] != "writer":
-        return f"{root}: left alone, {status['writer']} is indexing it"
+        # The writer may be idle: a vault-server or vault-tui keeps the folder
+        # up to date for as long as it has it open.
+        return f"{root}: left alone, {status['writer']} keeps its index up to date"
+    files = status["files_total"]
     line = (
-        f"{root}: {status['files_total']} files, "
+        f"{root}: {files} file{'' if files == 1 else 's'}, "
         f"{status['files_keyword']} keyword-indexed, "
         f"{status['files_embedded']} embedded"
     )

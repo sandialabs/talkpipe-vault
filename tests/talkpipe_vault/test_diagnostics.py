@@ -223,6 +223,30 @@ def test_model2vec_cache_state_reports_ready_for_cached_default():
     assert state in {"ready", "absent", "missing_package"}
 
 
+def test_model2vec_cache_state_checks_only_the_files_model2vec_loads(monkeypatch):
+    # model2vec downloads only its own files; huggingface_hub 2.x calls a
+    # cached snapshot missing any other repo file (an ONNX export) incomplete,
+    # which made a cached, working model report "not downloaded yet".
+    import huggingface_hub
+
+    calls = {}
+
+    def snapshot_download(**kwargs):
+        calls.update(kwargs)
+        if kwargs.get("allow_patterns") is None:
+            raise RuntimeError("cached snapshot is incomplete: onnx/model.onnx")
+        return "/hf/cache/snapshot"
+
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", snapshot_download)
+    state = diagnostics._model2vec_cache_state("minishlab/potion-retrieval-32M")
+
+    assert state == ("ready", "/hf/cache/snapshot")
+    assert calls["local_files_only"] is True
+    assert {"config.json", "model.safetensors", "tokenizer.json"} <= set(
+        calls["allow_patterns"]
+    )
+
+
 def test_ollama_unreachable_is_error_with_fix(monkeypatch):
     monkeypatch.setattr(
         diagnostics, "_ollama_tags", lambda url, timeout: (None, "Connection refused")

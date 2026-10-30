@@ -26,7 +26,10 @@ in app data), so `vault-server FOLDER` and `vault-tui FOLDER` open it as-is,
 and running the command again processes only what changed. It prints one
 line per folder with the file counts and the embedder, and exits non-zero
 when a file failed, the embedder was unreachable, or another vault process
-was already indexing the folder (which it then leaves alone).
+holds the folder's index (which it then leaves alone). A `vault-server` or
+`vault-tui` with the folder open holds it for as long as it runs and keeps
+it up to date, so a scheduled `vault-index` next to one exits non-zero with
+nothing left to do.
 
 - The embedder, chunk settings and index location saved on the Settings
   page are the defaults; `--embedding-source` / `--embedding-model` override
@@ -118,7 +121,7 @@ reference. The module form is `python -m talkpipe_vault.tui`.
   closed folder, or one searched before, opens it.
 - **Opening.** A folder of documents opens in folder mode; `--as-vault`
   opens it as a named vault. Opening a named vault loads the embedding model
-  (a first run downloads it, about 250 MB); the header reads "opening…"
+  (a first run downloads it, about 130 MB); the header reads "opening…"
   until it is ready. `Enter` in either path field on the Vault tab runs
   **Index documents** (it opens the vault when only the vault path is
   filled).

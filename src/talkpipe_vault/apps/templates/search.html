@@ -61,11 +61,18 @@
 ] %}
 {% else %}
 {% set results_note = "Ranked by vector similarity: the closest " ~ search_result_limit ~ " chunks are always returned, so the last few can be weak matches — on a small vault, every chunk." %}
+{% if vault_path and not folder_mode and not shingled_chunks_count %}
+{% set no_results_hint = "This vault holds no indexed documents yet, so there is nothing to search." %}
+{% set no_results_suggestions = [
+    "Add a folder of documents, or index documents into this vault, on the Vaults & Documents page.",
+] %}
+{% else %}
 {% set no_results_hint = "Semantic search works best with a complete question or descriptive phrase." %}
 {% set no_results_suggestions = [
     "Use a broader phrase.",
     "Refresh the vault if files were just indexed.",
 ] %}
+{% endif %}
 {% endif %}
 {% set score_help = "Higher scores are more similar to your query." %}
 {% include "_search_results.html" %}

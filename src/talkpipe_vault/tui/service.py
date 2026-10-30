@@ -49,7 +49,7 @@ from talkpipe_vault.pipelines.config import (
 
 # The default model2vec model unpacks to roughly this much on disk; the figure
 # only sizes the first-run wait in the startup message.
-DEFAULT_EMBEDDING_DOWNLOAD_NOTE = "about 250 MB for the default model"
+DEFAULT_EMBEDDING_DOWNLOAD_NOTE = "about 130 MB for the default model"
 
 
 def _newest_mtime(folder: Path) -> float | None:

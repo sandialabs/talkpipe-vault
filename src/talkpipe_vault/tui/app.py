@@ -67,7 +67,8 @@ SEARCH_HINT = (
 # The Keywords tab's hint before its first search.
 KEYWORDS_HINT = (
     "Enter keywords above (F4 focuses this tab): exact words, AND, OR, NOT "
-    'and "quoted phrases". For meaning rather than words use Search (F3).'
+    'and "quoted phrases". File paths are searched too; content:word '
+    "searches only the text. For meaning rather than words use Search (F3)."
 )
 KEYWORDS_BUILD_HINT = (
     "Keyword search needs a full-text index; build one with the button above."

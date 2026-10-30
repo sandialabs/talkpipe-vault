@@ -527,6 +527,22 @@ def test_refresh_agent_pipelines_clears_both_on_a_bad_model(monkeypatch):
         assert "no such model" in text
 
 
+def test_refresh_agent_pipelines_explains_eliza_plainly(monkeypatch):
+    """eliza cannot run an agent; the pages say why in their own words, not
+    with the agent library's advice to developers (pass source=, ...)."""
+
+    def _boom(**_kwargs):
+        raise ValueError("unknown agent model source 'eliza'; pass source=")
+
+    monkeypatch.setattr(agent_search, "AgentVaultChat", _boom)
+    monkeypatch.setattr(app_state._state, "chat_source", "eliza")
+
+    pipelines._refresh_agent_pipelines("/tmp/vault")
+
+    assert app_state._state.agent_chat_pipeline is None
+    assert app_state._state.agent_unavailable_reason == pipelines.ELIZA_AGENT_REASON
+
+
 def test_health_identifies_the_app_without_a_vault():
     """A second launch (or a desktop launcher) checks this to tell a running
     vault from anything else on the port; it must work before any vault is
@@ -921,6 +937,25 @@ def test_header_shows_chunk_count_without_full_text_index(monkeypatch):
     assert '<span class="vault-stat-value">2</span>' in response.text
     assert "Full-Text Index:" not in response.text
     assert "Shingled Chunks:" not in response.text
+
+
+@pytest.mark.parametrize(("chunks", "says_empty"), [(0, True), (2, False)])
+def test_home_and_search_say_when_the_named_vault_is_empty(
+    monkeypatch, chunks, says_empty
+):
+    """A vault with no chunks (e.g. one a mistyped path created) says so,
+    rather than looking like a working vault whose searches find nothing."""
+    monkeypatch.setattr(query, "_refresh_pipelines", lambda force=False: None)
+    monkeypatch.setattr(query, "_update_document_counts", lambda vault_path: None)
+    app_state._state.shingled_chunks_count = chunks
+    app_state._state.search_pipeline = lambda _query: []
+    client = TestClient(query.app)
+
+    empty = "holds no indexed documents yet"
+    assert (empty in client.get("/").text) is says_empty
+    searched = client.post("/search", data={"query": "hello"}).text
+    assert (empty in searched) is says_empty
+    assert ("Use a broader phrase" in searched) is not says_empty
 
 
 def test_header_uses_existing_svg_logo_and_refresh_control():
