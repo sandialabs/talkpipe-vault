@@ -25,10 +25,9 @@ using the tools elsewhere.
 
 **Every search is judged inside the loop.** After a search tool returns its
 hits, and before the agent sees them, the judge (``judgeSearchResults``'
-``FindingsJudge``) decides on every hit — kept because it helps answer the
-question (or supplies what the agent said the search was ``looking_for``)
-and adds to what is already known, or ignored — in one batched model call
-that costs the agent no turn. Deciding cannot be skipped, and the judge
+``FindingsJudge``) decides on every hit — kept, with a relevance grade,
+unless it is off the question or repeats a kept chunk nearly word for word —
+in one batched model call that costs the agent no turn. Deciding cannot be skipped, and the judge
 checks hits against the user's question, so an agent that drifts off it
 (reading a word in the question as some other thing with the same name)
 keeps nothing rather than the wrong thing. The agent's job is what to search
@@ -150,7 +149,7 @@ WEAK_TOOL_CALLING_HINT = (
 @dataclass
 class AgentSearchOutcome:
     """What an agent-driven search produced: the kept chunks (as
-    SearchResult, in keep order), a one-line note describing how the run
+    SearchResult, best first), a one-line note describing how the run
     ended, and the tool-call trace."""
 
     results: list[SearchResult]
@@ -173,8 +172,9 @@ class AgentChatOutcome(AgentSearchOutcome):
 
 
 def kept_results(session: FindingsSession) -> list[SearchResult]:
-    """The chunks a run kept, as SearchResult, in keep order: each finding's
-    original hit (a document part read whole is a hit of its own)."""
+    """The chunks a run kept, as SearchResult, best first (by the judge's
+    relevance grade, ties in keep order): each finding's original hit (a
+    document part read whole is a hit of its own)."""
     return [finding.to_search_result() for finding in session.kept]
 
 
@@ -243,8 +243,8 @@ class AgentVaultSearch(AbstractFieldSegment):
     kept would answer the question well and says so, or until the chunk
     ceiling or the iteration cap stops it.
 
-    Emits an AgentSearchOutcome: the kept chunks as SearchResult objects (in
-    keep order), a note describing how the run ended, and the trace of tool
+    Emits an AgentSearchOutcome: the kept chunks as SearchResult objects
+    (best first), a note describing how the run ended, and the trace of tool
     calls that was also reported through the progress callable.
     """
 
@@ -543,7 +543,7 @@ class AgentVaultChat(AgentVaultSearch):
     appended. When nothing was kept, no prompt is sent.
 
     Takes the same parameters as vaultAgentSearch. Emits an AgentChatOutcome:
-    the answer, the kept chunks as SearchResult objects (in keep order), a
+    the answer, the kept chunks as SearchResult objects (best first), a
     note describing how the selection ended, and the trace of tool calls that
     was also reported through the progress callable.
     """

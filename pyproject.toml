@@ -41,8 +41,9 @@ dependencies = [
     # registry). 0.1.1 retries a tool call the model server could not parse
     # instead of ending the agent run; 0.2.0 adds the findings loop (finding
     # tools, FindingsSession, the JudgeFindings hook) the agent tools are
-    # built on.
-    "talkpipe-agents>=0.2.0",
+    # built on; 0.3.0's judge keeps by default and ranks the kept list,
+    # displacing the weakest finding at the cap.
+    "talkpipe-agents>=0.3.0",
     "fastapi[standard]>=0.109.1",  # security floor
     "uvicorn>=0.24.0",
     "jinja2>=3.1.6",  # security floor

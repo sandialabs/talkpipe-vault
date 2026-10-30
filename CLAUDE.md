@@ -19,7 +19,7 @@ built on the TalkPipe framework and demonstrates real-world usage of its composa
 - **Module**: `talkpipe_vault`
 - **Python**: 3.11.4+ required
 - **TalkPipe**: >=1.2.0 (`talkpipe[all]`; ships `py.typed`, so mypy checks against its real signatures)
-- **talkpipe-agents**: >=0.2.0 (from PyPI) — the `llmAgent`/Strands layer and the findings loop
+- **talkpipe-agents**: >=0.3.0 (from PyPI) — the `llmAgent`/Strands layer and the findings loop
   behind agent search. No `py.typed`, so it is in the mypy `ignore_missing_imports` list.
 - **Status**: Alpha (active development)
 - **License**: Apache 2.0
@@ -336,8 +336,10 @@ ignored one, "already known", the status and the countdown). Deciding costs the 
 and cannot be skipped, so the agent's job is what to search for — `vector_search(query,
 looking_for)` / `keyword_search(query, looking_for)` / `read_document(finding_id, start,
 looking_for)` — and `RETRIEVAL_SYSTEM_PROMPT` says so (and to read the question's terms in
-their ordinary sense). Ids are the session's `f1…`; hits already decided are skipped, past
-`max_chunks` relevant ones are passed over, and a judge failure keeps hits as `not judged`.
+their ordinary sense). Ids are the session's `f1…`; hits already decided are skipped, the
+judge keeps by default and grades each hit 1–5, the kept list is ranked by grade (at
+`max_chunks` a better hit displaces the weakest kept one, the rest are passed over), and a
+judge failure keeps hits as `not judged`.
 `JudgeSearchResults` keeps its name, fields and output (`{"result", "keep", "reason"}` dicts,
 or kept `SearchResult`s with `drop_ignored`) but judges through its `findings_judge` (a
 `FindingsJudge` whose `generate=` is a talkpipe `LLMPrompt`, so any talkpipe prompt source
@@ -419,7 +421,7 @@ the reason), filled the chunk maximum, hit the iteration cap, found nothing rele
 (calls ran, every finding was judged, none kept: no hint), or stopped without saying it had
 enough (plus `WEAK_TOOL_CALLING_HINT`) — in chunks, searches (`session.calls`: finding-tool
 calls, `read_document` included) and iterations; an error gets its own note. The outcome is an
-`AgentSearchOutcome(results, note, trace)`: kept chunks as `SearchResult` in keep order
+`AgentSearchOutcome(results, note, trace)`: kept chunks as `SearchResult` best first
 (`kept_results`: each finding's `to_search_result()`), the note, and the trace, which is also
 printed (`progress`, stdout by default); a keyword-only `error` holds the exception text when
 the run failed (`""` otherwise). The agent never builds the full-text index — when a vault has

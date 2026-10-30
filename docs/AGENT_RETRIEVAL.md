@@ -40,7 +40,7 @@ ask = AgentVaultChat(
 outcome = ask("How did the treasury handle inflation in the 1970s?")
 
 outcome.response   # the answer, with a "Sources:" list appended
-outcome.results    # the chunks it was built from, as talkpipe SearchResult, in keep order
+outcome.results    # the chunks it was built from, as talkpipe SearchResult, best first
 outcome.note       # one line: how the run ended (see "Reading the outcome")
 outcome.trace      # every tool call and verdict, as printed to the console
 ```
@@ -115,14 +115,16 @@ sees the result, and the judge
 decides on all of them in one batched model call, so it costs the agent no
 turn and cannot be skipped. It sees the user's question, what the agent said
 this search is `looking_for`, and what is already known — one line per kept
-finding, its title and what it contributes — and keeps a hit that helps
-answer the question even in part, or that supplies what the search was
-looking for, provided it adds something to what is known. It ignores a hit
-that only shares words with the question, a near-duplicate, or something
-that reads a word in the question as another thing with the same name. When
-unsure, it keeps. Hits already decided on are skipped, not judged again;
-`max_chunks` is respected in rank order, and a hit judged worth keeping once
-the maximum is full is passed over and the agent told.
+finding, its title and what it contributes — and keeps a hit by default,
+grading its relevance from 1 to 5. It ignores only a hit that is off the
+question (it only shares words with it, or reads a word in it as another
+thing with the same name) or that repeats a kept finding nearly word for
+word, and never because another hit of the same search covers similar
+ground. Hits already decided on are skipped, not judged again. The kept list
+is ranked by grade, so `max_chunks` holds the best chunks rather than the
+first: once it is full, a hit graded above the weakest kept one displaces it
+(ignored as `displaced by <id>`), and one that is not is passed over; the
+agent is told either way.
 
 So the reply the model reads is the session's: the kept findings in full,
 one line per ignored finding with the reason, the current "already known"
@@ -330,7 +332,7 @@ agent.as_function(single_in=True, single_out=True)(
     "relevant results. Call enough_information once they would answer it well."
 )
 
-[f.to_search_result() for f in session.kept]  # the kept hits, in keep order
+[f.to_search_result() for f in session.kept]  # the kept hits, best first
 session.enough  # True if the agent judged it had enough
 session.enough_reason  # its reason
 session.trace  # everything passed to `tell`
