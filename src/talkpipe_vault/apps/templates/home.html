@@ -6,6 +6,9 @@
 <div class="welcome">
     <h2>Explore Your Vault</h2>
     <p>Search indexed chunks, find exact phrases, or ask a focused question grounded in your documents.</p>
+    {% if vault_path and not folder_mode and not shingled_chunks_count %}
+    <p class="empty-vault-note" role="status">This vault holds no indexed documents yet, so there is nothing to search. Add a folder of documents, or index documents into this vault, on the <a href="/documents">Vaults &amp; Documents</a> page.</p>
+    {% endif %}
 
     <div class="mode-cards">
         <a href="/search" class="mode-card">

@@ -588,7 +588,7 @@ def test_opening_note_mentions_the_download_when_the_model_is_not_cached(
     )
     note = service.opening_note("/tmp/v")
     assert "downloaded from Hugging Face" in note
-    assert "250 MB" in note
+    assert "130 MB" in note
     monkeypatch.setattr(
         diagnostics, "_model2vec_cache_state", lambda _model: ("ready", "/cache")
     )

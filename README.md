@@ -71,7 +71,7 @@ startup banner says so; if you meant a folder of documents, check the
 spelling.
 
 The first index downloads the default embedding model from Hugging Face
-(about 250 MB, cached afterward). Search and indexing need nothing more.
+(about 130 MB, cached afterward). Search and indexing need nothing more.
 **Ask** needs a chat provider: pick it on the **Settings** page and enter
 its server URL or API key there. Until one is reachable, Ask shows a
 connection error that says how to fix it.
@@ -164,6 +164,9 @@ when you index more documents; rebuild it there when you do.
   do well are in [Agent search](docs/ADVANCED.md#agent-search).
 - **Keyword Search**: boolean and phrase queries. Matching is on exact word
   tokens (`apple` does not match `apples`); use semantic search for meaning.
+  A file's full path is searched along with its text, so a word in the path
+  to your folder (your user name, `Documents`, a year) matches every file;
+  write `content:word` to search the text only.
 - **Ask**: a single question, answered with citations you can open and copy.
   **Boost retrieval with keyword search** merges keyword matches into the
   context; **Use Agent** lets the agent gather the context instead, and

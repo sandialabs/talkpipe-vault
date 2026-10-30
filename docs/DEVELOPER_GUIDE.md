@@ -34,7 +34,11 @@ Two conventions hold throughout:
   ([Advanced Usage: Model configuration](ADVANCED.md#model-configuration)).
   Set `TALKPIPE_OLLAMA_SERVER_URL`, `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`
   before running anything that needs a chat model. Leave `chat_source` and
-  `chat_model` out to use the configured defaults.
+  `chat_model` out to use the configured defaults. The examples name
+  `chat_source="ollama", chat_model="gpt-oss:latest"`; any provider works in
+  their place, e.g. `chat_source="openai", chat_model="gpt-4o-mini"` (with
+  `OPENAI_BASE_URL` for an OpenAI-compatible server such as vLLM or LM
+  Studio) or `chat_source="anthropic", chat_model="claude-sonnet-4-5"`.
 - **A folder stands for its index.** Wherever a component takes
   `vault_path`, you may give the documents folder itself (its index lives in
   `<folder>/.tpvault`) or a named vault's path, or a list of either.
@@ -184,9 +188,11 @@ How to read it when building something of your own:
 
 ### Shapes you will see
 
-- **A semantic hit** is a talkpipe `SearchResult`: `hit.score` (similarity),
-  `hit.doc_id` (the chunk id), `hit.document` (a dict with `content`,
-  `source`, `title` and, from a folder, `folder`).
+- **A semantic hit** is a talkpipe `SearchResult`: `hit.score`, `hit.doc_id`
+  (the chunk id), `hit.document` (a dict with `content`, `source`, `title`
+  and, from a folder, `folder`). The score is one minus the vector distance,
+  floored at 0; with the default embedder all but the closest hit or two
+  score 0, so go by rank, not score.
 - **A keyword hit** is a dict: `{"doc_id", "score", "document": {"content",
   "path", "filename", "folder"}}`, with a Whoosh relevance score.
   `mergeSearchResults` normalises both shapes to `SearchResult` and, with
@@ -233,8 +239,9 @@ chatterlang_script --script '
 - `field=` reads the folder path from a field of a dict item and `set_as=`
   puts the status on the item, so `indexFolder` fits in the middle of a
   pipeline.
-- When another process is already indexing the folder, `indexFolder` leaves
-  it alone and the status says `"role": "reader"`.
+- When another process holds the folder's index (indexing it, or a
+  `vault-server` keeping it up to date), `indexFolder` leaves it alone and
+  the status says `"role": "reader"`.
 - The index is kept in `<folder>/.tpvault`, or in app data for a read-only,
   network or synced folder ([Advanced Usage: Folder mode](ADVANCED.md#folder-mode)).
 - The `vault-index` command is this segment as a console script: it indexes

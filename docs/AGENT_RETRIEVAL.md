@@ -39,10 +39,10 @@ ask = AgentVaultChat(
 ).as_function(single_in=True, single_out=True)
 outcome = ask("How did the treasury handle inflation in the 1970s?")
 
-outcome.response   # the answer, with a "Sources:" list appended
-outcome.results    # the chunks it was built from, as talkpipe SearchResult, best first
-outcome.note       # one line: how the run ended (see "Reading the outcome")
-outcome.trace      # every tool call and verdict, as printed to the console
+print(outcome.response)  # the answer, with a "Sources:" list appended
+print(outcome.results)  # the chunks it was built from, as talkpipe SearchResult, best first
+print(outcome.note)  # one line: how the run ended (see "Reading the outcome")
+print(outcome.trace)  # every tool call and verdict, as printed to the console
 ```
 
 In ChatterLang, as a segment like any other — run it with TalkPipe's
@@ -50,7 +50,7 @@ In ChatterLang, as a segment like any other — run it with TalkPipe's
 
 ```
 INPUT FROM echo[data="How did the treasury handle inflation in the 1970s?"]
-| vaultAgentChat[vault_path="~/notes-vault", chat_source="ollama", chat_model="gpt-oss:latest"]
+| vaultAgentChat[vault_path="~/notes", chat_source="ollama", chat_model="gpt-oss:latest"]
 | extractProperty[property="response"]
 | print
 ```
@@ -225,7 +225,7 @@ Both segments take `tools` and `system_prompt`:
 
 ```python
 AgentVaultSearch(
-    vault_path="~/notes-vault",
+    vault_path="~/notes",
     tools="vector_search,enough_information,think",
     system_prompt=MY_PROMPT,
 )
@@ -332,10 +332,10 @@ agent.as_function(single_in=True, single_out=True)(
     "relevant results. Call enough_information once they would answer it well."
 )
 
-[f.to_search_result() for f in session.kept]  # the kept hits, best first
-session.enough  # True if the agent judged it had enough
-session.enough_reason  # its reason
-session.trace  # everything passed to `tell`
+print([f.to_search_result() for f in session.kept])  # the kept hits, best first
+print(session.enough)  # True if the agent judged it had enough
+print(session.enough_reason)  # its reason
+print(session.trace)  # everything passed to `tell`
 ```
 
 What the tools need from the backend (any of it may be `None`; the tool that
@@ -482,7 +482,7 @@ from talkpipe_vault.pipelines.agent_search import RETRIEVAL_SYSTEM_PROMPT, Agent
 import my_vault_tools  # registers glossary
 
 search = AgentVaultSearch(
-    vault_path="~/notes-vault",
+    vault_path="~/notes",
     chat_model="gpt-oss:latest",
     tools="vector_search,keyword_search,extract_keywords,read_document,"
     "enough_information,glossary",

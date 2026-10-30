@@ -30,6 +30,7 @@ from talkpipe_vault.pipelines import agent_search, folder_index, retrieval_filte
 from talkpipe_vault.pipelines.config import (
     DEFAULT_VECTOR_TABLE_NAME,
     ensure_supported_vault_layout,
+    get_chat_source,
     get_vector_db_path,
 )
 from talkpipe_vault.pipelines.search_results import (
@@ -40,6 +41,10 @@ from talkpipe_vault.pipelines.vault_chat import VaultChat
 from talkpipe_vault.pipelines.vault_search import VaultSearch, VaultTextSearch
 
 logger = logging.getLogger(__name__)
+
+# Shown in place of the agent checkboxes for the eliza chat source, instead of
+# the agent library's error, which is written for someone calling it in code.
+ELIZA_AGENT_REASON = "eliza is a scripted responder and cannot call tools"
 
 # Where the agent's trace lines go besides stdout, for the run that set it:
 # the Ask page shows its run's latest step while it works (issue #107). A
@@ -236,7 +241,11 @@ def _refresh_agent_pipelines(vault_path: str | list[str]) -> None:
         _state.agent_chat_pipeline = None
         _state.agent_search_extra_pipeline = None
         _state.agent_chat_extra_pipeline = None
-        _state.agent_unavailable_reason = str(exc) or type(exc).__name__
+        _state.agent_unavailable_reason = (
+            ELIZA_AGENT_REASON
+            if (_state.chat_source or get_chat_source()) == "eliza"
+            else str(exc) or type(exc).__name__
+        )
         return
     _state.agent_unavailable_reason = ""
     _state.agent_search_pipeline = segment.select_chunks

@@ -765,6 +765,19 @@ def _is_local_model_dir(model: str) -> bool:
         return False
 
 
+# The repo files model2vec loads a model from, in every folder layout it reads
+# (model2vec.persistence.datamodels.FOLDER_LAYOUTS). From 0.10 it downloads
+# only these; earlier releases download the whole repo, which includes them.
+MODEL2VEC_FILES = [
+    "config.json",
+    "config_sentence_transformers.json",
+    "model.safetensors",
+    "tokenizer.json",
+    "0_StaticEmbedding/model.safetensors",
+    "0_StaticEmbedding/tokenizer.json",
+]
+
+
 def _model2vec_cache_state(model: str) -> tuple[str, str | None]:
     """Return the local availability of a model2vec model without downloading.
 
@@ -786,11 +799,15 @@ def _model2vec_cache_state(model: str) -> tuple[str, str | None]:
     try:
         # local_files_only forces an offline lookup: it returns the snapshot
         # path if fully cached and raises otherwise — never hits the network.
+        # Only model2vec's own files count: it downloads just those, and
+        # huggingface_hub 2.x calls a snapshot missing any other repo file
+        # (an ONNX export, sentence-transformers metadata) incomplete.
         path = huggingface_hub.snapshot_download(
             repo_id=model,
             revision=revision,
             cache_dir=str(cache_dir) if cache_dir else None,
             local_files_only=True,
+            allow_patterns=MODEL2VEC_FILES,
         )
         return "ready", path
     except Exception:

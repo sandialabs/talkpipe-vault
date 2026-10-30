@@ -98,3 +98,38 @@ def test_build_script_refuses_a_quote_in_a_value():
             overlap=None,
             vectors=True,
         )
+
+
+def _status(**overrides):
+    status = {
+        "root": "/docs",
+        "role": "writer",
+        "writer": "this process",
+        "files_total": 1,
+        "files_keyword": 1,
+        "files_embedded": 1,
+        "files_error": 0,
+        "embedding": "model2vec/m",
+        "error": "",
+        "vector_error": "",
+    }
+    status.update(overrides)
+    return status
+
+
+def test_summary_counts_one_file_in_the_singular():
+    assert vault_index.summarize(_status()) == (
+        "/docs: 1 file, 1 keyword-indexed, 1 embedded (model2vec/m)"
+    )
+
+
+def test_summary_of_a_folder_another_process_keeps_up_to_date():
+    # The other process may be idle (a vault-server watching a finished
+    # folder), so the line must not claim it is indexing.
+    line = vault_index.summarize(
+        _status(role="reader", writer="another vault process (pid 7 on host)")
+    )
+    assert line == (
+        "/docs: left alone, another vault process (pid 7 on host) keeps its "
+        "index up to date"
+    )
