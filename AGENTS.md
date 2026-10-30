@@ -3,10 +3,6 @@
 - `uv sync --extra dev` builds it from the committed `uv.lock`. CI installs with pip and
   resolves fresh on purpose; the lock is a convenience, not a security control — fix a
   vulnerable dependency by raising its floor in `pyproject.toml`, then `uv lock`.
-- The agent search needs talkpipe-agents' findings loop, which is not on PyPI yet:
-  `[tool.uv.sources]` in `pyproject.toml` resolves it from the sibling `../talkpipe-agents`
-  checkout, and CI's fresh pip resolve fails until it is published. Remove that table (and set
-  the floor to the release) once it is.
 - If the .venv environment doesn't exist and you need to run code or tests, abort and ask the user to create the environment.
 
 ## Project Overview

@@ -19,11 +19,8 @@ built on the TalkPipe framework and demonstrates real-world usage of its composa
 - **Module**: `talkpipe_vault`
 - **Python**: 3.11.4+ required
 - **TalkPipe**: >=1.2.0 (`talkpipe[all]`; ships `py.typed`, so mypy checks against its real signatures)
-- **talkpipe-agents**: >0.1.1 — the `llmAgent`/Strands layer and the findings loop behind agent
-  search. The findings loop is not on PyPI yet: `[tool.uv.sources]` resolves it from the sibling
-  `../talkpipe-agents` checkout for `uv sync`, and a fresh pip resolve (CI) fails until it is
-  published; then remove that table and set the floor to the release. No `py.typed`, so it is in
-  the mypy `ignore_missing_imports` list.
+- **talkpipe-agents**: >=0.2.0 (from PyPI) — the `llmAgent`/Strands layer and the findings loop
+  behind agent search. No `py.typed`, so it is in the mypy `ignore_missing_imports` list.
 - **Status**: Alpha (active development)
 - **License**: Apache 2.0
 

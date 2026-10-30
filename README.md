@@ -296,12 +296,6 @@ Two consequences worth remembering:
   nothing and fails only when `uv.lock` and `pyproject.toml` have drifted
   apart. If you change dependencies, run `uv lock` and commit the result.
 
-One temporary exception: the agent search is built on talkpipe-agents'
-findings loop, which has no PyPI release yet. Until it does, `pyproject.toml`
-points uv at a `talkpipe-agents` checkout next to this one
-(`../talkpipe-agents`) under `[tool.uv.sources]`, and a fresh pip resolve
-cannot find it — remove that table once the release is out.
-
 ## Releasing
 
 The release process — tag conventions, the manual application test that

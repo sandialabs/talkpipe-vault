@@ -39,11 +39,10 @@ dependencies = [
     "talkpipe[all]>=1.2.0",
     # Agent-driven result selection on the Search page (llmAgent + tool
     # registry). 0.1.1 retries a tool call the model server could not parse
-    # instead of ending the agent run; the release after it adds the findings
-    # loop (finding tools, FindingsSession, the JudgeFindings hook) the agent
-    # tools are built on. Not on PyPI yet: [tool.uv.sources] below resolves it
-    # from the sibling checkout until it is.
-    "talkpipe-agents>0.1.1",
+    # instead of ending the agent run; 0.2.0 adds the findings loop (finding
+    # tools, FindingsSession, the JudgeFindings hook) the agent tools are
+    # built on.
+    "talkpipe-agents>=0.2.0",
     "fastapi[standard]>=0.109.1",  # security floor
     "uvicorn>=0.24.0",
     "jinja2>=3.1.6",  # security floor
@@ -195,12 +194,6 @@ known-first-party = ["talkpipe_vault"]
 
 [tool.ruff.format]
 docstring-code-format = true
-
-# talkpipe-agents' findings loop is not released yet; until it is, the
-# development lock resolves it from the workspace's sibling checkout. Remove
-# this once it is published, so the lock resolves the way `pip install` does.
-[tool.uv.sources]
-talkpipe-agents = { path = "../talkpipe-agents", editable = true }
 
 [tool.mypy]
 # 3.12+ so mypy can parse modern dependency stubs (e.g. numpy uses `type`

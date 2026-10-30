@@ -4520,7 +4520,8 @@ all = [
 
 [[package]]
 name = "talkpipe-agents"
-source = { editable = "../talkpipe-agents" }
+version = "0.2.0"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
     { name = "certifi" },
@@ -4533,35 +4534,10 @@ dependencies = [
     { name = "urllib3" },
     { name = "virtualenv" },
 ]
-
-[package.metadata]
-requires-dist = [
-    { name = "aiohttp", specifier = ">=3.14.4" },
-    { name = "authlib", marker = "extra == 'dev'", specifier = ">=1.6.12,<1.10" },
-    { name = "authlib", marker = "extra == 'security'", specifier = ">=1.6.12,<1.10" },
-    { name = "bandit", marker = "extra == 'dev'", specifier = ">=1.7.0" },
-    { name = "bandit", marker = "extra == 'security'", specifier = ">=1.7.0" },
-    { name = "certifi", specifier = ">=2026.10.19" },
-    { name = "litellm", specifier = ">=1.95.1" },
-    { name = "mcp", specifier = ">=1.30.0" },
-    { name = "multidict", specifier = ">6.9.1" },
-    { name = "mypy", marker = "extra == 'dev'", specifier = ">=2.3,<3" },
-    { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=4.0" },
-    { name = "pyjwt", specifier = ">=2.15.0" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
-    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0.0" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.17.0,<0.18" },
-    { name = "safety", marker = "extra == 'dev'", specifier = ">=2.3.0" },
-    { name = "safety", marker = "extra == 'security'", specifier = ">=2.3.0" },
-    { name = "strands-agents", extras = ["anthropic"], marker = "extra == 'anthropic'" },
-    { name = "strands-agents", extras = ["litellm"], marker = "extra == 'litellm'" },
-    { name = "strands-agents", extras = ["ollama"], specifier = ">=1.50" },
-    { name = "strands-agents", extras = ["openai"], marker = "extra == 'openai'" },
-    { name = "talkpipe", specifier = ">=1.1.0" },
-    { name = "urllib3", specifier = ">=2.8.0" },
-    { name = "virtualenv", specifier = ">=21.14.7" },
+sdist = { url = "https://files.pythonhosted.org/packages/ce/15/00cc126bc2e2693aae0b7c66d08033ae795c58bdf8ad8d44d7c997fd2be8/talkpipe_agents-0.2.0.tar.gz", hash = "sha256:4004fe426359c5067aa09cd9195b0861c03b9c96063bcf9496ed2130e049b17c", size = 143336, upload-time = "2026-10-30T03:09:12.459Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/0c/e2/b8f2b029f16c8c6d9788efb27599b02cbab27587b05184a4b6a8aa928ba4/talkpipe_agents-0.2.0-py3-none-any.whl", hash = "sha256:eedc9447526c04fe75608e323d5e9820dfd949da551969ca5d53075b991947b1", size = 69268, upload-time = "2026-10-30T03:09:11.399Z" },
 ]
-provides-extras = ["dev", "security", "openai", "anthropic", "litellm"]
 
 [[package]]
 name = "talkpipe-vault"
@@ -4623,7 +4599,7 @@ requires-dist = [
     { name = "pytest-mock", marker = "extra == 'test'", specifier = ">=3.10.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.17.0,<0.18" },
     { name = "talkpipe", extras = ["all"], specifier = ">=1.2.0" },
-    { name = "talkpipe-agents", editable = "../talkpipe-agents" },
+    { name = "talkpipe-agents", specifier = ">=0.2.0" },
     { name = "textual", specifier = ">=8.0.0" },
     { name = "urllib3", specifier = ">=2.8.0" },
     { name = "uvicorn", specifier = ">=0.24.0" },

@@ -596,7 +596,10 @@ class TestJudgedSearches:
         )
         out = _replies(scripted_model)[1]
         assert out.startswith("1 new finding(s) from read_document: kept 1, ignored 0.")
-        assert "[f2] guide.md, characters 0-19 of 19\nThe whole document." in out
+        assert (
+            "[f2] guide.md, characters 0-19 of 19 (source: /d/guide.md)\n"
+            "The whole document." in out
+        )
         assert "Kept 2 finding(s), at most 5." in out
         assert "keep_finding" not in out
         assert [r.doc_id for r in outcome.results] == ["row1", "/d/guide.md"]
@@ -693,7 +696,10 @@ class TestReadDocument:
         )
         out = _replies(scripted_model)[1]
         assert read == ["/d/guide.md"]
-        assert "[f2] guide.md, characters 0-19 of 19\nThe whole document." in out
+        assert (
+            "[f2] guide.md, characters 0-19 of 19 (source: /d/guide.md)\n"
+            "The whole document." in out
+        )
         assert "keep_finding or ignore_finding" in out
         assert any("read_document" in line for line in segment.told)
 

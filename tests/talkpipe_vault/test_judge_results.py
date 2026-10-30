@@ -133,8 +133,9 @@ class TestJudge:
         fake_judge["decide"] = lambda _prompt: "I cannot decide."
         judged = _segment().judge(HITS, "q")
         assert [j["keep"] for j in judged] == [True, True, True]
+        # 0.2.0 quotes the reply after the colon.
         assert all(
-            j["reason"] == "not judged: the judge's reply held no decisions"
+            j["reason"].startswith("not judged: the judge's reply held no decisions")
             for j in judged
         )
 
