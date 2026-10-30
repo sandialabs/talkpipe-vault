@@ -11,6 +11,7 @@ Provides the following via web interface:
 """
 
 import errno
+import itertools
 import json
 import logging
 import os
@@ -195,6 +196,9 @@ STATIC_DIR = Path(__file__).parent / "static"
 app = FastAPI(title="Talkpipe Vault", description="Search and chat with your vault")
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+# Numbers the Ask page's questions; next() on a count is atomic, so two
+# questions answered in parallel threads never share one.
+_ask_ids = itertools.count(1)
 
 
 def _template_context(
@@ -1224,8 +1228,11 @@ async def search_page(
     return _render_page(request, state, "search.html", query="", results=None)
 
 
+# The search and Ask posts are plain functions, which FastAPI runs in its
+# thread pool: as coroutines they held the event loop for the whole search,
+# so during an agent run every other page hung (issue #106).
 @app.post("/search", response_class=HTMLResponse)
-async def search_results(
+def search_results(
     request: Request,
     query: Annotated[str, Form()] = "",
     apply_filter: Annotated[str, Form()] = "",
@@ -1324,7 +1331,7 @@ async def keyword_search_page(
 
 
 @app.post("/keyword-search", response_class=HTMLResponse)
-async def keyword_search_results(
+def keyword_search_results(
     request: Request,
     query: Annotated[str, Form()] = "",
     apply_filter: Annotated[str, Form()] = "",
@@ -1559,14 +1566,50 @@ async def open_file(
     return _document_file_response(source_path)
 
 
+def _ask_scope(state: AppState) -> tuple[str, tuple[str, ...]]:
+    """What an Ask question is asked of: the open vault and folders."""
+    return state.vault_path, tuple(state.folders)
+
+
+def _remembered_ask(state: AppState) -> dict[str, Any] | None:
+    """The Ask page's running question, else its last answer, for this vault.
+
+    Either is the chat.html context it is shown with; a question asked of
+    another vault or set of folders is not shown.
+    """
+    scope = _ask_scope(state)
+    for ask in (state.ask_running, state.last_ask):
+        if ask and ask["scope"] == scope:
+            return {key: value for key, value in ask.items() if key != "scope"}
+    return None
+
+
 @app.get("/chat", response_class=HTMLResponse)
 async def chat_page(request: Request, state: AppState = Depends(get_state)) -> Response:
-    """Render the Ask interface page."""
-    return _render_page(request, state, "chat.html", messages=[], citations=[])
+    """Render the Ask interface page.
+
+    Reopened (or reloaded) while a question is being answered, the page
+    waits for that answer; afterwards it shows the last one, so leaving
+    the page during a long agent run loses nothing (issue #106).
+    """
+    remembered = _remembered_ask(state) or {"messages": [], "citations": []}
+    return _render_page(request, state, "chat.html", **remembered)
+
+
+@app.get("/api/ask-status")
+async def ask_status(state: AppState = Depends(get_state)) -> JSONResponse:
+    """Whether an Ask question is still being answered for this vault.
+
+    Polled by an Ask page reopened during the run; it reloads when this
+    turns false, and shows the answer.
+    """
+    remembered = _remembered_ask(state)
+    running = bool(remembered and remembered.get("ask_running"))
+    return JSONResponse(content={"running": running})
 
 
 @app.post("/chat", response_class=HTMLResponse)
-async def chat_response(
+def chat_response(
     request: Request,
     message: Annotated[str, Form()] = "",
     use_keyword_search: Annotated[str, Form()] = "",
@@ -1588,8 +1631,49 @@ async def chat_response(
         - use_extra_effort: str - If truthy (with use_agent), let the agent
           take EXTRA_EFFORT_ITERATION_FACTOR times as many iterations
 
-    Returns HTML page with the question and AI-generated answer.
+    Returns HTML page with the question and AI-generated answer. The question
+    is remembered while it runs and its answer afterwards, for the Ask page
+    to show when it is reopened.
     """
+    form: dict[str, Any] = {
+        "question": message,
+        "use_keyword_search": bool(use_keyword_search),
+        "use_agent": bool(use_agent),
+        "use_extra_effort": bool(use_extra_effort),
+    }
+    context: dict[str, Any] = {}
+    scope = _ask_scope(state)
+    remember = bool(message.strip())
+    ask_id = next(_ask_ids) if remember else 0
+    if remember:
+        state.ask_id = ask_id
+        state.ask_running = {"scope": scope, "ask_running": True, **form}
+    try:
+        context = _ask_context(
+            state, message, use_keyword_search, use_agent, use_extra_effort
+        )
+    finally:
+        # Only the most recent question's run updates what the page shows.
+        if remember and state.ask_id == ask_id:
+            state.ask_running = None
+            if context:
+                state.last_ask = {"scope": scope, **form, **context}
+
+    return templates.TemplateResponse(
+        request=request,
+        name="chat.html",
+        context=_template_context(request, state, **form, **context),
+    )
+
+
+def _ask_context(
+    state: AppState,
+    message: str,
+    use_keyword_search: str,
+    use_agent: str,
+    use_extra_effort: str,
+) -> dict[str, Any]:
+    """Answer an Ask question; returns the chat.html context showing it."""
     messages: list[dict[str, str]] = []
     citations: list[dict[str, Any]] = []
     error: str | None = None
@@ -1730,21 +1814,13 @@ async def chat_response(
     if filter_note and messages and not waiting:
         answered_by = f"{answered_by} · {filter_note}"
 
-    return templates.TemplateResponse(
-        request=request,
-        name="chat.html",
-        context=_template_context(
-            request,
-            state,
-            messages=messages,
-            citations=citations,
-            error=error,
-            answered_by=answered_by,
-            use_agent=bool(use_agent),
-            use_extra_effort=bool(use_extra_effort),
-            agent_trace=agent_trace,
-        ),
-    )
+    return {
+        "messages": messages,
+        "citations": citations,
+        "error": error,
+        "answered_by": answered_by,
+        "agent_trace": agent_trace,
+    }
 
 
 def run_app(

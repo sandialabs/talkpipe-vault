@@ -2,6 +2,7 @@
 
 import os
 import re
+import threading
 import time
 from types import SimpleNamespace
 
@@ -98,6 +99,8 @@ def reset_app_state(tmp_path, monkeypatch):
     app_state._state.agent_unavailable_reason = ""
     app_state._state.agent_search_iterations = None
     app_state._state.agent_search_result_count = None
+    app_state._state.ask_running = None
+    app_state._state.last_ask = None
     yield
     # The state is a module-level singleton shared with the TUI service tests,
     # whose own fixture starts from "no vault open". Setting up without also
@@ -262,6 +265,81 @@ def test_chat_agent_takes_precedence_over_the_keyword_boost(monkeypatch):
 
     assert "Agent answer about podman." in response.text
     assert "Keyword-augmented answer." not in response.text
+
+
+def test_other_pages_answer_while_an_agent_ask_runs(monkeypatch):
+    """A long Ask must not hold the server, and its answer survives leaving."""
+    monkeypatch.setattr(query, "_refresh_pipelines", lambda force=False: None)
+    monkeypatch.setattr(query, "_update_document_counts", lambda vault_path: None)
+    started = threading.Event()
+    release = threading.Event()
+
+    def slow_agent(message):
+        started.set()
+        assert release.wait(10)
+        return _agent_chat_outcome(message)
+
+    app_state._state.chat_pipeline = lambda _message: "Plain answer."
+    app_state._state.agent_chat_pipeline = slow_agent
+    # One client, so every request shares one event loop, as under uvicorn.
+    with TestClient(query.app) as client:
+        posted = []
+        ask = threading.Thread(
+            target=lambda: posted.append(
+                client.post("/chat", data={"message": "podman", "use_agent": "on"})
+            ),
+            daemon=True,
+        )
+        ask.start()
+        assert started.wait(10)
+
+        # Other requests are served meanwhile instead of hanging.
+        other = []
+        health = threading.Thread(
+            target=lambda: other.append(client.get("/api/health")), daemon=True
+        )
+        health.start()
+        health.join(5)
+        assert other
+        assert other[0].status_code == 200
+
+        # Reopened mid-run, Ask waits for the question it was answering.
+        assert client.get("/api/ask-status").json() == {"running": True}
+        page = client.get("/chat").text
+        assert 'id="server-ask-running"' in page
+        assert ">podman</textarea>" in page
+        assert 'id="server-response"' not in page
+
+        release.set()
+        ask.join(10)
+        assert "Agent answer about podman." in posted[0].text
+
+        # Afterwards it shows that answer, with the options it was asked with.
+        assert client.get("/api/ask-status").json() == {"running": False}
+        page = client.get("/chat").text
+        assert 'id="server-ask-running"' not in page
+        assert "Agent answer about podman." in page
+        assert "keep c1" in page
+        assert 'id="use-agent" name="use_agent" value="on" checked' in page
+
+
+def test_chat_page_forgets_an_answer_from_another_vault(monkeypatch, tmp_path):
+    monkeypatch.setattr(query, "_refresh_pipelines", lambda force=False: None)
+    monkeypatch.setattr(query, "_update_document_counts", lambda vault_path: None)
+    app_state._state.chat_pipeline = lambda _message: {
+        "response": "Plain answer.",
+        "background": [],
+    }
+    client = TestClient(query.app)
+    client.post("/chat", data={"message": "podman"})
+    assert "Plain answer." in client.get("/chat").text
+
+    other_vault = tmp_path / "other"
+    other_vault.mkdir()
+    app_state._state.vault_path = str(other_vault)
+    page = client.get("/chat").text
+    assert "Plain answer." not in page
+    assert ">podman</textarea>" not in page
 
 
 def test_chat_falls_back_to_plain_pipeline_without_agent_pipeline(monkeypatch):

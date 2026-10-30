@@ -25,6 +25,9 @@
 {% if agent_trace %}
 <script id="server-agent-trace" type="application/json">{{ agent_trace | tojson }}</script>
 {% endif %}
+{% if ask_running %}
+<div id="server-ask-running" style="display:none;"></div>
+{% endif %}
 
 <div class="ask-container">
     <div class="ask-header">
@@ -35,10 +38,10 @@
 
     <div class="question-box">
         <form id="ask-form">
-            <textarea name="message" id="question-input" placeholder="Ask a focused question, like: What did I write about deployment?" rows="3" autofocus></textarea>
+            <textarea name="message" id="question-input" placeholder="Ask a focused question, like: What did I write about deployment?" rows="3" autofocus>{{ question or '' }}</textarea>
             {% if keyword_search_enabled %}
             <label class="keyword-toggle" title="An LLM turns your question into full-text index keywords; matching chunks are added to the context used to answer.">
-                <input type="checkbox" id="use-keyword-search" name="use_keyword_search" value="on">
+                <input type="checkbox" id="use-keyword-search" name="use_keyword_search" value="on"{% if use_keyword_search %} checked{% endif %}>
                 <span>Boost retrieval with keyword search</span>
             </label>
             {% endif %}
@@ -541,6 +544,54 @@ document.addEventListener('DOMContentLoaded', function() {
         answerSection.style.display = 'block';
     }
 
+    // Show the answer carried in a page's hidden elements; false when there
+    // is none.
+    function showServerAnswer(doc) {
+        const serverResponse = doc.getElementById('server-response');
+        const serverError = doc.getElementById('server-error');
+        const serverAnsweredBy = doc.getElementById('server-answered-by');
+        const answeredBy = serverAnsweredBy ? serverAnsweredBy.getAttribute('data-content') : '';
+
+        if (serverError) {
+            showAnswer('Error: ' + serverError.getAttribute('data-content'), true);
+        } else if (serverResponse) {
+            showAnswer(serverResponse.getAttribute('data-content'), false,
+                getServerJson(doc, 'server-citations'), answeredBy,
+                getServerJson(doc, 'server-agent-trace'));
+        } else {
+            return false;
+        }
+        return true;
+    }
+
+    // Wait for a question this page was reopened during, then reload to show
+    // its answer.
+    function waitForRunningAsk() {
+        fetch('/api/ask-status').then(function(response) {
+            return response.json();
+        }).then(function(status) {
+            if (status.running) {
+                setTimeout(waitForRunningAsk, 2000);
+            } else {
+                window.location.reload();
+            }
+        }, function() {
+            setTimeout(waitForRunningAsk, 5000);
+        });
+    }
+
+    // Leaving the page (or reloading it) while a question is being answered
+    // must not lose the answer (issue #106): reopened, the page shows the
+    // question still running, or the last answer.
+    if (document.getElementById('server-ask-running')) {
+        questionInput.disabled = true;
+        askBtn.disabled = true;
+        showLoading();
+        waitForRunningAsk();
+    } else {
+        showServerAnswer(document);
+    }
+
     // Extra Effort only changes an agent run, so it is greyed out without one.
     const agentCheckbox = document.getElementById('use-agent');
     const extraCheckbox = document.getElementById('use-extra-effort');
@@ -600,21 +651,9 @@ document.addEventListener('DOMContentLoaded', function() {
             const parser = new DOMParser();
             const doc = parser.parseFromString(html, 'text/html');
 
-            // Look for server response in hidden elements
-            const serverResponse = doc.getElementById('server-response');
-            const serverError = doc.getElementById('server-error');
-            const serverCitations = getServerJson(doc, 'server-citations');
-            const serverAgentTrace = getServerJson(doc, 'server-agent-trace');
-            const serverAnsweredBy = doc.getElementById('server-answered-by');
-            const answeredBy = serverAnsweredBy ? serverAnsweredBy.getAttribute('data-content') : '';
-
             hideLoading();
 
-            if (serverError) {
-                showAnswer('Error: ' + serverError.getAttribute('data-content'), true);
-            } else if (serverResponse) {
-                showAnswer(serverResponse.getAttribute('data-content'), false, serverCitations, answeredBy, serverAgentTrace);
-            } else {
+            if (!showServerAnswer(doc)) {
                 console.warn('No server-response or server-error found in HTML');
                 showAnswer('No response from server.', true);
             }

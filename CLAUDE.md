@@ -99,6 +99,11 @@ Routes in `apps/query.py`:
 - `/`, `/search`, `/keyword-search` (+ index creation), `/chat`, `/chunk-content`,
   `/source-file`, `/open-file` (streams the source document behind a result/citation,
   resolved by lookup key — works without `--show-source-paths`), `/refresh`.
+- The Search, Keyword Search and Ask posts are plain `def` routes (thread pool), so a
+  minutes-long agent run does not hold the event loop. `_state.ask_running` /
+  `_state.last_ask` remember Ask's running question and last answer for the vault they
+  were asked of: `GET /chat` reopens on them, and `/api/ask-status` is polled by a page
+  reopened mid-run (issue #106).
 - Pages that need a vault redirect to `/documents` when none is selected.
 
 State lives in the module-level `_state: AppState` singleton (`apps/state.py`); pipelines

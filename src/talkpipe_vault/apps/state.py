@@ -135,6 +135,13 @@ class AppState:
     # The folder all of the open named vault's documents come from, offered
     # as "search that folder instead"; None until computed for this vault.
     vault_source_folder: str | None = None
+    # The web Ask page's question being answered and its last answer, each
+    # with the vault or folders it was asked of (issue #106): an agent run
+    # takes minutes, and leaving or reloading the page must not lose it.
+    # ask_id is the most recent question's number; only its run updates them.
+    ask_running: dict[str, Any] | None = None
+    last_ask: dict[str, Any] | None = None
+    ask_id: int = 0
 
 
 # Application state singleton
