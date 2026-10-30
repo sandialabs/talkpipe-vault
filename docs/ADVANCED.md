@@ -401,7 +401,8 @@ bound a run that never gets there. The agent is told how many iterations it
 has and, after every tool call, how many are left, with the last one
 announced so it stops and lets the answer be built from what was kept. The
 results note says which happened, and every tool call and verdict is printed
-to the server console and listed under the results.
+to the server console and listed under the results. While Ask's agent runs,
+its latest step is shown under the progress indicator.
 
 - It runs on the chat model chosen under Settings and needs one that can
   call tools. Whether a model can only shows when a run starts: a server

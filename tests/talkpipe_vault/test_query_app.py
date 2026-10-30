@@ -275,6 +275,8 @@ def test_other_pages_answer_while_an_agent_ask_runs(monkeypatch):
     release = threading.Event()
 
     def slow_agent(message):
+        # The segment reports its trace lines through this callable.
+        pipelines._agent_progress("agent → vector_search({'query': 'podman'})")
         started.set()
         assert release.wait(10)
         return _agent_chat_outcome(message)
@@ -303,24 +305,88 @@ def test_other_pages_answer_while_an_agent_ask_runs(monkeypatch):
         assert other
         assert other[0].status_code == 200
 
-        # Reopened mid-run, Ask waits for the question it was answering.
-        assert client.get("/api/ask-status").json() == {"running": True}
+        # Reopened mid-run, Ask waits for the question it was answering,
+        # and shows the agent's latest step (issue #107).
+        step = "agent → vector_search({'query': 'podman'})"
+        assert client.get("/api/ask-status").json() == {
+            "running": True,
+            "agent_step": step,
+        }
         page = client.get("/chat").text
         assert 'id="server-ask-running"' in page
         assert ">podman</textarea>" in page
         assert 'id="server-response"' not in page
+        assert (
+            '<span id="agent-step-text">agent → vector_search'
+            "({&#39;query&#39;: &#39;podman&#39;})</span>"
+        ) in page
 
         release.set()
         ask.join(10)
         assert "Agent answer about podman." in posted[0].text
 
         # Afterwards it shows that answer, with the options it was asked with.
-        assert client.get("/api/ask-status").json() == {"running": False}
+        assert client.get("/api/ask-status").json() == {
+            "running": False,
+            "agent_step": "",
+        }
         page = client.get("/chat").text
         assert 'id="server-ask-running"' not in page
         assert "Agent answer about podman." in page
         assert "keep c1" in page
         assert 'id="use-agent" name="use_agent" value="on" checked' in page
+
+
+def test_agent_steps_reach_only_the_ask_that_runs_the_agent(scripted_model):
+    """The real agent's trace lines, from the threads Strands runs its tools
+    and hooks in, reach the run that asked for them, and nothing else."""
+    from talkpipe.search.abstract import SearchResult
+    from talkpipe_agents.testing import ScriptedJudge
+
+    class Segment(agent_search.AgentVaultChat):
+        def _bind_vault(self):
+            pass
+
+        @property
+        def findings_judge(self):
+            return ScriptedJudge(keep=lambda finding: (True, "on topic"))
+
+        def vector_search(self, query):
+            return [
+                SearchResult(
+                    score=0.5, doc_id="a", document={"content": "x", "title": "A.md"}
+                )
+            ]
+
+        def answer(self, question, background):
+            return "Agent answer."
+
+    segment = Segment(
+        vault_path="unused",
+        chat_model="any",
+        chat_source="scripted",
+        progress=pipelines._agent_progress,
+        max_iterations=4,
+    )
+    app_state._state.agent_chat_pipeline = segment.as_function(
+        single_in=True, single_out=True
+    )
+    scripted_model.call("vector_search", query="podman", looking_for="what it is")
+    scripted_model.call("enough_information", reason="covers it")
+    scripted_model.say("done")
+
+    steps: list[str] = []
+    _response, _citations, trace, _note = result_views._answer_with_agent(
+        app_state._state, "podman", progress=steps.append
+    )
+    assert steps == trace
+    assert any(line.startswith("agent → vector_search") for line in steps)
+
+    # A run that asks for no progress sends its lines nowhere else.
+    scripted_model.call("vector_search", query="podman", looking_for="what it is")
+    scripted_model.say("done")
+    result_views._answer_with_agent(app_state._state, "podman")
+    assert steps == trace
 
 
 def test_chat_page_forgets_an_answer_from_another_vault(monkeypatch, tmp_path):

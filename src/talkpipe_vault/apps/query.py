@@ -23,6 +23,7 @@ import time
 import urllib.parse
 import urllib.request
 import webbrowser
+from collections.abc import Callable
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -1600,12 +1601,15 @@ async def chat_page(request: Request, state: AppState = Depends(get_state)) -> R
 async def ask_status(state: AppState = Depends(get_state)) -> JSONResponse:
     """Whether an Ask question is still being answered for this vault.
 
-    Polled by an Ask page reopened during the run; it reloads when this
-    turns false, and shows the answer.
+    Polled by the Ask page while a question runs: ``agent_step`` is the
+    agent's latest trace line ("" before its first, or without an agent),
+    shown under the progress indicator (issue #107). A page reopened during
+    the run reloads when ``running`` turns false, and shows the answer.
     """
     remembered = _remembered_ask(state)
     running = bool(remembered and remembered.get("ask_running"))
-    return JSONResponse(content={"running": running})
+    step = remembered.get("agent_step", "") if remembered and running else ""
+    return JSONResponse(content={"running": running, "agent_step": step})
 
 
 @app.post("/chat", response_class=HTMLResponse)
@@ -1647,10 +1651,26 @@ def chat_response(
     ask_id = next(_ask_ids) if remember else 0
     if remember:
         state.ask_id = ask_id
-        state.ask_running = {"scope": scope, "ask_running": True, **form}
+        state.ask_running = {
+            "scope": scope,
+            "ask_running": True,
+            "agent_step": "",
+            **form,
+        }
+
+    def show_step(line: str) -> None:
+        running = state.ask_running
+        if running is not None and state.ask_id == ask_id:
+            running["agent_step"] = line
+
     try:
         context = _ask_context(
-            state, message, use_keyword_search, use_agent, use_extra_effort
+            state,
+            message,
+            use_keyword_search,
+            use_agent,
+            use_extra_effort,
+            progress=show_step if remember else None,
         )
     finally:
         # Only the most recent question's run updates what the page shows.
@@ -1672,8 +1692,12 @@ def _ask_context(
     use_keyword_search: str,
     use_agent: str,
     use_extra_effort: str,
+    progress: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
-    """Answer an Ask question; returns the chat.html context showing it."""
+    """Answer an Ask question; returns the chat.html context showing it.
+
+    *progress* is called with each of an agent run's trace lines.
+    """
     messages: list[dict[str, str]] = []
     citations: list[dict[str, Any]] = []
     error: str | None = None
@@ -1708,7 +1732,10 @@ def _ask_context(
             result: str | dict[str, Any]
             if use_agent and state.agent_chat_pipeline:
                 response, citations, agent_trace, retrieval_note = _answer_with_agent(
-                    state, message, extra_effort=bool(use_extra_effort)
+                    state,
+                    message,
+                    extra_effort=bool(use_extra_effort),
+                    progress=progress,
                 )
                 answered_by_agent = True
             elif use_keyword_search and state.keyword_chat_pipeline:

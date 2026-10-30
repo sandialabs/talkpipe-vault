@@ -168,7 +168,9 @@ when you index more documents; rebuild it there when you do.
   **Boost retrieval with keyword search** merges keyword matches into the
   context; **Use Agent** lets the agent gather the context instead, and
   **Extra Effort** gives it twice the iterations for questions that need
-  one fact to find the next. The "Answered by" line says what ran.
+  one fact to find the next. While the agent works, the agent's latest step
+  (a search, what it kept) shows under the progress indicator. The "Answered
+  by" line says what ran.
 - **Settings**: embedding and chat providers and models, the agent's
   limits, a **Configuration status** panel that tests the selection, and
   **Connections & credentials** for API keys and server URLs.

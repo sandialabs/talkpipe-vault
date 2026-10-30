@@ -82,7 +82,10 @@
 
     <div class="loading-section" id="loading-section" style="display: none;">
         <div class="spinner"></div>
-        <span id="loading-label">Searching vault and generating answer...</span>
+        <div class="loading-text">
+            <span id="loading-label">Searching vault and generating answer...</span>
+            <div class="agent-step" id="agent-step"{% if not agent_step %} style="display: none;"{% endif %}>Latest step: <span id="agent-step-text">{{ agent_step or '' }}</span></div>
+        </div>
     </div>
 </div>
 
@@ -303,7 +306,18 @@
         padding: 30px;
         color: #666;
     }
+    .loading-section .loading-text {
+        min-width: 0;
+        max-width: 640px;
+    }
+    .loading-section .agent-step {
+        margin-top: 6px;
+        font-size: 0.78rem;
+        color: #888;
+        overflow-wrap: anywhere;
+    }
     .loading-section .spinner {
+        flex-shrink: 0;
         width: 24px;
         height: 24px;
         border: 3px solid #ddd;
@@ -347,6 +361,8 @@ document.addEventListener('DOMContentLoaded', function() {
     const answerContent = document.getElementById('answer-content');
     const loadingSection = document.getElementById('loading-section');
     const loadingLabel = document.getElementById('loading-label');
+    const agentStep = document.getElementById('agent-step');
+    const agentStepText = document.getElementById('agent-step-text');
     const copyBtn = document.getElementById('copy-btn');
     const sourcesSection = document.getElementById('sources-section');
     const sourcesList = document.getElementById('sources-list');
@@ -421,6 +437,32 @@ document.addEventListener('DOMContentLoaded', function() {
 
     function hideLoading() {
         loadingSection.style.display = 'none';
+        stepPoll += 1;
+        showAgentStep('');
+    }
+
+    // An agent run takes minutes; under the progress indicator, show its
+    // latest step (a search, a decision on a finding) so the page visibly
+    // assembles the answer rather than only saying it is running (issue #107).
+    // stepPoll numbers the polling: a poll from an earlier question stops.
+    let stepPoll = 0;
+
+    function showAgentStep(step) {
+        agentStepText.textContent = step || '';
+        agentStep.style.display = step ? 'block' : 'none';
+    }
+
+    function pollAgentStep(poll) {
+        if (poll !== stepPoll) return;
+        fetch('/api/ask-status').then(function(response) {
+            return response.json();
+        }).then(function(status) {
+            if (poll !== stepPoll) return;
+            showAgentStep(status.agent_step);
+            setTimeout(function() { pollAgentStep(poll); }, 1500);
+        }, function() {
+            setTimeout(function() { pollAgentStep(poll); }, 5000);
+        });
     }
 
     function renderSources(citations) {
@@ -571,6 +613,7 @@ document.addEventListener('DOMContentLoaded', function() {
             return response.json();
         }).then(function(status) {
             if (status.running) {
+                showAgentStep(status.agent_step);
                 setTimeout(waitForRunningAsk, 2000);
             } else {
                 window.location.reload();
@@ -626,6 +669,7 @@ document.addEventListener('DOMContentLoaded', function() {
             const agentToggle = document.getElementById('use-agent');
             if (agentToggle && agentToggle.checked) {
                 formData.append('use_agent', 'on');
+                pollAgentStep(stepPoll);
                 const extraToggle = document.getElementById('use-extra-effort');
                 if (extraToggle && extraToggle.checked) {
                     formData.append('use_extra_effort', 'on');

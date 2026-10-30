@@ -7,6 +7,8 @@ indexes in play, the retrieval filter and the agent configuration.
 
 import logging
 import time
+from collections.abc import Callable
+from contextvars import ContextVar
 from typing import Any
 
 from talkpipe.search.lancedb import LanceDBDocumentStore
@@ -38,6 +40,22 @@ from talkpipe_vault.pipelines.vault_chat import VaultChat
 from talkpipe_vault.pipelines.vault_search import VaultSearch, VaultTextSearch
 
 logger = logging.getLogger(__name__)
+
+# Where the agent's trace lines go besides stdout, for the run that set it:
+# the Ask page shows its run's latest step while it works (issue #107). A
+# context variable rather than the segment's progress callable, because one
+# segment serves every Search and Ask run; Strands carries the context into
+# the threads its tools and hooks run in, so a line reaches only its own run.
+agent_progress: ContextVar[Callable[[str], None] | None] = ContextVar(
+    "agent_progress", default=None
+)
+
+
+def _agent_progress(message: str) -> None:
+    print(message, flush=True)
+    sink = agent_progress.get()
+    if sink is not None:
+        sink(message)
 
 
 def init_pipelines(vault_path: str) -> None:
@@ -210,6 +228,7 @@ def _refresh_agent_pipelines(vault_path: str | list[str]) -> None:
             or DEFAULT_AGENT_SEARCH_RESULT_COUNT,
             max_iterations=_state.agent_search_iterations
             or DEFAULT_AGENT_SEARCH_ITERATIONS,
+            progress=_agent_progress,
         )
     except Exception as exc:
         logger.warning("Could not build the agent pipelines", exc_info=True)

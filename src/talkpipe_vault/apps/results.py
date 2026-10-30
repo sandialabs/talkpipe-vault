@@ -8,11 +8,13 @@ source document is served inline only when a browser can render it safely.
 
 import mimetypes
 import os
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from fastapi.responses import FileResponse
 
+from talkpipe_vault.apps.pipelines import agent_progress
 from talkpipe_vault.apps.state import (
     DEFAULT_RAG_RESULT_LIMIT,
     AppState,
@@ -40,7 +42,10 @@ AGENT_SEARCH_FILTER_NOTE = (
 
 
 def _answer_with_agent(
-    state: AppState, message: str, extra_effort: bool = False
+    state: AppState,
+    message: str,
+    extra_effort: bool = False,
+    progress: Callable[[str], None] | None = None,
 ) -> tuple[str, list[dict[str, Any]], list[str], str]:
     """Answer *message* through the agent pipeline.
 
@@ -48,7 +53,8 @@ def _answer_with_agent(
     agent kept — exactly the RAG context, so they are the citations — the
     tool-call trace, and the note on how the run ended. Both interfaces call
     this so their agent branches cannot drift apart. *extra_effort* runs the
-    agent with the raised iteration cap.
+    agent with the raised iteration cap. *progress*, when given, is also
+    called with each trace line as the run works.
     """
     pipeline = state.agent_chat_pipeline
     if extra_effort and state.agent_chat_extra_pipeline:
@@ -58,7 +64,11 @@ def _answer_with_agent(
         # written as a real check rather than an assert so it survives -O and
         # satisfies bandit (B101).
         raise RuntimeError("the agent pipeline is not available")
-    outcome = pipeline(message)
+    token = agent_progress.set(progress)
+    try:
+        outcome = pipeline(message)
+    finally:
+        agent_progress.reset(token)
     note = outcome.note
     if pipeline is state.agent_chat_extra_pipeline:
         note = _prefix_note(note, EXTRA_EFFORT_NOTE)

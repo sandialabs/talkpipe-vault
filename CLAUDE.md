@@ -103,7 +103,11 @@ Routes in `apps/query.py`:
   minutes-long agent run does not hold the event loop. `_state.ask_running` /
   `_state.last_ask` remember Ask's running question and last answer for the vault they
   were asked of: `GET /chat` reopens on them, and `/api/ask-status` is polled by a page
-  reopened mid-run (issue #106).
+  reopened mid-run (issue #106). It also carries `agent_step`, the running agent's latest
+  trace line, which the page polls for and shows under the spinner during an agent Ask
+  (issue #107). The line reaches the run through `apps/pipelines.agent_progress`, a
+  context variable `_answer_with_agent(progress=…)` sets around the run: the one agent
+  segment serves every run, and Strands copies the context into its tool threads.
 - Pages that need a vault redirect to `/documents` when none is selected.
 
 State lives in the module-level `_state: AppState` singleton (`apps/state.py`); pipelines
