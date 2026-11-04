@@ -166,7 +166,13 @@ judge's `missing` phrase and telling it not to repeat that search — so its
 turns go to the gap. `first_search=False` turns this off and the agent opens
 on an empty session, as before. The mechanism is talkpipe-agents' (its
 `llmAgent` offers it as `first_tool`); the vault only chooses the search and
-builds the answer from what was kept. The judge's verdict
+builds the answer from what was kept. The verdict itself is structural: the
+judge lists the facts a complete answer needs (which particular thing the
+question means, its kind or recorded value, each condition the question sets)
+and cites the kept chunk that states each, and talkpipe-agents computes
+`enough` from that list — true only when every fact is found — rather than
+taking the model's word for it; the list is carried across the run's
+searches and shown in every tool reply. The judge's verdict
 is advice to the agent in every later reply too (`The judge finds the answer
 still lacks: …`, or to call `enough_information` when it finds what is kept
 sufficient); the agent still decides.
