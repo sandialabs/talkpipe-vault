@@ -82,7 +82,7 @@ from .config import (
     get_vector_db_path,
     get_whoosh_index_path,
 )
-from .judge_results import JudgeSearchResults
+from .judge_results import JudgeSearchResults, search_findings
 from .keyword_search import ExtractSearchKeywords
 from .search_results import SEARCH_RESULT_RENAMES
 from .vault_paths import resolve_vault_paths
@@ -115,6 +115,10 @@ After calling enough_information, or once you are told to stop, reply with the s
 # gathers; the answer is built afterwards from what it kept, so it should
 # not spend a reply on one.
 STOP_INSTRUCTION = "Stop calling tools and reply: done"
+
+# The enough_reason a run gets when the judge found the first search's
+# results sufficient and the agent was never started.
+FIRST_SEARCH_ENOUGH = "the first search's results answer it, by the judge's verdict"
 
 # Shown instead of an answer when the agent kept nothing: the RAG prompt would
 # have no context at all, and a model asked to answer from nothing invents one.
@@ -183,7 +187,7 @@ def outcome_note(
 ) -> str:
     """One line on how a finished run ended, in the pages' terms.
 
-    The five ways, most to least satisfying. The first is the intended one;
+    The six ways, most to least satisfying. The first two are the intended ones;
     the rest are worth telling apart, because each means the selection may
     be incomplete for a different reason. The endings are the findings
     loop's (``FindingsSession.outcome``), worded for chunks and searches,
@@ -193,7 +197,10 @@ def outcome_note(
     undecided = len(session.undecided)
     searches = session.calls
     hint = ""
-    if session.enough:
+    if session.enough and not session.turns_used:
+        # The first search sufficed: the agent never took a turn.
+        how = "found the first search enough: answered without an agent turn"
+    elif session.enough:
         how = "judged it had enough to answer"
         if session.enough_reason:
             how += f" ({session.enough_reason})"
@@ -314,6 +321,13 @@ class AgentVaultSearch(AbstractFieldSegment):
             "decisions, how the run ended). None prints them to stdout; pass "
             "a logger method, a list's append, or a no-op to keep them off it.",
         ] = None,
+        first_search: Annotated[
+            bool,
+            "Run the plain vector search on the question first and judge its "
+            "hits before the agent starts. When the judge finds them enough "
+            "to answer, the run ends there, with no agent turn; otherwise the "
+            "agent starts from what was kept and is told what is missing.",
+        ] = True,
     ) -> None:
         super().__init__(field=field, set_as=set_as, multi_emit=multi_emit)
         self.vault_path = vault_path
@@ -327,6 +341,7 @@ class AgentVaultSearch(AbstractFieldSegment):
         self.max_iterations = max(1, max_iterations)
         self.search_limit = max(1, search_limit)
         self.max_keywords = max(1, max_keywords)
+        self.first_search = first_search
         self.rename_fields = (
             parse_key_value_str(rename_fields, require_value=True)
             if rename_fields
@@ -474,19 +489,65 @@ class AgentVaultSearch(AbstractFieldSegment):
             hooks=[JudgeFindings(session, self.findings_judge)],
         )
 
-    def run_agent(self, session: FindingsSession, query: str) -> str:
-        """Drive the agent over *session* for *query*; returns the stop reason."""
-        agent = self.make_agent(session)
-        prompt = (
-            f"Question: {query}\n"
-            "Nothing has been searched yet. Search for what answers it; each "
-            "search keeps its relevant results. Then search for what the answer "
-            "still lacks, and call enough_information once the kept findings "
-            f"would answer this question well. At most {session.max_kept} "
-            f"findings are kept, and you have {self.max_iterations} turns: every "
-            "tool reply says how many are left, so call enough_information "
-            "before they run out."
+    def search_first(self, session: FindingsSession, query: str) -> str:
+        """The plain retrieval, before the agent: run the vector search on
+        the question itself and put its hits through the judge, exactly as
+        the agent's own ``vector_search`` call would (one judge call, the
+        hits kept or ignored in the session, the same reply text). When the
+        judge's verdict is that what was kept answers the question, the
+        session is marked as having enough, and the agent is never started:
+        the answer costs one search and one judge call, as plain Ask does.
+        Returns the reply, for the agent's opening prompt otherwise."""
+        session.tell(f"agent → vector_search({{'query': {query!r}}}) — first search")
+        findings = search_findings(self.vector_search(query), self.rename_fields)
+        reply = str(
+            JudgeFindings(session, self.findings_judge).process(
+                findings, "", "vector_search"
+            )
         )
+        if session.sufficient and session.kept_ids:
+            session.enough = True
+            session.enough_reason = FIRST_SEARCH_ENOUGH
+        return reply
+
+    def run_agent(self, session: FindingsSession, query: str) -> str:
+        """Drive the agent over *session* for *query*; returns the stop reason.
+
+        With ``first_search``, the plain search runs first (``search_first``)
+        and the agent only when the judge found its results wanting; it then
+        starts from the kept findings, told what the answer still lacks, so
+        its turns go to the gap rather than to repeating the first search."""
+        budget = (
+            f"At most {session.max_kept} findings are kept, and you have "
+            f"{self.max_iterations} turns: every tool reply says how many are "
+            "left, so call enough_information before they run out."
+        )
+        if self.first_search:
+            reply = self.search_first(session, query)
+            if session.enough:
+                return "first_search"
+            missing = (
+                f" The judge says it still lacks: {session.missing}."
+                if session.missing
+                else ""
+            )
+            prompt = (
+                f"Question: {query}\n"
+                "A vector_search for the question itself has already been run "
+                "and judged; its reply is below. Do not repeat it. Search for "
+                f"what the answer still lacks{missing} Use different terms or "
+                "keyword_search, and call enough_information once the kept "
+                f"findings would answer this question well. {budget}\n\n{reply}"
+            )
+        else:
+            prompt = (
+                f"Question: {query}\n"
+                "Nothing has been searched yet. Search for what answers it; each "
+                "search keeps its relevant results. Then search for what the "
+                "answer still lacks, and call enough_information once the kept "
+                f"findings would answer this question well. {budget}"
+            )
+        agent = self.make_agent(session)
         agent.as_function(single_in=True, single_out=True)(prompt)
         # The library keeps the Strands result of the last item; its stop
         # reason tells a run the turn cap ended from one the agent ended.

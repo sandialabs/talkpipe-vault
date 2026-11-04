@@ -199,7 +199,9 @@ class TestJudge:
             looking_for="defences, not attacks",
             known=["poetry.md — poems as attacks", ""],
         )
-        [prompt] = fake_judge["prompts"]
+        # An empty decision is asked about again (the judge's retry), so the
+        # first prompt is the one to read.
+        prompt = fake_judge["prompts"][0]
         assert prompt.startswith("Question: poetry and LLM security\n")
         assert "This call is looking for: defences, not attacks\n" in prompt
         assert "Already known:\n- poetry.md — poems as attacks\nFindings:" in prompt
@@ -209,7 +211,7 @@ class TestJudge:
     def test_the_prompt_without_looking_for_or_known(self, fake_judge):
         fake_judge["decide"] = {}
         _segment().judge(HITS[:1], "q")
-        [prompt] = fake_judge["prompts"]
+        prompt = fake_judge["prompts"][0]
         assert "looking for" not in prompt
         assert "Already known:\n- nothing yet\n" in prompt
 

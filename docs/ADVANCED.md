@@ -392,9 +392,13 @@ page), not from `~/.talkpipe.toml`.
 ## Agent search
 
 **Let an agent select the results** (Semantic Search) and **Use Agent**
-(Ask) hand retrieval to an agent built on talkpipe-agents' `llmAgent`. It
-runs semantic and keyword searches as tools and rewrites its queries from
-what it learns. Each search's results are judged inside the search, by the
+(Ask) hand retrieval to an agent built on talkpipe-agents' `llmAgent`. The
+plain semantic search runs first and its results are judged; when the judge
+finds them enough to answer, that is the whole run (the note says `found the
+first search enough`), costing little more than a search without the agent.
+Otherwise the agent takes over from what was kept, told what the answer still
+lacks. It runs semantic and keyword searches as tools and rewrites its
+queries from what it learns. Each search's results are judged inside the search, by the
 same chat model, against the question you asked and what the agent said the
 search was meant to find: the relevant ones are kept, the rest discarded,
 and the agent is told what each kept chunk contributes. **It stops when it

@@ -62,7 +62,9 @@ class _Scripted(AgentVaultSearch):
     the agent's model is the ``scripted`` source (the scripted_model
     fixture), the searches return scripted hits, and the judge decides by
     ``verdicts`` (doc_id → keep, or (keep, reason); unlisted hits are kept
-    "on topic"). ``judge=False`` runs without a judge.
+    "on topic") and gives the verdict ``enough`` / ``missing`` when set.
+    ``judge=False`` runs without a judge. The first search before the agent
+    is off unless asked for.
 
     It runs the real constructor; only ``_bind_vault`` (the one step that
     touches disk and models) and the search bindings are replaced, so a new
@@ -77,6 +79,8 @@ class _Scripted(AgentVaultSearch):
         index_exists=False,
         read=None,
         judge=True,
+        enough=None,
+        missing="",
         **kwargs,
     ):
         self.told: list[str] = []
@@ -86,9 +90,16 @@ class _Scripted(AgentVaultSearch):
         self.keyword: dict[str, list[Any]] = keyword or {}
         self.index_exists = index_exists
         self.read = read
-        self.judge = ScriptedJudge(keep=_rule(self.verdicts)) if judge else None
+        self.judge = (
+            ScriptedJudge(keep=_rule(self.verdicts), enough=enough, missing=missing)
+            if judge
+            else None
+        )
         kwargs.setdefault("max_chunks", 2)
         kwargs.setdefault("max_iterations", 8)
+        # The tests below script the agent's searches themselves; the first
+        # search before the agent has tests of its own (TestFirstSearch).
+        kwargs.setdefault("first_search", False)
         super().__init__(
             vault_path="unused",
             chat_model="any",
@@ -1281,3 +1292,112 @@ def test_the_chunk_ceiling_has_a_floor(bad):
     segment = _Scripted(max_chunks=bad)
     assert segment.max_chunks == 1
     assert segment.make_session("q").max_kept == 1
+
+
+class TestFirstSearch:
+    """Plain retrieval first: the vector search on the question itself is
+    run and judged before the agent starts. When the judge finds its
+    results enough, the run ends with no agent turn; otherwise the agent
+    starts from what was kept and is told what is missing."""
+
+    def test_the_judge_finding_the_first_search_enough_ends_the_run(
+        self, scripted_model
+    ):
+        segment = _Scripted(
+            {"b": (False, "about two")}, enough=True, first_search=True, max_chunks=5
+        )
+        outcome = segment.process_value("what is one?")
+
+        assert [r.doc_id for r in outcome.results] == ["a", "c"]
+        assert outcome.note.startswith(
+            "Agent found the first search enough: answered without an agent turn: "
+            "kept 2 chunks after 1 search, ignored 1."
+        )
+        # The agent's model was never called.
+        assert scripted_model.calls == []
+        told = " | ".join(segment.told)
+        assert "agent → vector_search({'query': 'what is one?'}) — first search" in told
+        assert "agent ← vector_search: 3 finding(s), kept 2, ignored 1." in told
+        assert "Judge: enough to answer." in told
+        [prompt] = segment.judge.prompts
+        assert prompt.startswith("Question: what is one?\n")
+
+    def test_otherwise_the_agent_starts_from_what_was_kept(self, scripted_model):
+        segment = _Scripted(
+            {"b": (False, "about two")},
+            vector={"q": THREE, "the other side": [_hit("d", "four", title="D.md")]},
+            enough=False,
+            missing="the other side of the comparison",
+            first_search=True,
+            max_chunks=5,
+        )
+        outcome = _run(
+            scripted_model,
+            segment,
+            ("vector_search", {"query": "the other side", "looking_for": "the rest"}),
+        )
+        assert [r.doc_id for r in outcome.results] == ["a", "c", "d"]
+        assert "after 2 searches" in outcome.note
+        # The opening prompt carries the first search's reply and the gap.
+        text = scripted_model.prompts[0][0]["content"][0]["text"]
+        assert text.startswith("Question: q\n")
+        assert "already been run and judged" in text
+        assert (
+            "The judge says it still lacks: the other side of the comparison." in text
+        )
+        assert "Kept:\n\n[f1] A.md\none" in text
+        assert "Ignored:\n\n[f2] B.md — about two" in text
+        # The agent's own search is judged against what the first one kept.
+        assert "Already known:\n- A.md" in segment.judge.prompts[1]
+        assert _replies(scripted_model)[0].startswith(
+            "1 new finding(s) from vector_search: kept 1, ignored 0."
+        )
+
+    def test_a_judge_without_a_verdict_hands_over_to_the_agent(self, scripted_model):
+        segment = _Scripted(first_search=True, max_chunks=5)
+        outcome = _run(
+            scripted_model, segment, ("enough_information", {"reason": "ok"})
+        )
+        assert [r.doc_id for r in outcome.results] == ["a", "b", "c"]
+        assert outcome.note.startswith("Agent judged it had enough to answer (ok)")
+        text = scripted_model.prompts[0][0]["content"][0]["text"]
+        assert "already been run and judged" in text
+        assert "still lacks:" not in text
+
+    def test_a_first_search_with_no_hits_still_hands_over(self, scripted_model):
+        segment = _Scripted(vector={}, enough=True, first_search=True)
+        outcome = _run(scripted_model, segment, ("vector_search", {"query": "other"}))
+        assert outcome.results == []
+        text = scripted_model.prompts[0][0]["content"][0]["text"]
+        assert "No new findings from vector_search." in text
+        assert "after 2 searches" in outcome.note
+
+    def test_without_a_judge_the_first_search_is_shown_undecided(self, scripted_model):
+        segment = _Scripted(
+            judge=False, first_search=True, tools=TestSessionTools.TOOLS, max_chunks=5
+        )
+        outcome = _run(
+            scripted_model,
+            segment,
+            ("keep_finding", {"finding_id": "f1", "reason": "fine"}),
+            ("enough_information", {"reason": "ok"}),
+        )
+        assert [r.doc_id for r in outcome.results] == ["a"]
+        text = scripted_model.prompts[0][0]["content"][0]["text"]
+        assert "3 finding(s) from vector_search. Decide on each undecided one" in text
+
+    def test_first_search_off_opens_with_nothing_searched(self, scripted_model):
+        segment = _Scripted(first_search=False)
+        _run(scripted_model, segment, ("enough_information", {"reason": "ok"}))
+        text = scripted_model.prompts[0][0]["content"][0]["text"]
+        assert "Nothing has been searched yet." in text
+
+    def test_the_default_is_on_and_extra_effort_keeps_it(self):
+        import inspect
+
+        default = inspect.signature(AgentVaultSearch.__init__).parameters[
+            "first_search"
+        ]
+        assert default.default is True
+        segment = _Scripted(first_search=True)
+        assert segment.with_max_iterations(16).first_search is True

@@ -158,9 +158,11 @@ when you index more documents; rebuild it there when you do.
 - **Vaults & Documents**: the folders being searched, with each one's
   progress, and the named-vault controls.
 - **Semantic Search**: the ten closest chunks. **Let an agent select the
-  results** hands the search to an agent that searches, reads, keeps what is
-  relevant and stops when it judges it could answer your question; slower,
-  and it needs a chat model that can call tools. Details and which models
+  results** judges the plain search's results first and, only when they do
+  not answer the question, hands the search to an agent that searches,
+  reads, keeps what is relevant and stops when it judges it could answer
+  your question; slower when the agent runs, and it needs a chat model that
+  can call tools. Details and which models
   do well are in [Agent search](docs/ADVANCED.md#agent-search).
 - **Keyword Search**: boolean and phrase queries. Matching is on exact word
   tokens (`apple` does not match `apples`); use semantic search for meaning.

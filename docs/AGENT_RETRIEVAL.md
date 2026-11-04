@@ -152,6 +152,22 @@ index, an unknown finding id, a document that cannot be read — raises, and
 the agent reads the message as the tool's error result; the trace shows it
 as `agent ← tool: error: …`.
 
+**The plain search runs first.** Before the agent takes a turn, the run
+performs the vector search on the question itself and puts its hits through
+the judge, exactly as the agent's own `vector_search` call would (one judge
+call; the hits kept or ignored in the session). The judge's reply also says
+whether what is kept would answer the question (`enough`) and, if not, what
+is missing. When it says enough, the run ends there: the note reads `Agent
+found the first search enough: answered without an agent turn`, and the
+answer cost one search and one judge call, as plain Ask does. Otherwise the
+agent starts from the kept findings — its opening prompt carries the first
+search's reply and the judge's `missing` phrase, and tells it not to repeat
+that search — so its turns go to the gap. `first_search=False` turns this
+off and the agent opens on an empty session, as before. The judge's verdict
+is advice to the agent in every later reply too (`The judge finds the answer
+still lacks: …`, or to call `enough_information` when it finds what is kept
+sufficient); the agent still decides.
+
 **The stopping criterion is the agent's judgement, not a count.** A run ends
 when the agent calls `enough_information`. Two limits exist only to bound a
 run that never gets there: `max_chunks` (the most chunks one run may keep;
@@ -185,13 +201,14 @@ the session to word the outcome.
 
 ## Reading the outcome
 
-`outcome.note` is one sentence and always names one of six endings. They
+`outcome.note` is one sentence and always names one of seven endings. They
 mean different things about how complete the selection is, so an
 application should show it rather than swallow it:
 
 | Note begins with | Meaning |
 |---|---|
-| `Agent judged it had enough to answer (…)` | The intended ending. The parenthetical is the agent's own reason |
+| `Agent found the first search enough: answered without an agent turn` | The cheapest ending: the judge found the plain search's results sufficient, so no agent turn was taken |
+| `Agent judged it had enough to answer (…)` | The intended ending of an agent run. The parenthetical is the agent's own reason |
 | `Agent filled its N-chunk maximum` | Stopped by `max_chunks`. The selection may be cut off; raise the limit if answers look truncated |
 | `Agent hit the N-iteration cap` | Stopped by `max_iterations` before saying it had enough. What its searches kept is still the selection |
 | `Agent found nothing relevant to keep` | It searched, the judge ignored every hit, and it stopped — the right ending for a question the notes do not cover (`enough_information` is refused with nothing kept). Ask answers with `NO_CONTEXT_ANSWER` |
