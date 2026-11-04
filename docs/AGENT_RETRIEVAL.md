@@ -153,17 +153,20 @@ the agent reads the message as the tool's error result; the trace shows it
 as `agent ← tool: error: …`.
 
 **The plain search runs first.** Before the agent takes a turn, the run
-performs the vector search on the question itself and puts its hits through
-the judge, exactly as the agent's own `vector_search` call would (one judge
-call; the hits kept or ignored in the session). The judge's reply also says
-whether what is kept would answer the question (`enough`) and, if not, what
-is missing. When it says enough, the run ends there: the note reads `Agent
-found the first search enough: answered without an agent turn`, and the
-answer cost one search and one judge call, as plain Ask does. Otherwise the
-agent starts from the kept findings — its opening prompt carries the first
-search's reply and the judge's `missing` phrase, and tells it not to repeat
-that search — so its turns go to the gap. `first_search=False` turns this
-off and the agent opens on an empty session, as before. The judge's verdict
+performs the vector search on the question itself and hands its hits to the
+findings loop's `JudgeFindings.seed`, which judges them exactly as the
+agent's own `vector_search` call would (one judge call; the hits kept or
+ignored in the session) and, when the judge's verdict is that what is kept
+answers the question, ends the session there (`FindingsSession.accept_verdict`).
+The note then reads `Agent found the first search enough: answered without an
+agent turn`, and the answer cost one search and one judge call, as plain Ask
+does. Otherwise the agent starts from the kept findings — its opening prompt
+is the session's `opening_prompt`, carrying the first search's reply and the
+judge's `missing` phrase and telling it not to repeat that search — so its
+turns go to the gap. `first_search=False` turns this off and the agent opens
+on an empty session, as before. The mechanism is talkpipe-agents' (its
+`llmAgent` offers it as `first_tool`); the vault only chooses the search and
+builds the answer from what was kept. The judge's verdict
 is advice to the agent in every later reply too (`The judge finds the answer
 still lacks: …`, or to call `enough_information` when it finds what is kept
 sufficient); the agent still decides.
@@ -203,7 +206,10 @@ the session to word the outcome.
 
 `outcome.note` is one sentence and always names one of seven endings. They
 mean different things about how complete the selection is, so an
-application should show it rather than swallow it:
+application should show it rather than swallow it. The session decides which
+happened (`FindingsSession.ending`, a code such as `judge_enough` or
+`turn_cap`); the vault's `ENDING_NOTES` only words each code for chunks,
+searches and iterations:
 
 | Note begins with | Meaning |
 |---|---|

@@ -28,7 +28,7 @@ The tools search through a :class:`SearchBackend` — plain callables, so the
 pack works over any search, with no vault and no model. They hold no
 per-question state, so one set serves every question; a tool that needs the
 running session (``read_document``, to find the document behind an id) gets
-it from Strands' tool context. ``TOOL_FACTORIES`` maps each name to a factory
+it from Strands' tool context (talkpipe-agents' ``session_of``). ``TOOL_FACTORIES`` maps each name to a factory
 taking the backend, and :func:`build_tools` resolves a list of names against
 it, falling through to talkpipe-agents' own registry for anything it does
 not recognize. So a pipeline picks its tools by name:
@@ -52,8 +52,8 @@ from typing import Any
 from strands import tool as strands_tool
 from strands.types.tools import ToolContext
 from talkpipe.search.abstract import SearchResult
-from talkpipe_agents import Finding, FindingsSession, finding_tool, resolve_agent_tools
-from talkpipe_agents.findings import DEFAULT_MAX_CHARS, SESSION_KEY
+from talkpipe_agents import Finding, finding_tool, resolve_agent_tools
+from talkpipe_agents.findings import DEFAULT_MAX_CHARS, session_of
 
 from .judge_results import search_findings
 
@@ -181,14 +181,6 @@ def parse_tool_names(spec: str | Iterable[str] | None) -> list[str]:
     names = spec.split(",") if isinstance(spec, str) else list(spec)
     cleaned = [str(name).strip() for name in names if str(name).strip()]
     return cleaned or default_tool_names()
-
-
-def session_of(tool_context: Any) -> FindingsSession | None:
-    """The findings session running the tool call, if any: the loop's hook
-    hands it to the tools through Strands' invocation state."""
-    state = getattr(tool_context, "invocation_state", None)
-    session = state.get(SESSION_KEY) if isinstance(state, dict) else None
-    return session if isinstance(session, FindingsSession) else None
 
 
 def _tell(tool_context: Any, message: str) -> None:

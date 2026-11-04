@@ -1316,7 +1316,10 @@ class TestFirstSearch:
         # The agent's model was never called.
         assert scripted_model.calls == []
         told = " | ".join(segment.told)
-        assert "agent → vector_search({'query': 'what is one?'}) — first search" in told
+        assert (
+            "agent → vector_search({'query': 'what is one?'}) — before the agent"
+            in told
+        )
         assert "agent ← vector_search: 3 finding(s), kept 2, ignored 1." in told
         assert "Judge: enough to answer." in told
         [prompt] = segment.judge.prompts
@@ -1341,7 +1344,7 @@ class TestFirstSearch:
         # The opening prompt carries the first search's reply and the gap.
         text = scripted_model.prompts[0][0]["content"][0]["text"]
         assert text.startswith("Question: q\n")
-        assert "already been run and judged" in text
+        assert "already been made and judged" in text
         assert (
             "The judge says it still lacks: the other side of the comparison." in text
         )
@@ -1361,7 +1364,7 @@ class TestFirstSearch:
         assert [r.doc_id for r in outcome.results] == ["a", "b", "c"]
         assert outcome.note.startswith("Agent judged it had enough to answer (ok)")
         text = scripted_model.prompts[0][0]["content"][0]["text"]
-        assert "already been run and judged" in text
+        assert "already been made and judged" in text
         assert "still lacks:" not in text
 
     def test_a_first_search_with_no_hits_still_hands_over(self, scripted_model):
@@ -1390,7 +1393,7 @@ class TestFirstSearch:
         segment = _Scripted(first_search=False)
         _run(scripted_model, segment, ("enough_information", {"reason": "ok"}))
         text = scripted_model.prompts[0][0]["content"][0]["text"]
-        assert "Nothing has been searched yet." in text
+        assert "Nothing has been called yet." in text
 
     def test_the_default_is_on_and_extra_effort_keeps_it(self):
         import inspect

@@ -367,7 +367,8 @@ either.
 
 `agent_tools.py` — the tools hold **no per-question state**, so one set (`self.agent_tools`)
 is built per segment and shared by every run and by the Extra Effort copy; the running session
-reaches a tool through Strands' invocation state (`session_of(tool_context)`). Each tool is a
+reaches a tool through Strands' invocation state (talkpipe-agents' `session_of(tool_context)`,
+re-exported here). Each tool is a
 factory over a `SearchBackend` (plain callables: `vector_search(query)`,
 `keyword_search(query)`, `keyword_index_exists()`, `extract_keywords(question)`,
 `read_document(source)`, `rename_fields`; any may be None and the tool says it is
@@ -406,6 +407,14 @@ the `system_prompt` are segment parameters. `make_session` / `make_agent` / `run
 run the real `llmAgent` with talkpipe-agents' `ScriptedModel` (the `scripted_model` pytest
 fixture, `chat_source="scripted"`) and a `ScriptedJudge` deciding by doc_id.
 
+**The plain search runs first** (`first_search`, default on): `search_first` runs the vector
+search on the question and hands the hits to the loop's `JudgeFindings.seed`, which judges
+them and ends the session on the judge's verdict (`accept_verdict`, reason
+`FIRST_SEARCH_ENOUGH`); `run_agent` then returns `"first_search"` without building an agent,
+or opens the agent on `session.opening_prompt(reply, tool="vector_search")`. All of that is
+talkpipe-agents' mechanism (`llmAgent`'s `first_tool`); the vault adds only which search
+runs first and the answer built from what was kept.
+
 **The stopping criterion is the agent's own judgement that it could answer the question
 well from what it kept, not a result count** — it says so by calling `enough_information`
 (refused while nothing is kept: an answer needs context). `max_chunks` (Settings → Agent
@@ -416,11 +425,12 @@ judgement. The agent is told the turn budget: `run_agent`'s opening prompt says 
 it has, and the hook appends the countdown to every tool reply (`5 of 8 turns left.`; the last
 turn spelled out, differently while nothing is kept). The stop is the session's `guard`,
 which every finding tool checks before running. `outcome_note(session, stop_reason,
-max_iterations)` words the findings loop's endings for the pages — judged it had enough (with
-the reason), filled the chunk maximum, hit the iteration cap, found nothing relevant to keep
-(calls ran, every finding was judged, none kept: no hint), or stopped without saying it had
-enough (plus `WEAK_TOOL_CALLING_HINT`) — in chunks, searches (`session.calls`: finding-tool
-calls, `read_document` included) and iterations; an error gets its own note. The outcome is an
+max_iterations)` words the findings loop's endings for the pages: the session names the
+ending (`session.ending(stop_reason)`: `judge_enough`, `enough`, `capacity`, `timeout`,
+`turn_cap`, `nothing_relevant`, `undecided`) and `ENDING_NOTES` maps each code to its words
+in chunks, searches (`session.calls`: finding-tool calls, `read_document` included) and
+iterations, with `WEAK_TOOL_CALLING_HINT` on `undecided`; the conditions are never re-derived
+here. An error gets its own note. The outcome is an
 `AgentSearchOutcome(results, note, trace)`: kept chunks as `SearchResult` best first
 (`kept_results`: each finding's `to_search_result()`), the note, and the trace, which is also
 printed (`progress`, stdout by default); a keyword-only `error` holds the exception text when
