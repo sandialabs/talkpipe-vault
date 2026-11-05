@@ -1395,12 +1395,12 @@ class TestFirstSearch:
         text = scripted_model.prompts[0][0]["content"][0]["text"]
         assert "Nothing has been called yet." in text
 
-    def test_the_default_is_on_and_extra_effort_keeps_it(self):
+    def test_the_default_is_off_and_extra_effort_keeps_the_setting(self):
         import inspect
 
         default = inspect.signature(AgentVaultSearch.__init__).parameters[
             "first_search"
         ]
-        assert default.default is True
+        assert default.default is False
         segment = _Scripted(first_search=True)
         assert segment.with_max_iterations(16).first_search is True

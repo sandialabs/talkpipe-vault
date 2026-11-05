@@ -331,8 +331,10 @@ class AgentVaultSearch(AbstractFieldSegment):
             "Run the plain vector search on the question first and judge its "
             "hits before the agent starts. When the judge finds them enough "
             "to answer, the run ends there, with no agent turn; otherwise the "
-            "agent starts from what was kept and is told what is missing.",
-        ] = True,
+            "agent starts from what was kept and is told what is missing. Off "
+            "by default: on the benchmark it helps some chat models and costs "
+            "others, so it is a choice per deployment, not a default.",
+        ] = False,
     ) -> None:
         super().__init__(field=field, set_as=set_as, multi_emit=multi_emit)
         self.vault_path = vault_path

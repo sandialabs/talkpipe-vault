@@ -152,8 +152,8 @@ index, an unknown finding id, a document that cannot be read — raises, and
 the agent reads the message as the tool's error result; the trace shows it
 as `agent ← tool: error: …`.
 
-**The plain search runs first.** Before the agent takes a turn, the run
-performs the vector search on the question itself and hands its hits to the
+**The plain search can run first** (`first_search=True`; off by default, see
+below). Before the agent takes a turn, the run performs the vector search on the question itself and hands its hits to the
 findings loop's `JudgeFindings.seed`, which judges them exactly as the
 agent's own `vector_search` call would (one judge call; the hits kept or
 ignored in the session) and, when the judge's verdict is that what is kept
@@ -163,8 +163,13 @@ agent turn`, and the answer cost one search and one judge call, as plain Ask
 does. Otherwise the agent starts from the kept findings — its opening prompt
 is the session's `opening_prompt`, carrying the first search's reply and the
 judge's `missing` phrase and telling it not to repeat that search — so its
-turns go to the gap. `first_search=False` turns this off and the agent opens
-on an empty session, as before. The mechanism is talkpipe-agents' (its
+turns go to the gap. With `first_search` off, the default, the agent opens on
+an empty session and makes the first search itself. It is off by default
+because on the 120-question benchmark the verdict hands over on fewer than
+two thirds of the multi-step questions for every chat model tried, and what
+it saves on single-fact questions depends on the model: one model gained,
+one lost against plain Ask. A deployment that knows its model can turn it on
+(`vaultAgentChat[first_search=True]`). The mechanism is talkpipe-agents' (its
 `llmAgent` offers it as `first_tool`); the vault only chooses the search and
 builds the answer from what was kept. The verdict itself is structural: the
 judge lists the facts a complete answer needs (which particular thing the
