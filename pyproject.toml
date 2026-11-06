@@ -54,6 +54,7 @@ dependencies = [
     # Folder mode's writer election (OS file locks); already installed
     # through huggingface-hub, declared because it is used directly.
     "filelock>=4.2.1",  # security floor
+    "pypdf>=6.21.4",  # security floor (via talkpipe)
     "textual>=8.0.0",  # terminal interface (vault-tui)
 ]
 dynamic = ["version"]
@@ -72,7 +73,7 @@ dev = [
     "ruff>=0.17.0,<0.18",
     "mypy>=2.3,<3",
     "pre-commit>=4.0",
-    "virtualenv>=21.7.13",  # security floor (via pre-commit)
+    "virtualenv>=21.14.9",  # security floor (via pre-commit)
     "bandit>=1.7.7",
     # safety is not listed here or in `security`: every release caps filelock
     # below 4.0, under talkpipe's security floor of 4.2.1, so it cannot share
