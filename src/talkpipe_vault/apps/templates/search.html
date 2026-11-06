@@ -60,7 +60,7 @@
     "Search without the agent.",
 ] %}
 {% else %}
-{% set results_note = "Ranked by vector similarity: the closest " ~ search_result_limit ~ " chunks are always returned, so the last few can be weak matches — on a small vault, every chunk." %}
+{% set results_note = "Ranked by vector similarity: the closest " ~ search_result_limit ~ " chunks are always returned, so the last few can be weak matches — on a small vault, every chunk. A score of 0 is not shown; the default embedder scores all but the closest match or two at 0, so go by rank." %}
 {% if vault_path and not folder_mode and not shingled_chunks_count %}
 {% set no_results_hint = "This vault holds no indexed documents yet, so there is nothing to search." %}
 {% set no_results_suggestions = [

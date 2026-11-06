@@ -552,7 +552,11 @@ chatterlang_script --script two_vaults.cl
 The tool takes `text` (the script's input) and `looking_for` (passed to the
 judge). `vaultSearch` emits one list of hits per query, so `flatten` makes
 each hit a finding of its own, with its title and a source to cite. The script compiles afresh per call, so it holds no state; the
-session the loop runs is what remembers what was kept.
+session the loop runs is what remembers what was kept. The agent stops as
+soon as the judge finds the kept findings enough, whatever the prompt asks:
+a question the notes answer on their own ends after one `vector_search`
+without `search_papers` ever running, so to see the second tool at work ask
+something only the papers hold.
 
 ## Configuration the vault applies
 

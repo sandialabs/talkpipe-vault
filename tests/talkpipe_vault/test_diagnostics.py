@@ -282,6 +282,22 @@ def test_ollama_reachable_with_model_matches_base_tag(monkeypatch, probe_ok):
     assert "completed a test chat exchange" in chat["summary"]
 
 
+def test_ollama_mistyped_tag_is_reported_not_pulled(monkeypatch, probe_ok):
+    # A tag the server does not have must not count as present because another
+    # tag of the same model is: the user then saw "has model ... but a test chat
+    # exchange failed" instead of the ollama pull fix.
+    monkeypatch.setattr(
+        diagnostics,
+        "_ollama_tags",
+        lambda url, timeout: (["gpt-oss:latest", "gpt-oss:120b-cloud"], None),
+    )
+    report = diagnostics.collect_config_status(_models(chat_model="gpt-oss:999b-cloud"))
+    chat = _find(report, "Chat (Ask) provider")
+    assert chat["status"] == "error"
+    assert "not pulled" in chat["summary"]
+    assert chat["fix"] == "Run: ollama pull gpt-oss:999b-cloud"
+
+
 def test_ollama_present_but_chat_probe_fails_is_error(monkeypatch):
     monkeypatch.setattr(
         diagnostics,
@@ -497,6 +513,28 @@ def test_model_present_matching():
     assert diagnostics._model_present("mistral-small:latest", ["mistral-small:latest"])
     assert not diagnostics._model_present("mistral-small", ["llama3:latest"])
     assert not diagnostics._model_present("", ["mistral-small:latest"])
+    # A bare name matches any tag of the model; a tagged name must match exactly.
+    assert diagnostics._model_present("gpt-oss", ["gpt-oss:120b-cloud"])
+    assert diagnostics._model_present("gpt-oss:120b-cloud", ["gpt-oss:120b-cloud"])
+    assert not diagnostics._model_present("gpt-oss:999b-cloud", ["gpt-oss:latest"])
+
+
+def test_short_error_reads_ollama_status_code():
+    # Ollama's ResponseError says "(status code: 404)" where the OpenAI and
+    # Anthropic SDKs say "error code: 404"; both are the provider's HTTP status.
+    detail = diagnostics._short_error(
+        RuntimeError("model 'gpt-oss:999b' not found. Try x. (status code: 404)")
+    )
+    assert detail == "the provider answered HTTP 404 (not found: check the model name)"
+    assert diagnostics._short_error(RuntimeError("Error code: 401 - bad key")) == (
+        "the provider answered HTTP 401"
+    )
+
+
+def test_short_error_logs_probe_failures_as_warnings(caplog):
+    with caplog.at_level("WARNING", logger="talkpipe_vault.pipelines.diagnostics"):
+        diagnostics._short_error(RuntimeError("boom"))
+    assert any("Probe failed (RuntimeError): boom" in r.message for r in caplog.records)
 
 
 def test_mask_reveals_only_tail():

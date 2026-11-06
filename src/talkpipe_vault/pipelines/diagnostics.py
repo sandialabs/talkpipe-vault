@@ -493,7 +493,7 @@ def _short_error(exc: Any) -> str:
     exception). The full exception goes to the server log; the fixed
     vocabulary below keeps the diagnosis actionable without echoing it.
     """
-    logger.info(f"Probe failed ({exc.__class__.__name__}): {exc}")
+    logger.warning(f"Probe failed ({exc.__class__.__name__}): {exc}")
     if isinstance(exc, urllib.error.HTTPError):
         return f"the server answered HTTP {exc.code}"
     if isinstance(exc, TimeoutError):  # covers socket.timeout
@@ -512,9 +512,13 @@ def _short_error(exc: Any) -> str:
     # the common failure phrasings onto the same fixed vocabulary. The
     # status code, being purely numeric, is safe to carry over.
     text = str(exc).lower()
-    code_match = re.search(r"\berror code: (\d{3})\b", text)
+    # "error code: 404" (OpenAI/Anthropic SDKs) or "status code: 404" (Ollama).
+    code_match = re.search(r"\b(?:error|status) code: (\d{3})\b", text)
     if code_match:
-        return f"the provider answered HTTP {int(code_match.group(1))}"
+        detail = f"the provider answered HTTP {int(code_match.group(1))}"
+        if "not found" in text:
+            detail += " (not found: check the model name)"
+        return detail
     if "timed out" in text or "timeout" in text:
         return "timed out"
     if "connection refused" in text:
@@ -1026,13 +1030,16 @@ def _model_present(model: str, names: list[str]) -> bool:
     """Match a configured model name against Ollama's tag list.
 
     Ollama reports tagged names like ``mistral-small:latest``; a user may
-    configure either ``mistral-small`` or a specific tag. Match on the exact
-    name or the base name before the tag separator.
+    configure either ``mistral-small`` or a specific tag. A bare name matches
+    any tag of that model; a name with a tag must match exactly, so a
+    mistyped tag (``gpt-oss:999b`` next to ``gpt-oss:latest``) is reported
+    as not pulled rather than as a model that is present but fails.
     """
     if not model:
         return False
-    wanted_base = model.split(":", 1)[0]
-    return any(name == model or name.split(":", 1)[0] == wanted_base for name in names)
+    if ":" in model:
+        return model in names
+    return any(name == model or name.split(":", 1)[0] == model for name in names)
 
 
 def _mask(secret: str) -> str:

@@ -395,8 +395,10 @@ for event in pipeline():  # runs until interrupted
     pass
 ```
 
-Give it a few seconds after start before expecting output, and run with
-`python -u` when piping stdout, or events sit in the buffer.
+Give it a few seconds after start before expecting output, and set
+`PYTHONUNBUFFERED=1` when piping or redirecting stdout, or events sit in
+the buffer (`chatterlang_script` is a console script, so `python -u` does
+not apply to it).
 
 ## Searching
 
@@ -753,7 +755,11 @@ chatterlang_script --script '
 ```
 
 `llmPrompt`'s `source` and `model` take any chat provider, like `vaultChat`'s
-`chat_source` and `chat_model`.
+`chat_source` and `chat_model`. A pipeline like this runs for hours, so when
+its output goes to a pipe or a log file rather than a terminal, start it with
+`PYTHONUNBUFFERED=1` (as in `PYTHONUNBUFFERED=1 chatterlang_script ...`);
+otherwise `print`'s lines sit in the output buffer until it fills and the
+log looks empty while the pipeline is working.
 
 ### Re-index nightly from cron
 

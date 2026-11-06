@@ -407,7 +407,7 @@ the `system_prompt` are segment parameters. `make_session` / `make_agent` / `run
 run the real `llmAgent` with talkpipe-agents' `ScriptedModel` (the `scripted_model` pytest
 fixture, `chat_source="scripted"`) and a `ScriptedJudge` deciding by doc_id.
 
-**The plain search runs first** (`first_search`, default on): `search_first` runs the vector
+**The plain search can run first** (`first_search`, default off): `search_first` runs the vector
 search on the question and hands the hits to the loop's `JudgeFindings.seed`, which judges
 them and ends the session on the judge's verdict (`accept_verdict`, reason
 `FIRST_SEARCH_ENOUGH`); `run_agent` then returns `"first_search"` without building an agent,
