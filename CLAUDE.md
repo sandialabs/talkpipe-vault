@@ -19,7 +19,7 @@ built on the TalkPipe framework and demonstrates real-world usage of its composa
 - **Module**: `talkpipe_vault`
 - **Python**: 3.11.4+ required
 - **TalkPipe**: >=1.2.0 (`talkpipe[all]`; ships `py.typed`, so mypy checks against its real signatures)
-- **talkpipe-agents**: >=0.3.0 (from PyPI) — the `llmAgent`/Strands layer and the findings loop
+- **talkpipe-agents**: >=0.4.0 (from PyPI) — the `llmAgent`/Strands layer and the findings loop
   behind agent search. No `py.typed`, so it is in the mypy `ignore_missing_imports` list.
 - **Status**: Alpha (active development)
 - **License**: Apache 2.0

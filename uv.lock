@@ -4516,7 +4516,7 @@ all = [
 
 [[package]]
 name = "talkpipe-agents"
-version = "0.3.0"
+version = "0.4.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -4532,9 +4532,9 @@ dependencies = [
     { name = "urllib3" },
     { name = "virtualenv" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/85/5b/48af6616d4be0e1c6f469821ec028da9bef85db9019f92c76f5324d498a5/talkpipe_agents-0.3.0.tar.gz", hash = "sha256:c70877d3783396db7b10eb36f240455d128c62c5c0e143c581738e02d291e167", size = 147680, upload-time = "2026-10-30T14:30:52.764Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/62/cf/8a64cdca51bd2cfa4b67781246606a916fc6f8d3b064b794f92dd7aea60e/talkpipe_agents-0.4.0.tar.gz", hash = "sha256:00db1f6aa9a40a4a4ab2db4eac0edcf421301c94a30fc7b7b8145e816b4a54f7", size = 177631, upload-time = "2026-11-06T11:36:19.709Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/00/aa/b350c9e7510b65862249cf1921e086bb8914199416cc05783a900a88121a/talkpipe_agents-0.3.0-py3-none-any.whl", hash = "sha256:1b2a71e9c8db6c7aa193ec30adefcf17f7fdab887e19ccf0ce0e9d649e0e08dc", size = 70749, upload-time = "2026-10-30T14:30:51.518Z" },
+    { url = "https://files.pythonhosted.org/packages/15/f5/5585d0524634c208d794260ee9c012c471343d7390f165ef25cb7306691b/talkpipe_agents-0.4.0-py3-none-any.whl", hash = "sha256:233994790c327123c833093d72391c6d728c7c1bbe7e34c3c467365b85f023dc", size = 90760, upload-time = "2026-11-06T11:36:18.434Z" },
 ]
 
 [[package]]
@@ -4597,7 +4597,7 @@ requires-dist = [
     { name = "pytest-mock", marker = "extra == 'test'", specifier = ">=3.10.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.17.0,<0.18" },
     { name = "talkpipe", extras = ["all"], specifier = ">=1.2.0" },
-    { name = "talkpipe-agents", specifier = ">=0.3.0" },
+    { name = "talkpipe-agents", specifier = ">=0.4.0" },
     { name = "textual", specifier = ">=8.0.0" },
     { name = "urllib3", specifier = ">=2.8.0" },
     { name = "uvicorn", specifier = ">=0.24.0" },
