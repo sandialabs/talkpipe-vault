@@ -13,11 +13,49 @@ Indexed on your machine, answered by the model you choose.</em></p>
   <a href="https://github.com/sandialabs/talkpipe-vault"><img src="https://img.shields.io/badge/status-alpha-yellow.svg" alt="Development Status"></a>
 </p>
 
+## In short
+
+**The problem.** Documents pile up: notes, reports, papers, manuals, saved
+web pages. Finding something in them means remembering which file it was in
+or the exact words it used, and asking an AI chatbot about them usually
+means uploading them to someone else's service.
+
+**How TalkPipe Vault solves it.** Point it at a folder and it builds a
+search index on your computer that captures what each passage means.
+Search by meaning ("what should I do if I meet a bear?" finds the advice to
+back away slowly), or ask a question and get an answer that cites its
+sources so you can check them. An optional agent mode lets the AI search
+several times before it answers.
+
+**Why use it.**
+
+- **Private:** your documents stay on your computer. Only your question and
+  the passages needed to answer it go to the AI model you choose, and with
+  a model on your own machine (Ollama), nothing leaves it at all.
+- **Fast:** the default indexing uses a small built-in model that runs on an
+  ordinary processor, with no graphics card or model server. It is far
+  faster than the large AI models many similar tools index with, so a
+  typical folder of notes is searchable in minutes.
+- **Low upkeep:** it follows your files as they change, needs no account or
+  cloud service to build its index, runs in a browser or a terminal, and
+  installs with one command.
+- **Built to be reused:** the vault is assembled from standalone
+  components, its own indexing, search and agent retrieval pieces (see the
+  [Developer Guide](docs/DEVELOPER_GUIDE.md)) as well as those of the
+  [TalkPipe](https://github.com/sandialabs/talkpipe) and
+  [talkpipe-agents](https://github.com/sandialabs/talkpipe-agents)
+  libraries it builds on. Each is tested on its own, so you can test and
+  reuse any of them in your own applications, and every application that
+  uses them helps harden them over time.
+
 <p align="center">
 <img src="docs/vault-homepage.png" alt="Talkpipe Homepage" width="100%">
 </p>
 <p align="center">
-<img src="docs/vault-search.png" alt="vault search example" width="100%">
+<img src="docs/vault-search.png" alt="Semantic Search with 'Let an agent select the results' checked: the agent's note and the results it kept" width="100%">
+</p>
+<p align="center">
+<img src="docs/vault-ask.png" alt="Ask with 'Use Agent' checked: a cited answer and the agent's outcome" width="100%">
 </p>
 
 ## What is TalkPipe Vault?
@@ -49,17 +87,39 @@ release).
 
 ## Run the web app
 
-### Option 1: pip install
+### Option 1: Install the package
+
+Install it either as a standalone application with uv or into a virtual
+environment with pip; everything after the install is the same.
+
+**With uv, as a standalone application.**
+[uv](https://docs.astral.sh/uv/)'s `uv tool install` gives the vault an
+environment of its own and puts its commands (`vault-server`, `vault-tui`
+and `vault-index`) on your PATH, so there is no virtual environment to
+create or activate:
+
+```bash
+uv tool install talkpipe-vault
+vault-server ~/notes        # any folder of documents
+```
+
+- If uv warns that its tool directory is not on your PATH, run
+  `uv tool update-shell` and open a new terminal.
+- uv picks a supported Python and downloads one if none is installed; to
+  choose one, add `--python 3.12`.
+- `uv tool upgrade talkpipe-vault` upgrades it and
+  `uv tool uninstall talkpipe-vault` removes it. Your settings and indexes
+  are kept.
+- To try it without installing anything:
+  `uvx --from talkpipe-vault vault-server ~/notes`.
+
+**With pip, into a virtual environment:**
 
 ```bash
 python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install talkpipe-vault
 vault-server ~/notes        # any folder of documents
 ```
-
-Or install it as a standalone command with [uv](https://docs.astral.sh/uv/):
-`uv tool install talkpipe-vault` (later,
-`uv tool upgrade talkpipe-vault` upgrades it).
 
 Your browser opens at http://127.0.0.1:8002 with `~/notes` being indexed in
 the background (on a headless machine add `--no-browser` and open the address
@@ -182,6 +242,32 @@ when you index more documents; rebuild it there when you do.
 
 Every result and citation has an **Open** link that streams the original
 document from the server, so it works the same from a container.
+
+## Agent search is built on talkpipe-agents
+
+The agent options (**Let an agent select the results** on Semantic Search
+and **Use Agent** on Ask, each with **Extra Effort**, in the browser and the
+terminal) use [talkpipe-agents](https://github.com/sandialabs/talkpipe-agents).
+talkpipe-agents is a TalkPipe plugin that puts a tool-using agent at one
+bounded step of an otherwise deterministic pipeline. In the vault, that
+step is retrieval. The agent searches, each search's hits are judged
+before it sees them, it keeps what is relevant, and it stops when it judges
+it has enough to answer. The answer is then written and cited by the same
+pipeline stages a plain Ask uses.
+
+The agent machinery is independent of the vault. talkpipe-agents provides
+the `llmAgent` segment, the
+[findings loop](https://github.com/sandialabs/talkpipe-agents/blob/stable/docs/findings.md)
+that judges, keeps and ranks what tools return (`FindingsSession`,
+`FindingsJudge`, `finding_tool`), the tool registry and the session tools
+such as `enough_information`, and none of it knows about vaults, documents
+or this application. The vault adds only what is its own: search tools over
+its indexes, a retrieval prompt, and the pages that show the outcome. You
+can use the same mechanisms in other applications, with a database, an API,
+a code base or anything else you can wrap as a tool, by installing
+talkpipe-agents (`pip install talkpipe-agents`) without the vault. The vault's
+search tools also work behind an agent of your own; see the
+[Agent retrieval developer's guide](docs/AGENT_RETRIEVAL.md).
 
 ## The terminal interface (`vault-tui`)
 
