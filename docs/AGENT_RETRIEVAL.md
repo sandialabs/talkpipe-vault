@@ -27,7 +27,10 @@ three and change a parameter. All of these are shown below.
 
 ## The sixty-second version
 
-In Python:
+A script reads its connection settings from the environment, not from the
+Settings page ([Developer Guide: Setup](DEVELOPER_GUIDE.md#setup)), so first
+`export TALKPIPE_OLLAMA_SERVER_URL=http://your-ollama-host:11434` (or
+`OPENAI_API_KEY` / `ANTHROPIC_API_KEY` for those providers). In Python:
 
 ```python
 from talkpipe_vault.pipelines.agent_search import AgentVaultChat
@@ -49,7 +52,7 @@ In ChatterLang, as a segment like any other — run it with TalkPipe's
 `chatterlang_script --script '<the script>'` (installed with the vault):
 
 ```
-INPUT FROM echo[data="How did the treasury handle inflation in the 1970s?"]
+INPUT FROM echo[data="How did the treasury handle inflation in the 1970s?", delimiter="|"]
 | vaultAgentChat[vault_path="~/notes", chat_source="ollama", chat_model="gpt-oss:latest"]
 | extractProperty[property="response"]
 | print
@@ -58,7 +61,10 @@ INPUT FROM echo[data="How did the treasury handle inflation in the 1970s?"]
 `vaultAgentChat` emits the whole outcome; `extractProperty` keeps just the
 answer (drop it to print everything). The trace lines are printed to stdout
 as the agent works, ahead of the answer — a ChatterLang script cannot turn
-that off, so its output always carries them.
+that off, so its output always carries them. `echo` splits its `data` on
+commas by default, which would turn "According to my papers, what …" into two
+questions and two agent runs; the `delimiter="|"` keeps a question with a
+comma whole (any character the question does not contain works).
 
 **Keep the trace off stdout** in your own program by passing `progress`, a
 callable that receives each trace line: `progress=logging.getLogger("my_app").info`,
@@ -71,7 +77,10 @@ the lines either way.
 `ollama` / `mistral-small`. The same model drives the agent and judges each
 search's hits. A script does **not** see the model chosen on the web
 interface's Settings page, so pass `chat_model` (and `chat_source`) or set
-the configuration. The other parameters (`max_chunks`, `max_iterations`,
+the configuration. Nor does it see the server URL or API keys saved there
+under Connections & credentials: those come from `TALKPIPE_OLLAMA_SERVER_URL`,
+`OPENAI_API_KEY` or `ANTHROPIC_API_KEY` in the environment, or from
+`~/.talkpipe.toml`. The other parameters (`max_chunks`, `max_iterations`,
 `embedding_model`, …) are listed, with what each does, by
 `help(AgentVaultSearch)`.
 
@@ -539,7 +548,7 @@ cat > two_vaults.cl <<'EOF'
 findingTool[name="search_papers",
             description="Semantic search over my papers. Pass a question or descriptive phrase.",
             script="| vaultSearch[vault_path='/path/to/papers', limit=5] | flatten"];
-INPUT FROM echo[data="What share of traffic does a canary release get first?"]
+INPUT FROM echo[data="What share of traffic does a canary release get first?", delimiter="|"]
 | vaultAgentChat[vault_path="/path/to/notes", chat_source="ollama", chat_model="gpt-oss:latest",
                  tools="vector_search,search_papers,enough_information",
                  system_prompt="You gather what answers the question; you do not answer it. vector_search searches my notes and search_papers my papers, and each reply keeps the relevant results. Search both. Call enough_information once the kept findings would answer the question, then reply: done"]

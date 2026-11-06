@@ -228,8 +228,11 @@ Unlike the README's `podman run` line, the compose services **build the
 image from this checkout** (`build:` in `docker-compose.yml`): clone the
 repository first and expect the first `up` to take several minutes. Pass the
 package version as the compose file's comment shows
-(`APP_VERSION="$(python3 -m setuptools_scm)" podman compose build`), or the
-image reports version 0.1.0. To run the published image instead, pull it and
+(`APP_VERSION="$(uvx --from setuptools-scm python -m setuptools_scm)" podman compose build`), or the
+image reports version 0.1.0 (`setuptools_scm` is a build dependency, not
+installed with the package, so a bare `python3 -m setuptools_scm` fails on most
+machines; in the README's development environment `uv run python -m
+setuptools_scm` works too). To run the published image instead, pull it and
 set `IMAGE_NAME=ghcr.io/sandialabs/talkpipe-vault:latest` in `.env`;
 compose builds only when the named image is absent.
 
@@ -571,7 +574,9 @@ An index already in place is always reused, wherever it is.
 indexer and leaves it out of every search, but keeps it in the folder list
 with its index intact; **Open** brings it back where it left off. A closed
 folder stays closed across restarts, and `--resume` reopens only the open
-ones. **Remove** drops an open or closed folder from the list.
+ones. **Remove** moves an open or closed folder to the **Searched before**
+list, from which one click adds it back; **Remove and delete its index**
+forgets it and deletes the index.
 
 Folder and named-vault modes are exclusive in the interfaces; a named vault
 whose documents all lie in one folder offers to search that folder instead.

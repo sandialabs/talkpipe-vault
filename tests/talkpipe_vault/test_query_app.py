@@ -173,6 +173,21 @@ def test_search_post_uses_agent_and_shows_trace(monkeypatch):
     response = client.post("/search", data={"query": "podman", "use_agent": "1"})
     assert "The agent kept no chunks" in response.text
     assert "Use a broader phrase" not in response.text
+    assert "stronger tool calling" in response.text
+
+    # A run that failed is a provider problem, not one of the question or of
+    # the model's tool calling: the tips point at the Settings page instead.
+    app_state._state.agent_search_pipeline = lambda q: AgentSearchOutcome(
+        results=[],
+        note="The agent stopped with an error (connection refused); it kept nothing.",
+        trace=["agent search", "agent search failed: connection refused"],
+        error="connection refused",
+    )
+    response = client.post("/search", data={"query": "podman", "use_agent": "1"})
+    assert "The agent could not run" in response.text
+    assert "Fix the chat provider on the Settings page" in response.text
+    assert "stronger tool calling" not in response.text
+    assert "Rephrase the question" not in response.text
 
     # Unchecked, the plain pipeline runs and no trace is rendered.
     response = client.post("/search", data={"query": "podman"})
@@ -1789,9 +1804,11 @@ def test_chat_ollama_connection_error_points_at_settings(monkeypatch):
         monkeypatch,
         RuntimeError("Failed to connect to Ollama at 'http://localhost:11434'."),
     )
-    assert "you can set the Ollama server URL on the Settings page" in body
+    assert "Set the Ollama server URL on the Settings page" in body
     assert "Connections &amp; credentials" in body
     assert "no environment variable needed" in body
+    # The fix comes first, the provider's own text after it.
+    assert body.index("Set the Ollama server URL") < body.index("Failed to connect")
 
 
 def test_chat_missing_openai_key_error_points_at_settings(monkeypatch):
@@ -1803,9 +1820,10 @@ def test_chat_missing_openai_key_error_points_at_settings(monkeypatch):
             "Set the OPENAI_API_KEY environment variable."
         ),
     )
-    assert "you can enter the API key on the Settings page" in body
+    assert "Enter the API key on the Settings page" in body
     assert "Connections &amp; credentials" in body
     assert "no environment variable needed" in body
+    assert body.index("Enter the API key") < body.index("Missing credentials")
 
 
 def test_chat_missing_anthropic_key_error_points_at_settings(monkeypatch):
@@ -1817,7 +1835,7 @@ def test_chat_missing_anthropic_key_error_points_at_settings(monkeypatch):
             "Set the ANTHROPIC_API_KEY environment variable."
         ),
     )
-    assert "you can enter the API key on the Settings page" in body
+    assert "Enter the API key on the Settings page" in body
     assert "no environment variable needed" in body
 
 

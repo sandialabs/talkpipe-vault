@@ -4,6 +4,7 @@ import html
 import re
 import time
 from pathlib import Path
+from urllib.parse import unquote_plus
 
 import pytest
 from fastapi.testclient import TestClient
@@ -116,6 +117,31 @@ def test_adding_a_folder_searches_it_in_place(client, docs):
     assert "lighthouse" not in page or root in page
     assert "Ready · 2 files" in page
     assert "Named vaults (advanced)" in page
+
+
+def test_adding_a_folder_with_a_read_only_index_says_it_is_not_indexed(client, docs):
+    # An index already in the folder that this process cannot write (a
+    # read-only mount of a folder indexed elsewhere) is searched as it is;
+    # the message must not promise background indexing nobody will do.
+    root = str(docs.resolve())
+    folder_mode.add_folder(app_state._state, root)
+    assert _wait(_complete)
+    folder_mode.remove_folder(app_state._state, root)
+    index_dir = docs.resolve() / FOLDER_INDEX_DIRNAME
+    index_dir.chmod(0o555)
+    try:
+        response = client.post(
+            "/folders/add", data={"folder_path": root}, follow_redirects=False
+        )
+        assert response.status_code == 303
+        message = unquote_plus(response.headers["location"])
+        assert "Its existing index is read-only, so it is searched as it is" in message
+        assert "indexing runs in the background" not in message
+        [folder] = client.get("/api/index-status").json()["folders"]
+        assert folder["role"] == "read-only"
+    finally:
+        folder_mode.remove_folder(app_state._state, root)
+        index_dir.chmod(0o755)
 
 
 def test_the_documents_page_leads_with_folders(client, tmp_path):

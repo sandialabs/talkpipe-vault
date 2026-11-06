@@ -192,8 +192,9 @@ most backup tools skip it), or in the app's data directory when the folder
 is read-only, on a network share or synced by a cloud client; see
 [Folder mode](docs/ADVANCED.md#folder-mode). **Close** a folder to stop
 searching and indexing it while it stays in the list, and **Open** it again
-later; **Remove** drops it from the list and keeps its index unless you ask
-for it to be deleted. Your documents are never touched.
+later; **Remove** stops searching it and moves it to the **Searched before**
+list, where one click adds it back, and keeps its index unless you ask for it
+to be deleted. Your documents are never touched.
 
 To index a folder without starting an interface (a cron job, a build step),
 run `vault-index ~/notes`; it processes what changed and exits

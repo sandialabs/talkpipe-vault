@@ -796,6 +796,16 @@ def _tui_wording(text: str) -> str:
 _MARKDOWN_PUNCTUATION = set(r"\`*_{}[]()#+-.!|<>~")
 
 
+def _toast_summary(text: str, limit: int = 160) -> str:
+    """The first sentence of a long message, for a toast shown beside the full text."""
+    if len(text) <= limit:
+        return text
+    head, sep, _ = text.partition(". ")
+    if sep and len(head) < limit:
+        return head + "."
+    return text[: limit - 1].rstrip() + "…"
+
+
 def _plain_text_as_markdown(text: str) -> str:
     """Escape ``text`` so a Markdown widget shows it verbatim.
 
@@ -1208,14 +1218,21 @@ class VaultApp(App[None]):
                 and Path(self.service.vault_path)
                 == Path(self._initial_vault).expanduser().resolve()
             )
-            self.query_one("#index-progress", Static).update(
-                f"{self.service.vault_path} did not exist, so it was created as "
-                "a new, empty named vault. To search a folder of documents "
-                "instead, check the path and add the folder under Folders above."
-                if created
-                else "This vault is empty — index a documents folder above (or "
-                "open a different vault below) to search it."
-            )
+            if created:
+                notice = (
+                    f"{self.service.vault_path} did not exist, so it was created as "
+                    "a new, empty named vault. To search a folder of documents "
+                    "instead, check the path and add the folder under Folders above."
+                )
+                # The note sits below the fold at 24 rows; a mistyped folder
+                # path must not pass for a working, empty vault.
+                self.notify(notice, timeout=10)
+            else:
+                notice = (
+                    "This vault is empty — index a documents folder above (or "
+                    "open a different vault below) to search it."
+                )
+            self.query_one("#index-progress", Static).update(notice)
             self.query_one("#source-path", Input).focus()
         elif self.service.vault_path:
             self.query_one("#tabs", TabbedContent).active = "tab-search"
@@ -2063,7 +2080,8 @@ class VaultApp(App[None]):
             answer.update(_plain_text_as_markdown(outcome["error"]))
             # The previous question's chunks are not this error's sources.
             citations.show_results([], empty_text="No answer — see the message above.")
-            self.notify(outcome["error"], severity="error", timeout=12)
+            # The panel has the whole message; the toast only needs to point at it.
+            self.notify(_toast_summary(outcome["error"]), severity="error", timeout=8)
             return
         # No answered_by: nothing was asked of the model (indexing just began).
         meta.update(
@@ -2267,15 +2285,20 @@ class VaultApp(App[None]):
                 # only way to tell a slow load from a broken model.
                 lines.append(f"       Detail: {check['detail']}")
         self.query_one("#config-status", Static).update("\n".join(lines))
-        if announce and overall and overall != "OK":
+        if announce and overall:
             # After Save the status panel is usually scrolled off the top of
-            # the tab; say where the problem is described.
-            self.notify(
-                f"Configuration status: {overall} — see the top of the Settings "
-                "tab (PageUp scrolls up).",
-                severity="warning",
-                timeout=8,
-            )
+            # the tab; say how the re-test went and where it is described.
+            if overall == "OK":
+                self.notify(
+                    "Configuration status: OK — the selected providers are reachable."
+                )
+            else:
+                self.notify(
+                    f"Configuration status: {overall} — see the top of the Settings "
+                    "tab (PageUp scrolls up).",
+                    severity="warning",
+                    timeout=8,
+                )
 
 
 # --------------------------------------------------------------------------

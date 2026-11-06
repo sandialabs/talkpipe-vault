@@ -25,7 +25,11 @@ usable two ways:
 - **ChatterLang**, TalkPipe's external DSL: name the components in a script
   string, run it with `chatterlang_script --script '...'` or compile it with
   `talkpipe.compile(...)`. The vault registers its components as TalkPipe
-  entry points, so a script finds them by name with no import.
+  entry points, so a script finds them by name with no import. The examples
+  feed a script its input with `echo[data="…"]`, which splits the string on
+  commas (that is how one `echo` names two folders below); a query or question
+  that contains a comma needs `delimiter="|"`, as the
+  [list of questions recipe](#answer-a-list-of-questions) shows.
 
 Two conventions hold throughout:
 

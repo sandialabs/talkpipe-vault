@@ -53,12 +53,22 @@
 {% if agent_trace %}
 {# An agent run: its selection is neither ranked by similarity nor a fixed count. #}
 {% set results_note = "Chosen by the agent, in the order it kept them — the note above says how its run ended." %}
+{% if agent_error %}
+{# The run failed (no server, model not pulled, no tool calling): the fix is the
+   provider, not the question or the model's tool-calling strength. #}
+{% set no_results_hint = "The agent could not run: the note above says what failed." %}
+{% set no_results_suggestions = [
+    "Fix the chat provider on the Settings page — its Configuration status panel tests it.",
+    "Search without the agent.",
+] %}
+{% else %}
 {% set no_results_hint = "The agent kept no chunks. The note and the agent tool calls above show what it searched and why it stopped." %}
 {% set no_results_suggestions = [
     "Rephrase the question.",
     "Try a chat model with stronger tool calling (Settings).",
     "Search without the agent.",
 ] %}
+{% endif %}
 {% else %}
 {% set results_note = "Ranked by vector similarity: the closest " ~ search_result_limit ~ " chunks are always returned, so the last few can be weak matches — on a small vault, every chunk. A score of 0 is not shown; the default embedder scores all but the closest match or two at 0, so go by rank." %}
 {% if vault_path and not folder_mode and not shingled_chunks_count %}

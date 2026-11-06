@@ -157,6 +157,16 @@ def test_a_missing_path_says_it_becomes_a_new_empty_vault(
     assert "check the path" in out
 
 
+def test_help_names_the_command_for_the_module_form(monkeypatch, capsys):
+    # python -m talkpipe_vault.apps.query runs this parser with argv[0] of
+    # query.py; the usage line must still say vault-server.
+    monkeypatch.setattr("sys.argv", ["query.py", "--help"])
+    with pytest.raises(SystemExit) as excinfo:
+        vault_server.main()
+    assert excinfo.value.code == 0
+    assert capsys.readouterr().out.startswith("usage: vault-server")
+
+
 def test_a_broken_path_fence_fails_before_the_banner(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv(user_settings.VAULT_HOME_ENV, str(tmp_path / "home"))
     monkeypatch.setenv(access_control.DOCUMENT_ROOTS_ENV, str(tmp_path / "missing"))

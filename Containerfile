@@ -1,6 +1,7 @@
 # The build context excludes .git (see .containerignore), so setuptools_scm
-# cannot derive the package version. Pass the real version as a build arg:
-#   podman build --build-arg APP_VERSION="$(python3 -m setuptools_scm)" .
+# cannot derive the package version. Pass the real version as a build arg
+# (setuptools_scm is a build dependency, so run it from a tool environment):
+#   podman build --build-arg APP_VERSION="$(uvx --from setuptools-scm python -m setuptools_scm)" .
 # When unset, the image reports the fallback version 0.1.0.
 ARG APP_VERSION=0.1.0
 

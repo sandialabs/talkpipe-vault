@@ -1259,6 +1259,7 @@ def search_results(
     error: str | None = None
     filter_note = ""
     agent_trace: list[str] = []
+    agent_error = ""
 
     if query.strip() and state.search_pipeline and not semantic_search_waiting(state):
         try:
@@ -1274,6 +1275,7 @@ def search_results(
                 results = _process_semantic_results(agent_outcome.results)
                 filter_note = agent_outcome.note
                 agent_trace = agent_outcome.trace
+                agent_error = agent_outcome.error
                 if apply_filter and state.filtered_search_pipeline:
                     # Both boxes are checked: say which one won instead of
                     # ignoring one silently.
@@ -1304,6 +1306,7 @@ def search_results(
             use_extra_effort=bool(use_extra_effort),
             filter_note=filter_note,
             agent_trace=agent_trace,
+            agent_error=agent_error,
         ),
     )
 
@@ -1790,21 +1793,21 @@ def _ask_context(
             lowered = error.lower()
             # The provider's own message leads with environment variables and
             # config files. In this application the Settings page is the
-            # shorter route and needs nothing outside the app, so say that
-            # plainly rather than as an afterthought.
+            # shorter route and needs nothing outside the app, so it comes
+            # first and the provider's advice follows (as the terminal
+            # interface already does).
             if "ollama" in lowered and ("connect" in lowered or "refused" in lowered):
-                error += (
-                    " In this app you can set the Ollama server URL on the "
-                    "Settings page under Connections & credentials — no "
-                    "environment variable needed."
+                error = (
+                    "Set the Ollama server URL on the Settings page under "
+                    "Connections & credentials — no environment variable "
+                    "needed. " + error
                 )
             elif ("openai" in lowered or "anthropic" in lowered) and (
                 "api key" in lowered or "api_key" in lowered or "credential" in lowered
             ):
-                error += (
-                    " In this app you can enter the API key on the Settings "
-                    "page under Connections & credentials — no environment "
-                    "variable needed."
+                error = (
+                    "Enter the API key on the Settings page under Connections & "
+                    "credentials — no environment variable needed. " + error
                 )
 
     if not state.show_source_paths:

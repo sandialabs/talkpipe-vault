@@ -107,7 +107,8 @@ def _most_recent_usable_vault() -> str:
 def main() -> None:
     """CLI entry point for running the web interface only."""
     parser = argparse.ArgumentParser(
-        description="Run the TalkPipe Vault web interface for searching and chat"
+        prog="vault-server",
+        description="Run the TalkPipe Vault web interface for searching and chat",
     )
     parser.add_argument(
         "vault_path",

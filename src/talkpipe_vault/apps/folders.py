@@ -317,14 +317,23 @@ def _add_folder(state: AppState, raw_path: str) -> tuple[str, str]:
     _mark_closed(root, closed=False)
     user_settings.set_last_session(user_settings.SESSION_FOLDERS)
     _activate_folders(state)
-    where = (
-        "in the folder"
-        if folder.location.in_folder
-        else f"in app data ({folder.location.reason})"
-    )
-    message = (
-        f"Searching {root}. Its index is kept {where}; indexing runs in the background."
-    )
+    if folder.location.read_only:
+        # An index already in the folder that this process cannot write (a
+        # read-only mount): it is searched as it is, nobody indexes changes.
+        message = (
+            f"Searching {root}. Its existing index is read-only, so it is "
+            "searched as it is and changes to the files are not indexed."
+        )
+    else:
+        where = (
+            "in the folder"
+            if folder.location.in_folder
+            else f"in app data ({folder.location.reason})"
+        )
+        message = (
+            f"Searching {root}. Its index is kept {where}; indexing runs in the "
+            "background."
+        )
     if replaced:
         message += f" It replaces {', '.join(replaced)}, which it contains."
     return message, ""

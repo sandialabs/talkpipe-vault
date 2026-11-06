@@ -36,6 +36,7 @@ from talkpipe_vault.tui.app import (
     VaultApp,
     _plain_text_as_markdown,
     _shorten_path,
+    _toast_summary,
     main,
 )
 from talkpipe_vault.tui.service import VaultService
@@ -226,7 +227,7 @@ async def test_ask_error_is_shown(sample_vault, monkeypatch):
         await _wait_workers(app, pilot)
 
         def boom(_q):
-            raise RuntimeError("ollama connection refused")
+            raise RuntimeError("ollama connection refused. " + "Original error. " * 20)
 
         monkeypatch.setattr(app.service.state, "chat_pipeline", boom)
         monkeypatch.setattr(app.service.state, "last_refresh_time", float("inf"))
@@ -235,6 +236,22 @@ async def test_ask_error_is_shown(sample_vault, monkeypatch):
         await _wait_workers(app, pilot)
         assert "connection refused" in _answer_source(app)
         assert "Settings" in _answer_source(app)
+        # The panel has the whole message; the toast is only its first
+        # sentence, so it does not lie over the controls at 80x24.
+        toasts = [str(n.message) for n in app._notifications]
+        assert (
+            "Set the Ollama server URL on the Settings tab (F6), Connections & credentials."
+            in toasts
+        )
+        assert not any("Original error" in toast for toast in toasts)
+
+
+def test_toast_summary_keeps_short_text_and_leads_with_the_first_sentence():
+    assert _toast_summary("Short.") == "Short."
+    long = "First sentence here. " + "More detail. " * 30
+    assert _toast_summary(long) == "First sentence here."
+    unbroken = "x" * 300
+    assert _toast_summary(unbroken) == "x" * 159 + "…"
 
 
 async def test_starts_on_vault_tab_without_vault_and_creates_one(tmp_path):
@@ -1273,6 +1290,8 @@ async def test_startup_keeps_an_opening_line_until_the_vault_is_ready(tmp_path):
         note = _text(app.query_one("#index-progress", Static))
         assert "did not exist" in note
         assert "new, empty named vault" in note
+        # The note is below the fold at 24 rows, so it is announced as well.
+        assert any("did not exist" in str(n.message) for n in app._notifications)
 
 
 async def test_an_existing_empty_vault_points_at_indexing(tmp_path):
