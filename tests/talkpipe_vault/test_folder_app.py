@@ -1,6 +1,7 @@
 """Tests for folder mode in the web application and the vault-server CLI."""
 
 import html
+import os
 import re
 import time
 from pathlib import Path
@@ -119,6 +120,7 @@ def test_adding_a_folder_searches_it_in_place(client, docs):
     assert "Named vaults (advanced)" in page
 
 
+@pytest.mark.skipif(os.geteuid() == 0, reason="root ignores permissions")
 def test_adding_a_folder_with_a_read_only_index_says_it_is_not_indexed(client, docs):
     # An index already in the folder that this process cannot write (a
     # read-only mount of a folder indexed elsewhere) is searched as it is;
